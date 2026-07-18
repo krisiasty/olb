@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# olb build outputs
+/olb
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 

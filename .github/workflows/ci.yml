@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { goos: windows, goarch: amd64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      # cgo-free: all five targets build from one machine with no C toolchain.
+      - env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null .
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go install github.com/google/go-licenses@latest
+      # Authoritative gate: fail the build on any disallowed or unknown license
+      # across the full transitive tree. This — not a hand-maintained list — is
+      # the source of truth for the Apache-2.0-compatible policy.
+      - run: go-licenses check . --disallowed_types=forbidden,restricted,unknown

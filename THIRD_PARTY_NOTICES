@@ -1,0 +1,26 @@
+olb — third-party notices
+==========================
+
+This file is regenerated at release time from the real module graph with
+google/go-licenses (see scripts/gen-notices.sh) and embedded into the binary via
+//go:embed, so `olb --licenses` reproduces the required copyright notices and
+full license texts for every linked dependency, and any dependency NOTICE
+contents, regardless of how the binary is distributed.
+
+This placeholder ships in source checkouts and development builds. A release
+build overwrites it with the aggregated, authoritative notices before embedding.
+
+Direct dependencies and their licenses (see go.mod for exact versions):
+
+  github.com/gophercloud/gophercloud/v2      Apache-2.0
+  github.com/gophercloud/utils/v2            Apache-2.0
+  github.com/charmbracelet/bubbletea         MIT
+  github.com/charmbracelet/bubbles           MIT
+  github.com/charmbracelet/lipgloss          MIT
+  github.com/aymanbagabas/go-osc52/v2        MIT
+  gopkg.in/yaml.v3                           MIT and Apache-2.0
+
+The full transitive set (including the Charm x/* modules, muesli/termenv,
+mattn/go-runewidth, mattn/go-isatty, rivo/uniseg, gofrs/uuid, and others) is
+entirely permissive (MIT / BSD / ISC / Apache-2.0); the go-licenses CI check is
+authoritative and fails the build on any disallowed or unknown license.

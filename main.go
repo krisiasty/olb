@@ -1,0 +1,65 @@
+// Command olb is an interactive TUI for inspecting OpenStack Octavia load
+// balancers (Amphora and OVN providers).
+//
+// v1 is interactive-only; a non-interactive/scriptable mode is deferred, so the
+// flag surface is small and flat and the standard-library flag package covers
+// it. Authentication mirrors python-openstackclient: OS_* env vars, clouds.yaml
+// (--os-cloud), and CLI flags, with precedence CLI > env > clouds.yaml.
+package main
+
+import (
+	"context"
+	_ "embed"
+	"fmt"
+	"os"
+
+	"github.com/krisiasty/olb/internal/osclient"
+	"github.com/krisiasty/olb/internal/tui"
+	"github.com/krisiasty/olb/internal/version"
+)
+
+// thirdPartyNotices is the aggregated dependency attribution, embedded so it
+// travels inside the binary regardless of how it is distributed. Exposed via
+// `olb --licenses`.
+//
+//go:embed THIRD_PARTY_NOTICES
+var thirdPartyNotices string
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "olb: "+err.Error())
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	fs := newFlagSet()
+	var (
+		showVersion  = fs.Bool("version", false, "print version and exit")
+		showLicenses = fs.Bool("licenses", false, "print third-party license notices and exit")
+		printMode    = fs.Bool("print", false, "copy actions show the value on screen for manual copy instead of emitting OSC 52")
+	)
+	opts := registerAuthFlags(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *showVersion {
+		fmt.Println(version.String())
+		return nil
+	}
+	if *showLicenses {
+		fmt.Print(thirdPartyNotices)
+		return nil
+	}
+
+	clients, err := osclient.Authenticate(context.Background(), *opts)
+	if err != nil {
+		return err
+	}
+
+	return tui.Run(clients, tui.Config{
+		PrintMode: *printMode,
+		Stdout:    os.Stdout,
+	})
+}

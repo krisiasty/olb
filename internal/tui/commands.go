@@ -70,6 +70,7 @@ type projectsMsg struct {
 
 type switchedMsg struct {
 	project osclient.ProjectInfo
+	all     bool
 	err     error
 }
 
@@ -125,10 +126,11 @@ func (m Model) fetchDetailCmd(n *model.Node, intent detailIntent) tea.Cmd {
 func (m Model) resolveFloatingIPCmd(source *model.Node, portID string) tea.Cmd {
 	b := m.backend
 	sid := source.ID
+	lbID := source.OwningLBID
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		node, err := b.ResolveFloatingIP(ctx, portID)
+		node, err := b.ResolveFloatingIP(ctx, lbID, portID)
 		return refResolveMsg{sourceID: sid, label: "floating IP", node: node, err: err}
 	}
 }
@@ -136,10 +138,11 @@ func (m Model) resolveFloatingIPCmd(source *model.Node, portID string) tea.Cmd {
 func (m Model) resolveInstanceCmd(source *model.Node, address string) tea.Cmd {
 	b := m.backend
 	sid := source.ID
+	lbID := source.OwningLBID
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		node, err := b.ResolveInstance(ctx, address)
+		node, err := b.ResolveInstance(ctx, lbID, address)
 		return refResolveMsg{sourceID: sid, label: "instance", node: node, err: err}
 	}
 }
@@ -171,7 +174,17 @@ func (m Model) switchProjectCmd(target osclient.ProjectInfo) tea.Cmd {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		err := b.SwitchProject(ctx, target)
-		return switchedMsg{project: b.CurrentProject(), err: err}
+		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), err: err}
+	}
+}
+
+func (m Model) enterAllProjectsCmd() tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		err := b.EnterAllProjects(ctx)
+		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), err: err}
 	}
 }
 

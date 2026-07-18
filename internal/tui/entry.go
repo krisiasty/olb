@@ -55,13 +55,22 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 	return model.Identity{}, false, false
 }
 
-// lbEntries builds the top-level load balancer list rows.
-func lbEntries(lbs []osclient.LB) []entry {
+// lbEntries builds the top-level load balancer list rows. When showProject is
+// set (all-projects mode) each row is prefixed with its owning project so the
+// aggregated list stays legible.
+func lbEntries(lbs []osclient.LB, showProject bool) []entry {
 	es := make([]entry, 0, len(lbs))
 	for _, lb := range lbs {
 		extra := lb.Provider
 		if lb.VipAddress != "" {
 			extra = strings.TrimSpace(extra + " " + lb.VipAddress)
+		}
+		if showProject {
+			proj := lb.ProjectName
+			if proj == "" {
+				proj = shortID(lb.ProjectID)
+			}
+			extra = strings.TrimSpace("@" + proj + "  " + extra)
 		}
 		es = append(es, entry{
 			kind: entLB, lb: lb, label: lbLabel(lb),

@@ -404,6 +404,8 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	fp := m.filteredProjects()
+	// Row 0 is the synthetic "all projects" option; rows 1..N are the projects.
+	total := len(fp) + 1
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
 		m.overlay = overlayNone
@@ -415,19 +417,23 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Down):
-		if m.projCursor < len(fp)-1 {
+		if m.projCursor < total-1 {
 			m.projCursor++
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Accept):
-		if len(fp) == 0 {
-			return m, nil
-		}
-		target := fp[m.projCursor]
 		m.overlay = overlayNone
 		m.search.Blur()
+		if m.projCursor == 0 {
+			m.loading, m.loadingWhat = true, "all projects"
+			return m, m.enterAllProjectsCmd()
+		}
+		idx := m.projCursor - 1
+		if idx < 0 || idx >= len(fp) {
+			return m, nil
+		}
 		m.loading, m.loadingWhat = true, "switching project"
-		return m, m.switchProjectCmd(target)
+		return m, m.switchProjectCmd(fp[idx])
 	}
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(msg)

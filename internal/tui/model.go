@@ -42,6 +42,9 @@ type Config struct {
 	// PrintMode routes copy actions to an on-screen value the user can select,
 	// instead of emitting OSC 52 — the escape hatch for terminals without it.
 	PrintMode bool
+	// AllProjects starts the tool in all-projects mode (the backend must already
+	// have been switched into it).
+	AllProjects bool
 	// CacheSize bounds the LRU of status trees; CacheTTL bounds staleness.
 	CacheSize int
 	CacheTTL  time.Duration
@@ -104,8 +107,9 @@ type Model struct {
 	flashErr    bool
 	flashToken  int
 
-	project  osclient.ProjectInfo
-	quitting bool
+	project     osclient.ProjectInfo
+	allProjects bool // listing across all accessible projects
+	quitting    bool
 }
 
 // New builds the root model. backend must be authenticated.
@@ -132,18 +136,19 @@ func New(backend Backend, cfg Config) Model {
 	se.CharLimit = 128
 
 	return Model{
-		backend: backend,
-		keys:    defaultKeys(),
-		st:      newStyles(),
-		cfg:     cfg,
-		spinner: sp,
-		filter:  fi,
-		search:  se,
-		vp:      viewport.New(0, 0),
-		cache:   cache.New(cfg.CacheSize, cfg.CacheTTL),
-		hist:    newHistory(cfg.HistoryCap),
-		project: backend.CurrentProject(),
-		lbStats: map[string]map[string]any{},
+		backend:     backend,
+		keys:        defaultKeys(),
+		st:          newStyles(),
+		cfg:         cfg,
+		spinner:     sp,
+		filter:      fi,
+		search:      se,
+		vp:          viewport.New(0, 0),
+		cache:       cache.New(cfg.CacheSize, cfg.CacheTTL),
+		hist:        newHistory(cfg.HistoryCap),
+		project:     backend.CurrentProject(),
+		allProjects: cfg.AllProjects,
+		lbStats:     map[string]map[string]any{},
 	}
 }
 

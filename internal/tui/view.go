@@ -78,7 +78,11 @@ func (m Model) breadcrumbLine() string {
 }
 
 func (m Model) subtitleLine() string {
-	parts := []string{"project: " + projectLabel(m.project)}
+	scope := "project: " + projectLabel(m.project)
+	if m.allProjects {
+		scope = "scope: all accessible projects"
+	}
+	parts := []string{scope}
 	if len(m.entries) != len(m.allEntries) {
 		parts = append(parts, fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries)))
 	} else {
@@ -318,6 +322,20 @@ func (m Model) projectView() string {
 		return title + "\n\n" + m.spinner.View() + " loading accessible projects…\n\n" + m.st.help.Render("esc cancel")
 	}
 	fp := m.filteredProjects()
+	// Row 0 is the synthetic "all projects" option; the rest are projects.
+	type prow struct {
+		label   string
+		current bool
+	}
+	rows := []prow{{label: "⟨ all accessible projects ⟩", current: m.allProjects}}
+	for _, p := range fp {
+		label := p.Name
+		if label == "" {
+			label = p.ID
+		}
+		rows = append(rows, prow{label: label, current: !m.allProjects && p.ID == m.project.ID})
+	}
+
 	var b strings.Builder
 	b.WriteString(title + "\n")
 	b.WriteString(m.search.View() + "\n\n")
@@ -330,28 +348,24 @@ func (m Model) projectView() string {
 		start = m.projCursor - maxRows + 1
 	}
 	end := start + maxRows
-	if end > len(fp) {
-		end = len(fp)
-	}
-	if len(fp) == 0 {
-		b.WriteString("  " + m.st.disabled.Render("— no matching projects —") + "\n")
+	if end > len(rows) {
+		end = len(rows)
 	}
 	for i := start; i < end; i++ {
-		p := fp[i]
-		label := p.Name
-		if label == "" {
-			label = p.ID
-		}
-		if p.ID == m.project.ID {
+		label := rows[i].label
+		if rows[i].current {
 			label += m.st.relationship.Render(" (current)")
 		}
 		if i == m.projCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+label, m.width)) + "\n")
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+rows[i].label, m.width)) + "\n")
 		} else {
 			b.WriteString("  " + m.clip(label) + "\n")
 		}
 	}
-	b.WriteString("\n" + m.st.help.Render("enter switch · ↑/↓ move · type to filter · esc cancel"))
+	if len(fp) == 0 && m.search.Value() != "" {
+		b.WriteString("  " + m.st.disabled.Render("— no matching projects —") + "\n")
+	}
+	b.WriteString("\n" + m.st.help.Render("enter select · ↑/↓ move · type to filter · esc cancel"))
 	return b.String()
 }
 
@@ -462,7 +476,7 @@ func writeKV(b *strings.Builder, k, v string) {
 	if v == "" {
 		return
 	}
-	b.WriteString(fmt.Sprintf("%-22s %s\n", k+":", v))
+	fmt.Fprintf(b, "%-22s %s\n", k+":", v)
 }
 
 func marshalRaw(v any, format string) string {

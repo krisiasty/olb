@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
@@ -85,25 +86,36 @@ type SwitchCapability struct {
 	Suggest   string
 }
 
-// Clients bundles the authenticated provider and its service clients, plus the
-// current scope, the retained auth options needed to re-scope, and the switch
-// capability decided at auth time.
-type Clients struct {
-	Provider *gophercloud.ProviderClient
-	LB       *gophercloud.ServiceClient // Octavia (required)
-	Identity *gophercloud.ServiceClient // Keystone v3 (required)
-	Network  *gophercloud.ServiceClient // Neutron (optional; floating IPs)
-	Compute  *gophercloud.ServiceClient // Nova (optional; member instances)
+// serviceClients is a set of OpenStack service clients scoped to one project.
+type serviceClients struct {
+	provider *gophercloud.ProviderClient
+	lb       *gophercloud.ServiceClient // Octavia (required)
+	identity *gophercloud.ServiceClient // Keystone v3 (required)
+	network  *gophercloud.ServiceClient // Neutron (optional; floating IPs)
+	compute  *gophercloud.ServiceClient // Nova (optional; member instances)
+	project  ProjectInfo
+}
 
-	Region  string
-	Project ProjectInfo
-	Switch  SwitchCapability
+// Clients holds the current project selection plus, for all-projects mode, a
+// cache of per-project scoped clients. A project-scoped token's scope is
+// immutable, so a non-admin can only read a load balancer while scoped to its
+// owning project; all-projects mode therefore keeps one scoped client set per
+// accessible project and picks the right one per operation.
+type Clients struct {
+	Region string
+	Switch SwitchCapability
 
 	// baseAuth retains the resolved credentials (sans a fixed scope) so a
 	// project switch can request a new scoped token. Holding the password in
 	// memory is inherent to re-scoping and is the documented trade-off.
 	baseAuth gophercloud.AuthOptions
 	endpoint gophercloud.EndpointOpts
+
+	mu        sync.Mutex
+	sel       *serviceClients            // current single-project selection
+	scoped    map[string]*serviceClients // projectID -> scoped clients (cache)
+	allMode   bool                       // list across all accessible projects
+	lbProject map[string]ProjectInfo     // lbID -> owning project (all-projects mode)
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,
@@ -129,29 +141,99 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	}
 	ao.AllowReauth = true
 
-	provider, err := openstack.AuthenticatedClient(ctx, *ao)
+	c := &Clients{
+		Region:    region,
+		Switch:    detectSwitchCapability(ao),
+		baseAuth:  *ao,
+		endpoint:  gophercloud.EndpointOpts{Region: region, Availability: gophercloud.AvailabilityPublic},
+		scoped:    map[string]*serviceClients{},
+		lbProject: map[string]ProjectInfo{},
+	}
+
+	// Initial login: use the credentials' own scope (empty projectID).
+	sc, err := c.buildScoped(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	c.sel = sc
+	if sc.project.ID != "" {
+		c.scoped[sc.project.ID] = sc
+	}
+	return c, nil
+}
+
+// buildScoped authenticates and builds the service clients scoped to projectID.
+// An empty projectID uses the base credentials' own scope (the initial login);
+// a non-empty projectID re-scopes with the retained credentials.
+func (c *Clients) buildScoped(ctx context.Context, projectID string) (*serviceClients, error) {
+	ao := c.baseAuth
+	if projectID != "" {
+		ao.TokenID = "" // re-scope with credentials, never the old scoped token
+		ao.Scope = &gophercloud.AuthScope{ProjectID: projectID}
+	}
+	ao.AllowReauth = true
+
+	provider, err := openstack.AuthenticatedClient(ctx, ao)
 	if err != nil {
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}
-
-	eo := gophercloud.EndpointOpts{Region: region, Availability: gophercloud.AvailabilityPublic}
-	c := &Clients{Provider: provider, Region: region, baseAuth: *ao, endpoint: eo}
-
-	if c.LB, err = openstack.NewLoadBalancerV2(provider, eo); err != nil {
+	sc := &serviceClients{provider: provider}
+	if sc.lb, err = openstack.NewLoadBalancerV2(provider, c.endpoint); err != nil {
 		return nil, fmt.Errorf("no Octavia (load-balancer) endpoint in the service catalog: %w", err)
 	}
-	if c.Identity, err = openstack.NewIdentityV3(provider, eo); err != nil {
+	if sc.identity, err = openstack.NewIdentityV3(provider, c.endpoint); err != nil {
 		return nil, fmt.Errorf("no Keystone (identity) endpoint in the service catalog: %w", err)
 	}
 	// Neutron and Nova are optional: their absence degrades the floating-IP and
 	// member-instance edges gracefully rather than being fatal.
-	c.Network, _ = openstack.NewNetworkV2(provider, eo)
-	c.Compute, _ = openstack.NewComputeV2(provider, eo)
+	sc.network, _ = openstack.NewNetworkV2(provider, c.endpoint)
+	sc.compute, _ = openstack.NewComputeV2(provider, c.endpoint)
 
-	c.Project = currentProject(provider)
-	c.Switch = detectSwitchCapability(ao)
+	sc.project = currentProject(provider)
+	if sc.project.ID == "" && projectID != "" {
+		sc.project = ProjectInfo{ID: projectID}
+	}
+	return sc, nil
+}
 
-	return c, nil
+// scopedClients returns cached-or-built service clients scoped to proj.
+func (c *Clients) scopedClients(ctx context.Context, proj ProjectInfo) (*serviceClients, error) {
+	c.mu.Lock()
+	if sc, ok := c.scoped[proj.ID]; ok {
+		c.mu.Unlock()
+		return sc, nil
+	}
+	sel := c.sel
+	c.mu.Unlock()
+	if proj.ID == "" || (sel != nil && proj.ID == sel.project.ID) {
+		return sel, nil
+	}
+	sc, err := c.buildScoped(ctx, proj.ID)
+	if err != nil {
+		return nil, err
+	}
+	if sc.project.Name == "" {
+		sc.project.Name = proj.Name
+	}
+	c.mu.Lock()
+	c.scoped[proj.ID] = sc
+	c.mu.Unlock()
+	return sc, nil
+}
+
+// clientsForLB returns the service clients scoped to the project owning lbID.
+// In single-project mode that is always the current selection; in all-projects
+// mode it (re-)scopes to the LB's project so a non-admin can read it.
+func (c *Clients) clientsForLB(ctx context.Context, lbID string) (*serviceClients, error) {
+	c.mu.Lock()
+	allMode := c.allMode
+	proj, ok := c.lbProject[lbID]
+	sel := c.sel
+	c.mu.Unlock()
+	if !allMode || !ok || (sel != nil && proj.ID == sel.project.ID) {
+		return sel, nil
+	}
+	return c.scopedClients(ctx, proj)
 }
 
 // currentProject extracts the scoped project from the authentication result.

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/gophercloud/gophercloud/v2"
-	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
 )
 
@@ -47,7 +45,10 @@ func (e *SwitchError) Unwrap() error { return e.err }
 // GET /v3/auth/projects. Unlike `project list` this works for regular
 // (non-admin) users, which is why the selector uses it.
 func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
-	pages, err := projects.ListAvailable(c.Identity).AllPages(ctx)
+	c.mu.Lock()
+	identity := c.sel.identity
+	c.mu.Unlock()
+	pages, err := projects.ListAvailable(identity).AllPages(ctx)
 	if err != nil {
 		return nil, &SwitchError{
 			Kind:    EnumerationFailed,
@@ -85,13 +86,7 @@ func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 		return &SwitchError{Kind: CannotReScope, Reason: c.Switch.Reason, Suggest: c.Switch.Suggest, Project: target.Name}
 	}
 
-	ao := c.baseAuth
-	// Re-scope with credentials, never by re-presenting the old scoped token.
-	ao.TokenID = ""
-	ao.Scope = &gophercloud.AuthScope{ProjectID: target.ID}
-	ao.AllowReauth = true
-
-	provider, err := openstack.AuthenticatedClient(ctx, ao)
+	sc, err := c.buildScoped(ctx, target.ID)
 	if err != nil {
 		return &SwitchError{
 			Kind:    NoRoleOnProject,
@@ -101,25 +96,32 @@ func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 			err:     err,
 		}
 	}
-
-	lb, err := openstack.NewLoadBalancerV2(provider, c.endpoint)
-	if err != nil {
-		return &SwitchError{Kind: NoRoleOnProject, Reason: "Switched project has no Octavia endpoint.", Project: target.Name, err: err}
-	}
-	identity, err := openstack.NewIdentityV3(provider, c.endpoint)
-	if err != nil {
-		return &SwitchError{Kind: NoRoleOnProject, Reason: "Switched project has no identity endpoint.", Project: target.Name, err: err}
+	if sc.project.Name == "" {
+		sc.project.Name = target.Name
 	}
 
-	c.Provider = provider
-	c.LB = lb
-	c.Identity = identity
-	c.Network, _ = openstack.NewNetworkV2(provider, c.endpoint)
-	c.Compute, _ = openstack.NewComputeV2(provider, c.endpoint)
-	c.Project = currentProject(provider)
-	if c.Project.ID == "" {
-		c.Project = target
-	}
+	c.mu.Lock()
+	c.sel = sc
+	c.allMode = false
+	c.scoped = map[string]*serviceClients{sc.project.ID: sc}
+	c.lbProject = map[string]ProjectInfo{}
+	c.mu.Unlock()
+	return nil
+}
+
+// EnterAllProjects switches the tool into all-projects mode: subsequent listing
+// aggregates every load balancer the user can see (the admin global list plus a
+// per-project sweep of role-assigned projects), and drilling into one re-scopes
+// to its owning project on demand where needed.
+//
+// It does not require re-scoping capability: an admin's global list works from
+// the current scope alone, and the per-project sweep simply degrades (is
+// skipped) when credentials can't re-scope.
+func (c *Clients) EnterAllProjects(ctx context.Context) error {
+	c.mu.Lock()
+	c.allMode = true
+	c.lbProject = map[string]ProjectInfo{}
+	c.mu.Unlock()
 	return nil
 }
 

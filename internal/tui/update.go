@@ -228,6 +228,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	}
 	// A new scope means a different object set: drop caches and history.
 	m.project = msg.project
+	m.allProjects = msg.all
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
 	m.lbStats = map[string]map[string]any{}
 	m.lbs, m.lbsLoaded = nil, false
@@ -238,7 +239,11 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.clearFilter()
 	m.loading = true
 	m.loadingWhat = "load balancers"
-	return m, tea.Batch(m.loadLBsCmd(), m.setFlash("switched to project "+projectLabel(msg.project), false))
+	scope := "project " + projectLabel(msg.project)
+	if msg.all {
+		scope = "all accessible projects"
+	}
+	return m, tea.Batch(m.loadLBsCmd(), m.setFlash("switched to "+scope, false))
 }
 
 // --- navigation & rendering ----------------------------------------------
@@ -273,7 +278,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 
 func (m *Model) setLBLocation() {
 	m.loc = location{id: model.LBListIdentity}
-	m.allEntries = lbEntries(m.lbs)
+	m.allEntries = lbEntries(m.lbs, m.allProjects)
 	m.cursor, m.top = 0, 0
 	m.applyFilters()
 }

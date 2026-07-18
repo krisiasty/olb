@@ -72,26 +72,3 @@ func statusColor(status string) lipgloss.Color {
 		return lipgloss.Color("252")
 	}
 }
-
-// statusDot renders a colored bullet for a node's effective status.
-func (s styles) statusDot(oper, prov string) string {
-	eff := oper
-	if eff == "" {
-		eff = prov
-	}
-	return lipgloss.NewStyle().Foreground(statusColor(eff)).Render("●")
-}
-
-// statusTag renders a compact "[STATUS]" tag when the status is notable.
-func (s styles) statusTag(oper, prov string) string {
-	eff := oper
-	if eff == "" {
-		eff = prov
-	}
-	switch eff {
-	case "", "ONLINE", "ACTIVE":
-		return ""
-	default:
-		return lipgloss.NewStyle().Foreground(statusColor(eff)).Render("[" + eff + "]")
-	}
-}

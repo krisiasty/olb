@@ -38,6 +38,7 @@ func run(args []string) error {
 		showVersion  = fs.Bool("version", false, "print version and exit")
 		showLicenses = fs.Bool("licenses", false, "print third-party license notices and exit")
 		printMode    = fs.Bool("print", false, "copy actions show the value on screen for manual copy instead of emitting OSC 52")
+		allProjects  = fs.Bool("all-projects", false, "start by listing load balancers across all accessible projects (admin: the whole cluster)")
 	)
 	opts := registerAuthFlags(fs)
 
@@ -57,9 +58,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *allProjects {
+		_ = clients.EnterAllProjects(context.Background())
+	}
 
 	return tui.Run(clients, tui.Config{
-		PrintMode: *printMode,
-		Stdout:    os.Stdout,
+		PrintMode:   *printMode,
+		AllProjects: *allProjects,
+		Stdout:      os.Stdout,
 	})
 }

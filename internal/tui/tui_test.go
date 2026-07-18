@@ -32,6 +32,7 @@ const sampleStatus = `
 
 type fakeBackend struct {
 	cap osclient.SwitchCapability
+	all bool
 }
 
 func newTree() *model.Tree {
@@ -48,10 +49,14 @@ func newTree() *model.Tree {
 }
 
 func (f *fakeBackend) ListLoadBalancers(context.Context) ([]osclient.LB, error) {
-	return []osclient.LB{
-		{ID: "lb-1", Name: "lb1", Provider: "amphora", VipAddress: "203.0.113.9", VipPortID: "port-9", ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED"},
-		{ID: "lb-2", Name: "lb2", Provider: "ovn", ProvisioningStatus: "ACTIVE", OperatingStatus: "ERROR"},
-	}, nil
+	lbs := []osclient.LB{
+		{ID: "lb-1", Name: "lb1", Provider: "amphora", VipAddress: "203.0.113.9", VipPortID: "port-9", ProjectID: "p1", ProjectName: "alpha", ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED"},
+		{ID: "lb-2", Name: "lb2", Provider: "ovn", ProjectID: "p1", ProjectName: "alpha", ProvisioningStatus: "ACTIVE", OperatingStatus: "ERROR"},
+	}
+	if f.all {
+		lbs = append(lbs, osclient.LB{ID: "lb-3", Name: "lb3", Provider: "amphora", ProjectID: "p2", ProjectName: "beta", ProvisioningStatus: "ACTIVE", OperatingStatus: "ONLINE"})
+	}
+	return lbs, nil
 }
 
 func (f *fakeBackend) GetTree(_ context.Context, lbID string, _ *model.LBMeta) (*model.Tree, error) {
@@ -76,11 +81,11 @@ func (f *fakeBackend) LBStats(context.Context, string) (map[string]any, error) {
 	return map[string]any{"active_connections": 3, "total_connections": 100, "bytes_in": 9, "bytes_out": 8, "request_errors": 1}, nil
 }
 
-func (f *fakeBackend) ResolveFloatingIP(context.Context, string) (*model.Node, error) {
+func (f *fakeBackend) ResolveFloatingIP(context.Context, string, string) (*model.Node, error) {
 	return nil, nil // internal LB: no floating IP
 }
 
-func (f *fakeBackend) ResolveInstance(_ context.Context, addr string) (*model.Node, error) {
+func (f *fakeBackend) ResolveInstance(_ context.Context, lbID, addr string) (*model.Node, error) {
 	n := model.NewNode(model.TypeInstance, "srv-1", "web-server-1")
 	n.SetAttr("address", addr)
 	n.Raw = map[string]any{"id": "srv-1"}
@@ -100,10 +105,18 @@ func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, err
 	return []osclient.ProjectInfo{{ID: "p1", Name: "alpha"}, {ID: "p2", Name: "beta"}}, nil
 }
 
-func (f *fakeBackend) SwitchProject(context.Context, osclient.ProjectInfo) error { return nil }
+func (f *fakeBackend) SwitchProject(_ context.Context, p osclient.ProjectInfo) error {
+	f.all = false
+	return nil
+}
+func (f *fakeBackend) EnterAllProjects(context.Context) error {
+	f.all = true
+	return nil
+}
 func (f *fakeBackend) CurrentProject() osclient.ProjectInfo {
 	return osclient.ProjectInfo{ID: "p1", Name: "alpha"}
 }
+func (f *fakeBackend) AllProjects() bool                           { return f.all }
 func (f *fakeBackend) SwitchCapability() osclient.SwitchCapability { return f.cap }
 
 // --- driver helpers -------------------------------------------------------
@@ -385,6 +398,50 @@ func TestAmphoraLazyLoad(t *testing.T) {
 	m = updExec(t, m, press("enter")) // loads amphorae, then navigates in
 	if m.loc.node == nil || m.loc.node.Type != model.TypeAmphora {
 		t.Fatalf("expected to land on the amphorae node, got %+v", m.loc.node)
+	}
+}
+
+func TestAllProjectsMode(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("p")) // open switcher, load projects (cursor on ALL row)
+
+	// Select the "all projects" row (index 0).
+	nm, cmd := m.Update(press("enter"))
+	m = nm.(Model)
+	if cmd == nil {
+		t.Fatal("selecting ALL should return a command")
+	}
+	m = upd(t, m, cmd()) // enterAllProjects -> switchedMsg -> onSwitched
+	if !m.allProjects {
+		t.Fatal("should be in all-projects mode after selecting ALL")
+	}
+
+	// The aggregated list now spans projects and tags each row with its project.
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	if len(m.entries) != 3 {
+		t.Fatalf("all-projects list should aggregate across projects; got %d", len(m.entries))
+	}
+	var tagged bool
+	for _, e := range m.entries {
+		if e.lb.ID == "lb-3" && strings.Contains(e.extra, "beta") {
+			tagged = true
+		}
+	}
+	if !tagged {
+		t.Errorf("cross-project LB should be tagged with its project; entries=%v", labels(m))
+	}
+	if !strings.Contains(m.View(), "all accessible projects") {
+		t.Errorf("subtitle should indicate all-projects scope")
+	}
+
+	// Selecting a concrete project exits all-projects mode.
+	m = updExec(t, m, press("p"))
+	m = upd(t, m, press("down")) // move off the ALL row onto the first project
+	nm, cmd = m.Update(press("enter"))
+	m = nm.(Model)
+	m = upd(t, m, cmd())
+	if m.allProjects {
+		t.Errorf("selecting a concrete project should exit all-projects mode")
 	}
 }
 

@@ -50,6 +50,20 @@ so it needs retained credentials. The selector's availability is detected up
 front and shown disabled with a specific reason when it can't work (bare
 `OS_TOKEN`, or an application credential bound to one project).
 
+The switcher's first entry, **⟨ all accessible projects ⟩** (or start with
+`--all-projects`), aggregates every load balancer you can see into one list
+(each row tagged with its project), from two sources unioned:
+
+- an **unfiltered list** from your current scope — for an **admin** this is
+  Octavia's global list (the whole cluster, exactly what `openstack
+  loadbalancer list` returns, including projects you hold no role in);
+- a **per-project sweep** of the projects you hold a role on
+  (`GET /v3/auth/projects`), which gives a non-admin cross-project visibility.
+
+Drilling into a load balancer re-scopes to its owning project on demand where
+needed. The default (single-project) view stays scoped to the selected project
+so switching is meaningful; use all-projects mode for the cluster-wide view.
+
 ### Keybindings
 
 | Group | Keys | Action |

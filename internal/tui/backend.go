@@ -15,11 +15,13 @@ type Backend interface {
 	GetTree(ctx context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error)
 	FetchDetail(ctx context.Context, n *model.Node) (osclient.DetailResult, error)
 	LBStats(ctx context.Context, lbID string) (map[string]any, error)
-	ResolveFloatingIP(ctx context.Context, portID string) (*model.Node, error)
-	ResolveInstance(ctx context.Context, address string) (*model.Node, error)
+	ResolveFloatingIP(ctx context.Context, lbID, portID string) (*model.Node, error)
+	ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error)
 	ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error)
 	ListProjects(ctx context.Context) ([]osclient.ProjectInfo, error)
 	SwitchProject(ctx context.Context, target osclient.ProjectInfo) error
+	EnterAllProjects(ctx context.Context) error
 	CurrentProject() osclient.ProjectInfo
+	AllProjects() bool
 	SwitchCapability() osclient.SwitchCapability
 }

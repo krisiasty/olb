@@ -26,6 +26,7 @@ type LB struct {
 	VipAddress         string
 	VipPortID          string
 	ProjectID          string
+	ProjectName        string // owning project's name (shown in all-projects mode)
 	ProvisioningStatus string
 	OperatingStatus    string
 }
@@ -42,9 +43,107 @@ var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
 var ErrAdminRequired = errors.New("requires admin")
 
-// ListLoadBalancers returns every load balancer in the current project scope.
+// ListLoadBalancers returns the load balancers to show in the list view: the
+// current project's in single-project mode, or the union across every accessible
+// project in all-projects mode.
+//
+// The single-project list is filtered explicitly by project_id rather than
+// relying on the token scope alone: an admin token would otherwise list load
+// balancers across all projects (Octavia's admin get_all is global), so
+// switching projects would appear to change nothing. Filtering makes the view
+// honestly project-scoped for admins and non-admins alike.
 func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
-	pages, err := loadbalancers.List(c.LB, loadbalancers.ListOpts{}).AllPages(ctx)
+	c.mu.Lock()
+	allMode := c.allMode
+	sel := c.sel
+	c.mu.Unlock()
+	if allMode {
+		return c.listAllProjects(ctx)
+	}
+	return listWith(ctx, sel, sel.project)
+}
+
+// listAllProjects aggregates every load balancer the user can see, from two
+// complementary sources unioned (deduplicated by LB ID):
+//
+//  1. A single unfiltered list from the current scope. For an ADMIN this is
+//     Octavia's global get_all — every project's load balancers, exactly what
+//     `openstack loadbalancer list` returns — reachable even for projects the
+//     admin holds no role in. For a non-admin, Octavia scopes it to the current
+//     project.
+//  2. A per-project list for each project the user holds a role on
+//     (GET /v3/auth/projects), re-scoping to each. This is what gives a
+//     non-admin cross-project visibility, and it records an lbID→project map so
+//     a later drill-in can re-scope to read the object.
+//
+// The two sources cover the two ways "all projects the user can access" is
+// defined for admins (global visibility) and non-admins (role assignments).
+// Projects that can't be scoped to or listed are skipped, not fatal.
+func (c *Clients) listAllProjects(ctx context.Context) ([]LB, error) {
+	seen := map[string]bool{}
+	var all []LB
+	add := func(lbs []LB) {
+		for _, lb := range lbs {
+			if !seen[lb.ID] {
+				seen[lb.ID] = true
+				all = append(all, lb)
+			}
+		}
+	}
+
+	// 1. Global/unfiltered list from the current scope (admin get_all).
+	c.mu.Lock()
+	sel := c.sel
+	c.mu.Unlock()
+	if global, err := listWith(ctx, sel, ProjectInfo{}); err == nil {
+		add(global)
+	}
+
+	// 2. Per-project lists for every accessible project.
+	lbProject := map[string]ProjectInfo{}
+	nameByID := map[string]string{}
+	if projs, err := c.ListProjects(ctx); err == nil {
+		for _, p := range projs {
+			nameByID[p.ID] = p.Name
+		}
+		for _, p := range projs {
+			sc, err := c.scopedClients(ctx, p)
+			if err != nil {
+				continue
+			}
+			lbs, err := listWith(ctx, sc, p)
+			if err != nil {
+				continue
+			}
+			for _, lb := range lbs {
+				lbProject[lb.ID] = p // re-scope target for drill-in
+			}
+			add(lbs)
+		}
+	} else if len(all) == 0 {
+		// Nothing from the global list and enumeration failed: surface the error.
+		return nil, err
+	}
+
+	// Fill in project names for globally-listed LBs where we know them.
+	for i := range all {
+		if all[i].ProjectName == "" {
+			if n := nameByID[all[i].ProjectID]; n != "" {
+				all[i].ProjectName = n
+			}
+		}
+	}
+
+	c.mu.Lock()
+	c.lbProject = lbProject
+	c.mu.Unlock()
+	return all, nil
+}
+
+// listWith lists the load balancers in one project using its scoped clients.
+func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, error) {
+	opts := loadbalancers.ListOpts{ProjectID: proj.ID}
+	pages, err := loadbalancers.List(sc.lb, opts).AllPages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +155,8 @@ func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	for _, l := range raw {
 		out = append(out, LB{
 			ID: l.ID, Name: l.Name, Provider: l.Provider,
-			VipAddress: l.VipAddress, VipPortID: l.VipPortID, ProjectID: l.ProjectID,
+			VipAddress: l.VipAddress, VipPortID: l.VipPortID,
+			ProjectID: l.ProjectID, ProjectName: proj.Name,
 			ProvisioningStatus: l.ProvisioningStatus, OperatingStatus: l.OperatingStatus,
 		})
 	}
@@ -69,18 +169,22 @@ func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 // re-resolution) the get supplies VIP/provider and doubles as an existence
 // check — a 404 surfaces so the caller can mark a history entry dead.
 func (c *Clients) GetTree(ctx context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error) {
-	meta := model.LBMeta{}
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	var meta model.LBMeta
 	if hint != nil {
 		meta = *hint
 	} else {
-		lb, err := loadbalancers.Get(ctx, c.LB, lbID).Extract()
+		lb, err := loadbalancers.Get(ctx, sc.lb, lbID).Extract()
 		if err != nil {
 			return nil, err
 		}
 		meta = model.LBMeta{VipAddress: lb.VipAddress, VipPortID: lb.VipPortID, Provider: lb.Provider, ProjectID: lb.ProjectID}
 	}
 
-	res := loadbalancers.GetStatuses(ctx, c.LB, lbID)
+	res := loadbalancers.GetStatuses(ctx, sc.lb, lbID)
 	if res.Err != nil {
 		return nil, res.Err
 	}
@@ -125,9 +229,13 @@ type DetailResult struct {
 // mutate the node or tree; the caller applies DetailResult on the UI goroutine.
 func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult, error) {
 	res := DetailResult{Attrs: map[string]string{}}
+	sc, err := c.clientsForLB(ctx, n.OwningLBID)
+	if err != nil {
+		return res, err
+	}
 	switch n.Type {
 	case model.TypeLoadBalancer:
-		r := loadbalancers.Get(ctx, c.LB, n.ID)
+		r := loadbalancers.Get(ctx, sc.lb, n.ID)
 		lb, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -138,7 +246,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "loadbalancer")
 
 	case model.TypeListener:
-		r := listeners.Get(ctx, c.LB, n.ID)
+		r := listeners.Get(ctx, sc.lb, n.ID)
 		ln, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -153,7 +261,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "listener")
 
 	case model.TypePool:
-		r := pools.Get(ctx, c.LB, n.ID)
+		r := pools.Get(ctx, sc.lb, n.ID)
 		p, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -170,7 +278,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if poolID == "" {
 			return res, fmt.Errorf("member detail needs its pool")
 		}
-		r := pools.GetMember(ctx, c.LB, poolID, n.ID)
+		r := pools.GetMember(ctx, sc.lb, poolID, n.ID)
 		m, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -182,7 +290,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "member")
 
 	case model.TypeHealthMonitor:
-		r := monitors.Get(ctx, c.LB, n.ID)
+		r := monitors.Get(ctx, sc.lb, n.ID)
 		m, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -194,7 +302,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "healthmonitor")
 
 	case model.TypeL7Policy:
-		r := l7policies.Get(ctx, c.LB, n.ID)
+		r := l7policies.Get(ctx, sc.lb, n.ID)
 		p, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -213,7 +321,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if policyID == "" {
 			return res, fmt.Errorf("l7rule detail needs its policy")
 		}
-		r := l7policies.GetRule(ctx, c.LB, policyID, n.ID)
+		r := l7policies.GetRule(ctx, sc.lb, policyID, n.ID)
 		rule, err := r.Extract()
 		if err != nil {
 			return res, err
@@ -238,7 +346,11 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 // LBStats returns the byte/connection counters for a load balancer — a good
 // leaf-level detail panel (distinct from status show).
 func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, error) {
-	s, err := loadbalancers.GetStats(ctx, c.LB, lbID).Extract()
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	s, err := loadbalancers.GetStats(ctx, sc.lb, lbID).Extract()
 	if err != nil {
 		return nil, err
 	}
@@ -252,16 +364,21 @@ func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, err
 }
 
 // ResolveFloatingIP looks up the floating IP mapped to the VIP's Neutron port,
-// if any. Returns (nil, nil) when the LB has no floating IP (common for
-// internal LBs) and ErrUnavailable when Neutron is not in scope.
-func (c *Clients) ResolveFloatingIP(ctx context.Context, portID string) (*model.Node, error) {
-	if c.Network == nil {
+// if any. lbID selects the project scope so a non-admin can resolve it in
+// all-projects mode. Returns (nil, nil) when the LB has no floating IP (common
+// for internal LBs) and ErrUnavailable when Neutron is not in scope.
+func (c *Clients) ResolveFloatingIP(ctx context.Context, lbID, portID string) (*model.Node, error) {
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	if sc.network == nil {
 		return nil, ErrUnavailable
 	}
 	if portID == "" {
 		return nil, nil
 	}
-	pages, err := floatingips.List(c.Network, floatingips.ListOpts{PortID: portID}).AllPages(ctx)
+	pages, err := floatingips.List(sc.network, floatingips.ListOpts{PortID: portID}).AllPages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -283,16 +400,20 @@ func (c *Clients) ResolveFloatingIP(ctx context.Context, portID string) (*model.
 }
 
 // ResolveInstance finds the Nova server whose fixed IP matches a member address.
-// Best-effort: returns (nil, nil) if no server matches, ErrUnavailable if Nova
-// is not in scope.
-func (c *Clients) ResolveInstance(ctx context.Context, address string) (*model.Node, error) {
-	if c.Compute == nil {
+// lbID selects the project scope. Best-effort: returns (nil, nil) if no server
+// matches, ErrUnavailable if Nova is not in scope.
+func (c *Clients) ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error) {
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	if sc.compute == nil {
 		return nil, ErrUnavailable
 	}
 	if address == "" {
 		return nil, nil
 	}
-	pages, err := servers.List(c.Compute, servers.ListOpts{IP: address}).AllPages(ctx)
+	pages, err := servers.List(sc.compute, servers.ListOpts{IP: address}).AllPages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +438,11 @@ func (c *Clients) ResolveInstance(ctx context.Context, address string) (*model.N
 // a 403 is translated to ErrAdminRequired so the caller can degrade gracefully
 // rather than surface a raw error. Not applicable to OVN-backed LBs.
 func (c *Clients) ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error) {
-	pages, err := amphorae.List(c.LB, amphorae.ListOpts{LoadbalancerID: lbID}).AllPages(ctx)
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	pages, err := amphorae.List(sc.lb, amphorae.ListOpts{LoadbalancerID: lbID}).AllPages(ctx)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 403) {
 			return nil, ErrAdminRequired

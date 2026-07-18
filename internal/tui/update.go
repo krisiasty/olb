@@ -324,7 +324,7 @@ func (m *Model) applyFilters() {
 }
 
 func (m *Model) ensureVisible() {
-	h := m.bodyHeight()
+	h := m.visibleRows()
 	if h < 1 {
 		h = 1
 	}

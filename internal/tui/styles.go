@@ -25,6 +25,10 @@ type styles struct {
 	disabled      lipgloss.Style
 	dead          lipgloss.Style
 	panelLabel    lipgloss.Style
+
+	tableHeader   lipgloss.Style
+	tableSelected lipgloss.Style
+	tableCell     lipgloss.Style
 }
 
 func newStyles() styles {
@@ -50,6 +54,12 @@ func newStyles() styles {
 		disabled:      lipgloss.NewStyle().Foreground(subtle).Italic(true),
 		dead:          lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Strikethrough(true),
 		panelLabel:    lipgloss.NewStyle().Foreground(subtle),
+
+		// The load-balancer list is a Lip Gloss table; one right-pad per cell is
+		// the column gap. The selected row carries a full-width highlight.
+		tableHeader:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Padding(0, 1, 0, 0),
+		tableSelected: lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("39")).Padding(0, 1, 0, 0),
+		tableCell:     lipgloss.NewStyle().Padding(0, 1, 0, 0),
 	}
 }
 

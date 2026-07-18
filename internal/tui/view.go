@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"gopkg.in/yaml.v3"
 
 	"github.com/krisiasty/olb/internal/model"
@@ -103,9 +104,22 @@ func (m Model) subtitleLine() string {
 	return m.clip(m.st.statusBar.Render(strings.Join(parts, "  ·  ")))
 }
 
+// visibleRows is the number of selectable rows the body can show. The
+// load-balancer list is rendered as a table, so it gives up one line to the
+// column header.
+func (m Model) visibleRows() int {
+	h := m.bodyHeight()
+	if m.loc.isList() && len(m.entries) > 0 {
+		h--
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
 func (m Model) bodyLines() []string {
 	h := m.bodyHeight()
-	lines := make([]string, 0, h)
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
@@ -116,15 +130,22 @@ func (m Model) bodyLines() []string {
 		case m.filter.Value() != "" || m.status != statusAll:
 			msg = "— no matches —"
 		}
-		lines = append(lines, "  "+m.st.disabled.Render(msg))
-	} else {
-		end := m.top + h
-		if end > len(m.entries) {
-			end = len(m.entries)
+		lines := []string{"  " + m.st.disabled.Render(msg)}
+		for len(lines) < h {
+			lines = append(lines, "")
 		}
-		for i := m.top; i < end; i++ {
-			lines = append(lines, m.renderRow(m.entries[i], i == m.cursor))
-		}
+		return lines
+	}
+	if m.loc.isList() {
+		return m.lbTableLines(h)
+	}
+	lines := make([]string, 0, h)
+	end := m.top + m.visibleRows()
+	if end > len(m.entries) {
+		end = len(m.entries)
+	}
+	for i := m.top; i < end; i++ {
+		lines = append(lines, m.renderRow(m.entries[i], i == m.cursor))
 	}
 	for len(lines) < h {
 		lines = append(lines, "")
@@ -133,6 +154,84 @@ func (m Model) bodyLines() []string {
 		lines = lines[:h]
 	}
 	return lines
+}
+
+// lbColumnTitles are the load-balancer table headers; the project column
+// appears only in all-projects mode.
+func (m Model) lbColumnTitles() []string {
+	if m.allProjects {
+		return []string{"NAME", "PROJECT", "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
+	}
+	return []string{"NAME", "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
+}
+
+func (m Model) lbRowCells(e entry) []string {
+	lb := e.lb
+	name := lb.Name
+	if name == "" {
+		name = shortID(lb.ID)
+	}
+	if m.allProjects {
+		proj := lb.ProjectName
+		if proj == "" {
+			proj = shortID(lb.ProjectID)
+		}
+		return []string{name, proj, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
+	}
+	return []string{name, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
+}
+
+// lbTableLines renders the load-balancer list as a Lip Gloss table (column
+// header plus the scrolled window of rows), the selected row highlighted and
+// the status columns colored. It returns exactly h lines.
+func (m Model) lbTableLines(h int) []string {
+	titles := m.lbColumnTitles()
+	statusCols := map[int]bool{len(titles) - 1: true, len(titles) - 2: true} // OPERATING, PROVISIONING
+
+	vis := h - 1 // header row
+	if vis < 1 {
+		vis = 1
+	}
+	start := m.top
+	end := start + vis
+	if end > len(m.entries) {
+		end = len(m.entries)
+	}
+	window := m.entries[start:end]
+	rows := make([][]string, len(window))
+	for i, e := range window {
+		rows[i] = m.lbRowCells(e)
+	}
+	selRow := m.cursor - start
+
+	t := table.New().
+		Border(lipgloss.HiddenBorder()).
+		BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
+		BorderColumn(false).BorderRow(false).BorderHeader(false).
+		Width(m.width).
+		Headers(titles...).
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			switch {
+			case row == table.HeaderRow:
+				return m.st.tableHeader
+			case row == selRow:
+				return m.st.tableSelected
+			case statusCols[col] && row >= 0 && row < len(rows):
+				return m.st.tableCell.Foreground(statusColor(rows[row][col]))
+			default:
+				return m.st.tableCell
+			}
+		})
+
+	out := strings.Split(t.Render(), "\n")
+	for len(out) < h {
+		out = append(out, "")
+	}
+	if len(out) > h {
+		out = out[:h]
+	}
+	return out
 }
 
 func (m Model) renderRow(e entry, sel bool) string {

@@ -51,9 +51,9 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Down):
 		m.moveCursor(1)
 	case key.Matches(msg, m.keys.PageUp):
-		m.moveCursor(-m.bodyHeight())
+		m.moveCursor(-m.visibleRows())
 	case key.Matches(msg, m.keys.PageDown):
-		m.moveCursor(m.bodyHeight())
+		m.moveCursor(m.visibleRows())
 	case key.Matches(msg, m.keys.Home):
 		m.cursor = 0
 		m.ensureVisible()

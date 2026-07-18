@@ -27,6 +27,24 @@ v1 is deliberately bounded to keep the surface small:
 
 Deferring the non-interactive mode also keeps the v1 dependency set minimal (see below) — the standard-library `flag` package covers the small, flat flag set v1 needs.
 
+## Platform support
+
+The tool must build and run on:
+
+| OS | Architecture | Go target (`GOOS`/`GOARCH`) |
+|---|---|---|
+| Windows | x86-64 | `windows/amd64` |
+| macOS | Intel (x86-64) | `darwin/amd64` |
+| macOS | Apple Silicon (arm64) | `darwin/arm64` |
+| Linux | x86-64 | `linux/amd64` |
+| Linux | arm64 | `linux/arm64` |
+
+("x86" is taken to mean 64-bit amd64; 32-bit i386 is not a target unless explicitly added later.)
+
+The all-Go, **cgo-free** dependency set (a deliberate outcome of avoiding cgo-based libraries, e.g. for the clipboard) makes this straightforward — cross-compilation is just `GOOS`/`GOARCH`, with no per-platform C toolchain, so all five targets build from one machine and can be produced in CI.
+
+Any platform-specific behavior — where a feature is unsupported on one target or works differently (the clipboard/OSC 52 story is the most likely, given terminal-support variation, especially on Windows consoles) — is **decided during implementation** and documented then, rather than specified up front here.
+
 ## Data model: a graph, not a tree
 
 The load balancer object model is a **graph**. Containment (LB → listener → pool → member) is the backbone, but there are **reference edges** that a strict tree cannot represent:

@@ -25,6 +25,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.search.Width = msg.Width - 12
 		m.vp.Width = msg.Width
 		m.vp.Height = m.bodyHeight()
+		if m.overlay == overlayTelemetry {
+			m.vp.Height = msg.Height - 2
+			m.rebuildTelemetryContent(false)
+		}
 		m.ensureVisible()
 		return m, nil
 
@@ -80,6 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onAutoStatsTick(msg)
 	case autoFullTickMsg:
 		return m.onAutoFullTick(msg)
+	case telemetryTickMsg:
+		return m.onTelemetryTick(msg)
 	case freshnessTickMsg:
 		return m, freshnessTickCmd()
 

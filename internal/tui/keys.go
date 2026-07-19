@@ -32,6 +32,8 @@ type keyMap struct {
 	AutoRefresh  key.Binding // a
 	IntervalUp   key.Binding // + / =
 	IntervalDown key.Binding // -
+	Telemetry    key.Binding // t
+	Reset        key.Binding // z (telemetry overlay)
 	Help         key.Binding // ?
 	Quit         key.Binding // q
 	Force        key.Binding // ctrl+c
@@ -69,6 +71,8 @@ func defaultKeys() keyMap {
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
 		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),
 		IntervalDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "shorter interval")),
+		Telemetry:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "API telemetry")),
+		Reset:        key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "reset")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		Force:        key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "force quit")),

@@ -14,6 +14,7 @@ package osclient
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
 
@@ -21,6 +22,8 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
 	"github.com/gophercloud/utils/v2/openstack/clientconfig"
+
+	"github.com/krisiasty/olb/internal/telemetry"
 )
 
 // Options holds the auth-related inputs captured from CLI flags. Empty fields
@@ -101,10 +104,11 @@ type Clients struct {
 	Region string
 	Switch SwitchCapability
 
-	mu       sync.Mutex
-	services *serviceClients
-	selected ProjectInfo // project whose rows are shown when allMode is false
-	allMode  bool
+	mu        sync.Mutex
+	services  *serviceClients
+	telemetry *telemetry.Collector
+	selected  ProjectInfo // project whose rows are shown when allMode is false
+	allMode   bool
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,
@@ -131,14 +135,15 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	ao.AllowReauth = true
 
 	c := &Clients{
-		Region: region,
-		Switch: SwitchCapability{CanSwitch: true},
+		Region:    region,
+		Switch:    SwitchCapability{CanSwitch: true},
+		telemetry: telemetry.NewCollector(telemetry.DefaultSlowThreshold),
 	}
 
 	// Authenticate exactly once with the credentials' original scope.
 	sc, err := buildServiceClients(ctx, *ao, gophercloud.EndpointOpts{
 		Region: region, Availability: gophercloud.AvailabilityPublic,
-	})
+	}, c.telemetry)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +152,15 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	return c, nil
 }
 
-func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts) (*serviceClients, error) {
+func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts, collector *telemetry.Collector) (*serviceClients, error) {
 	ao.AllowReauth = true
 
-	provider, err := openstack.AuthenticatedClient(ctx, ao)
+	provider, err := openstack.NewClient(ao.IdentityEndpoint)
 	if err != nil {
+		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
+	}
+	provider.HTTPClient = http.Client{Transport: telemetry.NewTransport(http.DefaultTransport, collector)}
+	if err = openstack.Authenticate(ctx, provider, ao); err != nil {
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}
 	sc := &serviceClients{provider: provider}

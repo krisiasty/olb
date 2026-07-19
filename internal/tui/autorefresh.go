@@ -90,7 +90,8 @@ func (m Model) validAutoRefreshGeneration(generation uint64) bool {
 }
 
 func (m Model) autoInteractionPaused() bool {
-	return m.overlay != overlayNone || m.filtering || m.filter.Value() != ""
+	overlayPaused := m.overlay != overlayNone && m.overlay != overlayTelemetry
+	return overlayPaused || m.filtering || m.filter.Value() != ""
 }
 
 func (m Model) autoRefreshPaused() bool {

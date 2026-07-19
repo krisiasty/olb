@@ -5,6 +5,7 @@ import (
 
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
+	"github.com/krisiasty/olb/internal/telemetry"
 )
 
 // Backend is the set of OpenStack operations the TUI drives asynchronously. It
@@ -26,4 +27,11 @@ type Backend interface {
 	CurrentProject() osclient.ProjectInfo
 	AllProjects() bool
 	SwitchCapability() osclient.SwitchCapability
+}
+
+// TelemetryBackend is optional so alternate/testing backends can run without
+// HTTP instrumentation. The real OpenStack client implements it.
+type TelemetryBackend interface {
+	TelemetrySnapshot() telemetry.Snapshot
+	ResetTelemetry()
 }

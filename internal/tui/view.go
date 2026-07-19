@@ -42,6 +42,8 @@ func (m Model) View() string {
 		return m.projectView()
 	case overlayPicker:
 		return m.pickerView()
+	case overlayTelemetry:
+		return m.telemetryView()
 	}
 	return m.listView()
 }
@@ -828,7 +830,7 @@ func (m Model) hintLine() string {
 	if m.filtering {
 		return m.clip(m.filter.View())
 	}
-	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · / filter · s status · p project · r refresh · a auto · +/- interval · h history · ? help · q quit"
+	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
 	return m.clip(m.st.help.Render(hint))
 }
 
@@ -1088,8 +1090,15 @@ Global
   a                toggle automatic refresh (enabled by default)
   + / -            lengthen / shorten the stats refresh interval
   =                same as + (no Shift required)
+  t                API telemetry overlay
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
+
+Telemetry overlay
+  r                refresh the displayed snapshot
+  a                toggle snapshot auto-refresh (enabled by default)
+  + / -            lengthen / shorten snapshot interval (= is +)
+  z                reset all collected API statistics
 
 Status colors
 {{status_legend}}
@@ -1106,6 +1115,9 @@ Notes
   • Auto-refresh updates visible LB stats at 1/2/5/10/30/60-second intervals
     (5 seconds by default) and refreshes lists/details/related objects every
     30 seconds. It pauses while overlays or text filters are active.
+  • API telemetry is process-local and records endpoint labels, outcomes, and
+    timings only—never bodies, credentials, query values, or full UUIDs. Its
+    overlay does not pause the application's normal API auto-refresh.
 `, "\n")
 	return strings.Replace(content, "{{status_legend}}", statusLegend(), 1)
 }

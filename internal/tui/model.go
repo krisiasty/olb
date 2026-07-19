@@ -12,6 +12,7 @@ import (
 	"github.com/krisiasty/olb/internal/cache"
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
+	"github.com/krisiasty/olb/internal/telemetry"
 )
 
 // overlayKind is the modal layer currently on top of the list, if any.
@@ -23,6 +24,7 @@ const (
 	overlayRaw     // y / j raw object view
 	overlayProject // p project switcher
 	overlayPicker  // h history picker
+	overlayTelemetry
 )
 
 // location is what the main pane currently shows: the LB list, or a node whose
@@ -124,6 +126,14 @@ type Model struct {
 	autoGeneration     uint64
 	autoStatsLoading   map[string]bool
 
+	// API telemetry is collected continuously by the OpenStack HTTP transport.
+	// The overlay snapshots it at an independently-controlled display cadence.
+	telemetrySnapshot      telemetry.Snapshot
+	telemetryUpdatedAt     time.Time
+	telemetryAutoEnabled   bool
+	telemetryIntervalIndex int
+	telemetryGeneration    uint64
+
 	// Overlay search (project switcher / history picker), kept separate from the
 	// list filter so opening an overlay doesn't clobber an active list filter.
 	search     textinput.Model
@@ -194,41 +204,44 @@ func New(backend Backend, cfg Config) Model {
 	se.CharLimit = 128
 
 	return Model{
-		backend:            backend,
-		keys:               defaultKeys(),
-		st:                 newStyles(),
-		cfg:                cfg,
-		spinner:            sp,
-		statsSpinner:       statsSpinner,
-		filter:             fi,
-		search:             se,
-		vp:                 viewport.New(0, 0),
-		cache:              cache.New(cfg.CacheSize, cfg.CacheTTL),
-		hist:               newHistory(cfg.HistoryCap),
-		project:            backend.CurrentProject(),
-		allProjects:        cfg.AllProjects,
-		lbStats:            map[string]map[string]any{},
-		lbStatsChanges:     map[string]map[string]statChange{},
-		lbStatsSampledAt:   map[string]time.Time{},
-		lbDetailLoading:    map[string]bool{},
-		lbStatsLoading:     map[string]bool{},
-		lbDetailErr:        map[string]string{},
-		lbStatsErr:         map[string]string{},
-		lbRelatedErr:       map[string]string{},
-		lbFreshness:        map[string]overviewFreshness{},
-		lbFIPLoading:       map[string]bool{},
-		lbFIPLoaded:        map[string]bool{},
-		lbAmphoraLoading:   map[string]bool{},
-		lbAmphoraLoaded:    map[string]bool{},
-		lbListenersLoading: map[string]bool{},
-		lbListenersLoaded:  map[string]bool{},
-		lbPoolsLoading:     map[string]bool{},
-		lbPoolsLoaded:      map[string]bool{},
-		autoRefreshEnabled: true,
-		autoIntervalIndex:  defaultAutoRefreshIntervalIndex,
-		autoGeneration:     1,
-		autoStatsLoading:   map[string]bool{},
-		clock:              time.Now,
+		backend:                backend,
+		keys:                   defaultKeys(),
+		st:                     newStyles(),
+		cfg:                    cfg,
+		spinner:                sp,
+		statsSpinner:           statsSpinner,
+		filter:                 fi,
+		search:                 se,
+		vp:                     viewport.New(0, 0),
+		cache:                  cache.New(cfg.CacheSize, cfg.CacheTTL),
+		hist:                   newHistory(cfg.HistoryCap),
+		project:                backend.CurrentProject(),
+		allProjects:            cfg.AllProjects,
+		lbStats:                map[string]map[string]any{},
+		lbStatsChanges:         map[string]map[string]statChange{},
+		lbStatsSampledAt:       map[string]time.Time{},
+		lbDetailLoading:        map[string]bool{},
+		lbStatsLoading:         map[string]bool{},
+		lbDetailErr:            map[string]string{},
+		lbStatsErr:             map[string]string{},
+		lbRelatedErr:           map[string]string{},
+		lbFreshness:            map[string]overviewFreshness{},
+		lbFIPLoading:           map[string]bool{},
+		lbFIPLoaded:            map[string]bool{},
+		lbAmphoraLoading:       map[string]bool{},
+		lbAmphoraLoaded:        map[string]bool{},
+		lbListenersLoading:     map[string]bool{},
+		lbListenersLoaded:      map[string]bool{},
+		lbPoolsLoading:         map[string]bool{},
+		lbPoolsLoaded:          map[string]bool{},
+		autoRefreshEnabled:     true,
+		autoIntervalIndex:      defaultAutoRefreshIntervalIndex,
+		autoGeneration:         1,
+		autoStatsLoading:       map[string]bool{},
+		telemetryAutoEnabled:   true,
+		telemetryIntervalIndex: defaultAutoRefreshIntervalIndex,
+		telemetryGeneration:    1,
+		clock:                  time.Now,
 	}
 }
 

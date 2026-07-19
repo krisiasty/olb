@@ -13,6 +13,7 @@ import (
 
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
+	"github.com/krisiasty/olb/internal/telemetry"
 )
 
 // --- fake backend ---------------------------------------------------------
@@ -34,8 +35,9 @@ const sampleStatus = `
 }}}`
 
 type fakeBackend struct {
-	cap osclient.SwitchCapability
-	all bool
+	cap       osclient.SwitchCapability
+	all       bool
+	telemetry *telemetry.Collector
 }
 
 func newTree() *model.Tree {
@@ -170,6 +172,17 @@ func (f *fakeBackend) CurrentProject() osclient.ProjectInfo {
 }
 func (f *fakeBackend) AllProjects() bool                           { return f.all }
 func (f *fakeBackend) SwitchCapability() osclient.SwitchCapability { return f.cap }
+func (f *fakeBackend) TelemetrySnapshot() telemetry.Snapshot {
+	if f.telemetry == nil {
+		return telemetry.Snapshot{SlowThreshold: telemetry.DefaultSlowThreshold}
+	}
+	return f.telemetry.Snapshot()
+}
+func (f *fakeBackend) ResetTelemetry() {
+	if f.telemetry != nil {
+		f.telemetry.Reset()
+	}
+}
 
 // --- driver helpers -------------------------------------------------------
 
@@ -785,6 +798,92 @@ func TestHelpIncludesStatusColoredLegend(t *testing.T) {
 		if !strings.Contains(content, styledDot) {
 			t.Errorf("help legend missing status-colored dot for %q", item.description)
 		}
+	}
+}
+
+func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
+	collector := telemetry.NewCollector(time.Second)
+	collector.Observe("GET octavia /v2/lbaas/loadbalancers", 100*time.Millisecond, telemetry.Success)
+	collector.Observe("GET octavia /v2/lbaas/loadbalancers", 2*time.Second, telemetry.Success)
+	collector.Observe("GET neutron /v2.0/floatingips?port_id", 30*time.Second, telemetry.Timeout)
+	backend := &fakeBackend{
+		cap: osclient.SwitchCapability{CanSwitch: true}, telemetry: collector,
+	}
+	m := New(backend, Config{PrintMode: true, HistoryCap: 50})
+	m.Init()
+	m = upd(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+
+	next, cmd := m.Update(press("t"))
+	m = next.(Model)
+	if m.overlay != overlayTelemetry || cmd == nil {
+		t.Fatalf("t should open auto-refreshing telemetry overlay; overlay=%v cmd=%v", m.overlay, cmd)
+	}
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"API telemetry", "refresh: auto (5s)", "slow ≥1s",
+		"TOTAL 3", "SUCCESS 2", "SLOW 2", "TIMEOUT 1", "ERROR 0",
+		"GET octavia /v2/lbaas/loadbalancers",
+		"calls 2 · success 2 · slow 1 · timeout 0 · error 0",
+		"latency min 100ms · avg 1.1s · median 1.1s · p95 2s · p99 2s · max 2s",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("telemetry overlay missing %q:\n%s", want, plain)
+		}
+	}
+
+	// Manual mode freezes the displayed snapshot until r is pressed.
+	m = upd(t, m, press("a"))
+	if m.telemetryAutoEnabled || !strings.Contains(ansiRE.ReplaceAllString(m.View(), ""), "refresh: manual") {
+		t.Fatal("a should switch telemetry display refresh to manual")
+	}
+	if m.autoRefreshPaused() {
+		t.Fatal("telemetry overlay should not pause normal API auto-refresh")
+	}
+	collector.Observe("GET nova /v2.1/:id/servers", 50*time.Millisecond, telemetry.Failure)
+	if m.telemetrySnapshot.Calls != 3 {
+		t.Fatal("manual telemetry snapshot changed without an explicit refresh")
+	}
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	if m.telemetrySnapshot.Calls != 3 {
+		t.Fatal("resizing should not refresh a manual telemetry snapshot")
+	}
+	m = upd(t, m, press("r"))
+	if m.telemetrySnapshot.Calls != 4 || m.telemetrySnapshot.Errors != 1 {
+		t.Fatalf("manual telemetry refresh = %+v", m.telemetrySnapshot)
+	}
+
+	// '=' uses the same interval-increase action as '+', even in manual mode.
+	m = upd(t, m, press("="))
+	if m.telemetryInterval() != 10*time.Second {
+		t.Fatalf("telemetry interval = %s, want 10s", m.telemetryInterval())
+	}
+	m = upd(t, m, press("z"))
+	if m.telemetrySnapshot.Calls != 0 || collector.Snapshot().Calls != 0 {
+		t.Fatalf("z did not reset telemetry: view=%+v collector=%+v", m.telemetrySnapshot, collector.Snapshot())
+	}
+
+	// Re-enable auto mode and verify the generation-owned timer snapshots new
+	// collector data; closing the overlay invalidates that timer.
+	next, cmd = m.Update(press("a"))
+	m = next.(Model)
+	if !m.telemetryAutoEnabled || cmd == nil {
+		t.Fatal("a should re-enable and schedule telemetry auto-refresh")
+	}
+	generation := m.telemetryGeneration
+	collector.Observe("GET keystone /v3/projects", 20*time.Millisecond, telemetry.Success)
+	next, cmd = m.Update(telemetryTickMsg{generation: generation})
+	m = next.(Model)
+	if m.telemetrySnapshot.Calls != 1 || cmd == nil {
+		t.Fatal("telemetry timer did not refresh and reschedule")
+	}
+	m = upd(t, m, press("t"))
+	if m.overlay != overlayNone {
+		t.Fatal("t should close the telemetry overlay")
+	}
+	next, cmd = m.Update(telemetryTickMsg{generation: generation})
+	if cmd != nil || next.(Model).overlay != overlayNone {
+		t.Fatal("stale telemetry timer remained active after closing overlay")
 	}
 }
 

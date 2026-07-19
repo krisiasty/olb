@@ -127,6 +127,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.changeAutoRefreshInterval(1)
 	case key.Matches(msg, m.keys.IntervalDown):
 		return m.changeAutoRefreshInterval(-1)
+	case key.Matches(msg, m.keys.Telemetry):
+		return m.openTelemetry()
 	case key.Matches(msg, m.keys.Help):
 		m.overlay = overlayHelp
 		m.setupHelpViewport()
@@ -403,6 +405,8 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onProjectKey(msg)
 	case overlayPicker:
 		return m.onPickerKey(msg)
+	case overlayTelemetry:
+		return m.onTelemetryKey(msg)
 	}
 	return m, nil
 }

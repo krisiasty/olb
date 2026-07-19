@@ -77,7 +77,7 @@ service clients.
 | | `i` / `n` / `o` | Copy id / name / displayed raw object |
 | Search | `/` | Filter current list (substring) |
 | | `s` | Cycle status filter — all / error / degraded |
-| Global | `p` `r` `a` `+`/`-` `?` `q` | Project · refresh · auto-refresh toggle/interval · help · quit (back out, then exit) |
+| Global | `p` `r` `a` `+`/`-` `t` `?` `q` | Project · refresh · auto-refresh toggle/interval · API telemetry · help · quit (back out, then exit) |
 | | `ctrl+c` | Force quit |
 
 `enter` is the only descent key; the arrows are reserved for history. `esc`
@@ -118,6 +118,14 @@ status fields, and issue counts throughout the TUI.
   the exact increase since the previous successful sample. Large counters use
   digit grouping. Counter resets become a new baseline instead of producing a
   negative rate or delta.
+- **Local API telemetry.** Every OpenStack HTTP request is timed and classified
+  as successful, timed out, or failed; calls taking at least one second also
+  count as slow. Press `t` for totals and per-endpoint min/average/median/p95/
+  p99/max latency. The snapshot display defaults to five-second auto-refresh,
+  with `r`, `a`, `+`/`-` (`=` is `+`), and `z` providing manual refresh, cadence,
+  and reset controls. The overlay does not pause normal API auto-refresh.
+  Collection is in-memory only and never stores or exports bodies, credentials,
+  query values, or full resource UUIDs.
 - **A graph, not a tree.** Nodes carry typed **containment** and **reference**
   edges, both traversable in either direction, so shared pools and boundary
   crossings (VIP → floating IP, member → Nova instance) are first-class and the

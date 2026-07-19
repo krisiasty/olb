@@ -99,6 +99,8 @@ type Model struct {
 	// Load-balancer overview state. Full configuration and stats load
 	// independently when an LB is opened; both are cached alongside the tree.
 	lbStats            map[string]map[string]any
+	lbStatsChanges     map[string]map[string]statChange
+	lbStatsSampledAt   map[string]time.Time
 	lbDetailLoading    map[string]bool
 	lbStatsLoading     map[string]bool
 	lbDetailErr        map[string]string
@@ -206,6 +208,8 @@ func New(backend Backend, cfg Config) Model {
 		project:            backend.CurrentProject(),
 		allProjects:        cfg.AllProjects,
 		lbStats:            map[string]map[string]any{},
+		lbStatsChanges:     map[string]map[string]statChange{},
+		lbStatsSampledAt:   map[string]time.Time{},
 		lbDetailLoading:    map[string]bool{},
 		lbStatsLoading:     map[string]bool{},
 		lbDetailErr:        map[string]string{},

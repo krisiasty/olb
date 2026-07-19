@@ -353,6 +353,84 @@ func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
 	}
 }
 
+func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	firstAt := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", sampledAt: firstAt,
+		stats: map[string]any{
+			"active_connections": 1234,
+			"total_connections":  10000,
+			"request_errors":     2,
+			"bytes_in":           1536,
+			"bytes_out":          1024 * 1024,
+		},
+	})
+
+	fields := statFieldValues(m.lbStatFields())
+	for label, want := range map[string]string{
+		"Active connections": "1,234",
+		"Connections":        "10,000",
+		"Request errors":     "2",
+		"Bytes in":           "1.5 KiB",
+		"Bytes out":          "1 MiB",
+	} {
+		if got := fields[label]; got != want {
+			t.Errorf("first %s = %q, want %q", label, got, want)
+		}
+	}
+
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", sampledAt: firstAt.Add(5 * time.Second), automatic: true,
+		stats: map[string]any{
+			"active_connections": 1300,
+			"total_connections":  10015,
+			"request_errors":     7,
+			"bytes_in":           1536 + 10*1024,
+			"bytes_out":          6 * 1024 * 1024,
+		},
+	})
+	fields = statFieldValues(m.lbStatFields())
+	for label, want := range map[string]string{
+		"Active connections": "1,300",
+		"Connections":        "10,015 (+3/s)",
+		"Request errors":     "7 (+5)",
+		"Bytes in":           "11.5 KiB (2 KiB/s)",
+		"Bytes out":          "6 MiB (1 MiB/s)",
+	} {
+		if got := fields[label]; got != want {
+			t.Errorf("second %s = %q, want %q", label, got, want)
+		}
+	}
+
+	// A lower value is a counter reset, not negative traffic. This sample is
+	// retained as the next baseline but does not display a rate itself.
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", sampledAt: firstAt.Add(10 * time.Second), automatic: true,
+		stats: map[string]any{
+			"total_connections": 2,
+			"request_errors":    1,
+			"bytes_in":          512,
+			"bytes_out":         1024,
+		},
+	})
+	fields = statFieldValues(m.lbStatFields())
+	for _, label := range []string{"Connections", "Request errors", "Bytes in", "Bytes out"} {
+		if strings.Contains(fields[label], "(") {
+			t.Errorf("reset %s should not show a rate: %q", label, fields[label])
+		}
+	}
+}
+
+func statFieldValues(fields []overviewField) map[string]string {
+	values := make(map[string]string, len(fields))
+	for _, field := range fields {
+		values[field.label] = field.value
+	}
+	return values
+}
+
 func TestReenablingAutoRefreshImmediatelyRefreshesStaleStats(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)

@@ -79,6 +79,7 @@ type switchedMsg struct {
 type statsMsg struct {
 	lbID      string
 	stats     map[string]any
+	sampledAt time.Time
 	refresh   bool
 	automatic bool
 	err       error
@@ -271,7 +272,7 @@ func (m Model) statsCmd(lbID string, refresh, automatic bool) tea.Cmd {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		stats, err := b.LBStats(ctx, lbID)
-		return statsMsg{lbID: lbID, stats: stats, refresh: refresh, automatic: automatic, err: err}
+		return statsMsg{lbID: lbID, stats: stats, sampledAt: m.clock(), refresh: refresh, automatic: automatic, err: err}
 	}
 }
 

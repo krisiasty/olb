@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -246,7 +247,7 @@ func (m Model) onStats(msg statsMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	delete(m.lbStatsErr, msg.lbID)
-	m.lbStats[msg.lbID] = msg.stats
+	m.applyStatsSample(msg.lbID, msg.stats, msg.sampledAt)
 	m.markFresh(msg.lbID, sectionStats)
 	cmd := m.ensureStatsSpinner()
 	return m, cmd
@@ -515,7 +516,7 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 		failures = append(failures, "stats: "+stats.err.Error())
 	} else {
 		delete(m.lbStatsErr, lbID)
-		m.lbStats[lbID] = stats.stats
+		m.applyStatsSample(lbID, stats.stats, stats.sampledAt)
 		m.markFresh(lbID, sectionStats)
 	}
 	var relatedFailures []string
@@ -891,6 +892,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.allProjects = msg.all
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
 	m.lbStats = map[string]map[string]any{}
+	m.lbStatsChanges = map[string]map[string]statChange{}
+	m.lbStatsSampledAt = map[string]time.Time{}
 	m.lbDetailLoading = map[string]bool{}
 	m.lbStatsLoading = map[string]bool{}
 	m.lbDetailErr = map[string]string{}
@@ -948,6 +951,8 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 		return m.loadLBOverview()
 	}
 	delete(m.lbStats, id.OwningLBID)
+	delete(m.lbStatsChanges, id.OwningLBID)
+	delete(m.lbStatsSampledAt, id.OwningLBID)
 	delete(m.lbDetailLoading, id.OwningLBID)
 	delete(m.lbStatsLoading, id.OwningLBID)
 	delete(m.lbDetailErr, id.OwningLBID)

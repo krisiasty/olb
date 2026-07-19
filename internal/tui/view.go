@@ -370,7 +370,8 @@ func adminStateLabel(value string) string {
 func (m Model) lbStatFields() []overviewField {
 	n := m.loc.node
 	stats := m.lbStats[n.ID]
-	value := func(key string) string {
+	changes := m.lbStatsChanges[n.ID]
+	value := func(key string, bytes bool) string {
 		if stats == nil {
 			if m.lbStatsLoading[n.ID] {
 				return "…"
@@ -381,14 +382,39 @@ func (m Model) lbStatFields() []overviewField {
 		if !ok || v == nil {
 			return "—"
 		}
-		return fmt.Sprint(v)
+		formatted := formatStatCount(v)
+		if bytes {
+			formatted = formatStatBytes(v)
+		}
+		return formatted
+	}
+	withByteRate := func(key string) string {
+		formatted := value(key, true)
+		if change, ok := changes[key]; ok {
+			formatted += " (" + formatByteRate(change.rate) + ")"
+		}
+		return formatted
+	}
+	withSignedRate := func(key string) string {
+		formatted := value(key, false)
+		if change, ok := changes[key]; ok {
+			formatted += " (+" + formatCounterRate(change.rate) + ")"
+		}
+		return formatted
+	}
+	withDelta := func(key string) string {
+		formatted := value(key, false)
+		if change, ok := changes[key]; ok {
+			formatted += " (+" + formatCounterDelta(change.delta) + ")"
+		}
+		return formatted
 	}
 	return []overviewField{
-		{label: "Active connections", value: value("active_connections")},
-		{label: "Total connections", value: value("total_connections")},
-		{label: "Request errors", value: value("request_errors")},
-		{label: "Bytes in", value: value("bytes_in")},
-		{label: "Bytes out", value: value("bytes_out")},
+		{label: "Active connections", value: value("active_connections", false)},
+		{label: "Connections", value: withSignedRate("total_connections")},
+		{label: "Request errors", value: withDelta("request_errors")},
+		{label: "Bytes in", value: withByteRate("bytes_in")},
+		{label: "Bytes out", value: withByteRate("bytes_out")},
 	}
 }
 

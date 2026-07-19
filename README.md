@@ -110,6 +110,11 @@ reference jump.
   the active text and status filters.
 - **Other detail is lazy.** Per-object `show` calls used for raw inspection and
   precise reference resolution are fetched only when needed.
+- **Readable traffic statistics.** Byte totals use IEC units and show throughput,
+  cumulative connections show a signed per-second rate, and request errors show
+  the exact increase since the previous successful sample. Large counters use
+  digit grouping. Counter resets become a new baseline instead of producing a
+  negative rate or delta.
 - **A graph, not a tree.** Nodes carry typed **containment** and **reference**
   edges, both traversable in either direction, so shared pools and boundary
   crossings (VIP → floating IP, member → Nova instance) are first-class and the

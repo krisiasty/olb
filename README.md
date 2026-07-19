@@ -83,7 +83,8 @@ service clients.
 `enter` is the only descent key; the arrows are reserved for history. `esc`
 clears an active filter first, otherwise it is *back*. Reference edges render as
 `→` rows and back-references as `←` rows; `↦` in the breadcrumb marks a
-reference jump.
+reference jump. The `?` overlay includes a status-color legend matching dots,
+status fields, and issue counts throughout the TUI.
 
 ## How it works
 

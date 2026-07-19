@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
@@ -749,6 +750,42 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	// i / n copy the standing object's id / name (print mode, no stdout write).
 	m = upd(t, m, press("i"))
 	m = upd(t, m, press("n"))
+}
+
+func TestHelpIncludesStatusColoredLegend(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = upd(t, m, press("?"))
+	if m.overlay != overlayHelp {
+		t.Fatalf("? should open help, overlay=%v", m.overlay)
+	}
+	if view := m.View(); view == "" {
+		t.Fatal("help overlay rendered an empty view")
+	}
+	content := helpContent()
+	plain := ansiRE.ReplaceAllString(content, "")
+	for _, want := range []string{
+		"Status colors",
+		"● healthy / ready",
+		"ONLINE · ACTIVE · ENABLED · ALLOCATED · READY",
+		"● degraded / changing",
+		"DEGRADED · DRAINING · BOOTING · PENDING_*",
+		"● error",
+		"ERROR · FAILOVER_STOPPED",
+		"● inactive / unmonitored",
+		"OFFLINE · NO_MONITOR · DISABLED · DELETED",
+		"● no health status",
+		"VIP / not applicable",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("help status legend missing %q:\n%s", want, plain)
+		}
+	}
+	for _, item := range statusLegendEntries {
+		styledDot := lipgloss.NewStyle().Foreground(statusColor(item.status)).Render("●")
+		if !strings.Contains(content, styledDot) {
+			t.Errorf("help legend missing status-colored dot for %q", item.description)
+		}
+	}
 }
 
 func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {

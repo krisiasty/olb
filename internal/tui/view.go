@@ -1059,7 +1059,7 @@ func marshalRaw(v any, format string) string {
 }
 
 func helpContent() string {
-	return strings.TrimLeft(`
+	content := strings.TrimLeft(`
 Move
   ↑ / ↓            selection up / down
   PgUp / PgDn      page up / down
@@ -1091,6 +1091,9 @@ Global
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
 
+Status colors
+{{status_legend}}
+
 Notes
 	• auto-refresh header intervals are stats/full (for example, 5s/30s).
 	• enter is the only descent key; arrows are reserved for history.
@@ -1104,4 +1107,28 @@ Notes
     (5 seconds by default) and refreshes lists/details/related objects every
     30 seconds. It pauses while overlays or text filters are active.
 `, "\n")
+	return strings.Replace(content, "{{status_legend}}", statusLegend(), 1)
+}
+
+type statusLegendEntry struct {
+	status      string
+	description string
+	values      string
+}
+
+var statusLegendEntries = [...]statusLegendEntry{
+	{status: "ONLINE", description: "healthy / ready", values: "ONLINE · ACTIVE · ENABLED · ALLOCATED · READY"},
+	{status: "DEGRADED", description: "degraded / changing", values: "DEGRADED · DRAINING · BOOTING · PENDING_*"},
+	{status: "ERROR", description: "error", values: "ERROR · FAILOVER_STOPPED"},
+	{status: "OFFLINE", description: "inactive / unmonitored", values: "OFFLINE · NO_MONITOR · DISABLED · DELETED"},
+	{status: "", description: "no health status", values: "VIP / not applicable"},
+}
+
+func statusLegend() string {
+	lines := make([]string, 0, len(statusLegendEntries))
+	for _, item := range statusLegendEntries {
+		text := "● " + padRight(item.description, 23) + item.values
+		lines = append(lines, "  "+lipgloss.NewStyle().Foreground(statusColor(item.status)).Render(text))
+	}
+	return strings.Join(lines, "\n")
 }

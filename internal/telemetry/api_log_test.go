@@ -124,6 +124,19 @@ func TestAPILoggerWritesSanitizedCorrelatedTransactions(t *testing.T) {
 	}
 }
 
+func TestAPILoggerLabelsBarbicanService(t *testing.T) {
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"https://key-manager.example/v1/secrets/123e4567-e89b-12d3-a456-426614174000/payload", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := &APILogger{now: func() time.Time { return time.Time{} }}
+	event := logger.baseEvent(request, "call-id", "response", Endpoint(request))
+	if event.Service != "barbican" || event.Endpoint != "GET barbican /v1/secrets/:id/payload" {
+		t.Fatalf("Barbican API log metadata = %+v", event)
+	}
+}
+
 func TestAPILoggerSuppressesAuthenticationBodiesAndClassifiesTimeouts(t *testing.T) {
 	path := t.TempDir() + "/api.jsonl"
 	logger, err := OpenAPILogger(path, APILogOptions{IncludeBodies: true})

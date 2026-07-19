@@ -16,9 +16,8 @@ import (
 // few minutes keeps newly-created projects resolvable without per-refresh load.
 const projNamesTTL = 5 * time.Minute
 
-// SelectProject applies the command-line project selector as the same local
-// presentation filter used by the TUI. It never changes the token or service
-// clients created from --os-project-name / OS_PROJECT_NAME / clouds.yaml.
+// SelectProject resolves the command-line project selector and activates the
+// same project-scoped service clients used by the TUI project switcher.
 func (c *Clients) SelectProject(ctx context.Context, selector string) error {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -213,20 +212,36 @@ func mergeProjectNames(admin, accessible []ProjectInfo) map[string]string {
 	return names
 }
 
-// SwitchProject changes only the presentation filter. The original token and
-// service clients remain untouched, preserving admin/global authorization.
-func (c *Clients) SwitchProject(_ context.Context, target ProjectInfo) error {
+// SwitchProject obtains and activates a new project-scoped service client. The
+// startup clients remain untouched for all-projects mode.
+func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
+	if target.ID == "" {
+		return fmt.Errorf("cannot switch to a project without an ID")
+	}
 	c.mu.Lock()
+	scopeProject := c.scopeProject
+	c.mu.Unlock()
+	if scopeProject == nil {
+		return fmt.Errorf("project-scoped authentication is unavailable")
+	}
+
+	scoped, err := scopeProject(ctx, target)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.activeServices = scoped
 	c.selected = target
 	c.allMode = false
 	c.mu.Unlock()
 	return nil
 }
 
-// EnterAllProjects removes the presentation filter while retaining the exact
-// authentication scope with which the program started.
+// EnterAllProjects restores the exact authentication scope with which the
+// program started, including any global/admin visibility it provided.
 func (c *Clients) EnterAllProjects(_ context.Context) error {
 	c.mu.Lock()
+	c.activeServices = c.services
 	c.allMode = true
 	c.mu.Unlock()
 	return nil

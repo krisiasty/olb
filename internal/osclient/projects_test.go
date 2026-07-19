@@ -2,6 +2,7 @@ package osclient
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -47,11 +48,21 @@ func TestProjectNameMapServesCachedWithinTTL(t *testing.T) {
 	}
 }
 
-func TestProjectSelectionKeepsOriginalAuthenticationClients(t *testing.T) {
+func TestProjectSelectionScopesClientsAndRestoresOriginalForAllProjects(t *testing.T) {
 	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}
+	tenant := &serviceClients{project: ProjectInfo{ID: "tenant-a", Name: "tenant-a"}}
+	scopeCalls := 0
 	c := &Clients{
-		Switch:   SwitchCapability{CanSwitch: true},
-		services: original,
+		Switch:         SwitchCapability{CanSwitch: true},
+		services:       original,
+		activeServices: original,
+		scopeProject: func(_ context.Context, target ProjectInfo) (*serviceClients, error) {
+			scopeCalls++
+			if target.ID != tenant.project.ID {
+				t.Fatalf("scope target = %+v, want %+v", target, tenant.project)
+			}
+			return tenant, nil
+		},
 		selected: original.project,
 		allMode:  true,
 	}
@@ -61,16 +72,26 @@ func TestProjectSelectionKeepsOriginalAuthenticationClients(t *testing.T) {
 		t.Fatalf("SwitchProject: %v", err)
 	}
 	if c.services != original {
-		t.Fatal("project selection replaced the original authentication clients")
+		t.Fatal("project selection replaced the retained startup clients")
 	}
-	if got, err := c.clientsForLB(context.Background(), "lb-any-project"); err != nil || got != original {
-		t.Fatalf("drill-in clients = %p, %v; want original %p", got, err, original)
+	if got, err := c.clientsForLB(context.Background(), "lb-in-tenant"); err != nil || got != tenant {
+		t.Fatalf("drill-in clients = %p, %v; want scoped %p", got, err, tenant)
 	}
 	if got := c.CurrentProject(); got != target {
 		t.Fatalf("CurrentProject = %+v, want %+v", got, target)
 	}
 	if c.AllProjects() {
-		t.Fatal("concrete project selection should disable the all-projects filter")
+		t.Fatal("concrete project selection should disable all-projects mode")
+	}
+	if scopeCalls != 1 {
+		t.Fatalf("project authentication calls = %d, want 1", scopeCalls)
+	}
+
+	if err := c.SwitchProject(context.Background(), target); err != nil {
+		t.Fatalf("second SwitchProject: %v", err)
+	}
+	if scopeCalls != 2 {
+		t.Fatalf("second project switch made %d authentication calls, want 2", scopeCalls)
 	}
 
 	if err := c.EnterAllProjects(context.Background()); err != nil {
@@ -79,8 +100,52 @@ func TestProjectSelectionKeepsOriginalAuthenticationClients(t *testing.T) {
 	if c.services != original {
 		t.Fatal("returning to all projects replaced the original authentication clients")
 	}
+	if got, err := c.clientsForLB(context.Background(), "lb-any-project"); err != nil || got != original {
+		t.Fatalf("all-project drill-in clients = %p, %v; want original %p", got, err, original)
+	}
 	if !c.AllProjects() {
 		t.Fatal("EnterAllProjects should enable the all-projects filter")
+	}
+}
+
+func TestProjectScopedAuthOptionsExchangeSubjectTokenForTargetScope(t *testing.T) {
+	target := ProjectInfo{ID: "target-id", Name: "target-name"}
+
+	got := projectScopedAuthOptions("https://identity.example/v3", "subject-token", target)
+	if got.IdentityEndpoint != "https://identity.example/v3" || got.TokenID != "subject-token" {
+		t.Fatalf("scoped auth does not use startup subject token: %+v", got)
+	}
+	if got.Scope == nil || got.Scope.ProjectID != target.ID {
+		t.Fatalf("scoped auth options = %+v", got)
+	}
+	if !got.AllowReauth {
+		t.Fatalf("scoped auth disabled reauthentication: %+v", got)
+	}
+	if got.Username != "" || got.Password != "" || got.ApplicationCredentialID != "" {
+		t.Fatalf("scoped exchange mixed incompatible auth methods: %+v", got)
+	}
+}
+
+func TestFailedProjectScopeLeavesCurrentSelectionUntouched(t *testing.T) {
+	originalProject := ProjectInfo{ID: "startup", Name: "startup"}
+	original := &serviceClients{project: originalProject}
+	wantErr := errors.New("scope denied")
+	c := &Clients{
+		services:       original,
+		activeServices: original,
+		scopeProject: func(context.Context, ProjectInfo) (*serviceClients, error) {
+			return nil, wantErr
+		},
+		selected: originalProject,
+		allMode:  true,
+	}
+
+	err := c.SwitchProject(context.Background(), ProjectInfo{ID: "denied", Name: "denied"})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SwitchProject error = %v, want %v", err, wantErr)
+	}
+	if c.activeServices != original || c.CurrentProject() != originalProject || !c.AllProjects() {
+		t.Fatalf("failed scope changed client state: active=%p project=%+v all=%v", c.activeServices, c.CurrentProject(), c.AllProjects())
 	}
 }
 

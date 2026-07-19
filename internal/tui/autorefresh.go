@@ -59,15 +59,15 @@ func (m Model) onAutoStatsTick(msg autoStatsTickMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	nextTick := autoStatsTickCmd(msg.generation, m.autoRefreshInterval())
-	if m.autoRefreshPaused() || !m.isLBOverview() {
+	if m.autoRefreshPaused() || !m.isStatsOverview() {
 		return m, nextTick
 	}
-	lbID := m.loc.node.ID
-	if m.lbStatsLoading[lbID] || m.autoStatsLoading[lbID] {
+	resourceID := m.currentStatsID()
+	if m.lbStatsLoading[resourceID] || m.autoStatsLoading[resourceID] {
 		return m, nextTick
 	}
-	m.autoStatsLoading[lbID] = true
-	return m, tea.Batch(m.autoStatsCmd(lbID), nextTick)
+	m.autoStatsLoading[resourceID] = true
+	return m, tea.Batch(m.currentStatsCmd(false, true), nextTick)
 }
 
 func (m Model) onAutoFullTick(msg autoFullTickMsg) (tea.Model, tea.Cmd) {
@@ -137,19 +137,19 @@ func (m Model) toggleAutoRefresh() (tea.Model, tea.Cmd) {
 // refreshStaleStatsCmd reconciles an overdue sample immediately when automatic
 // refresh is enabled. The regular timer still owns all subsequent samples.
 func (m *Model) refreshStaleStatsCmd() tea.Cmd {
-	if !m.autoRefreshEnabled || !m.isLBOverview() || m.refreshing || m.autoRefreshPaused() {
+	if !m.autoRefreshEnabled || !m.isStatsOverview() || m.refreshing || m.autoRefreshPaused() {
 		return nil
 	}
-	lbID := m.loc.node.ID
-	if m.lbStatsLoading[lbID] || m.autoStatsLoading[lbID] {
+	resourceID := m.currentStatsID()
+	if m.lbStatsLoading[resourceID] || m.autoStatsLoading[resourceID] {
 		return nil
 	}
-	updated := m.updatedAt(lbID, sectionStats)
-	if m.lbStatsErr[lbID] == "" && m.statsWithinAutoInterval(updated) {
+	updated := m.updatedAt(resourceID, sectionStats)
+	if m.lbStatsErr[resourceID] == "" && m.statsWithinAutoInterval(updated) {
 		return nil
 	}
-	m.autoStatsLoading[lbID] = true
-	return m.autoStatsCmd(lbID)
+	m.autoStatsLoading[resourceID] = true
+	return m.currentStatsCmd(false, true)
 }
 
 func (m Model) changeAutoRefreshInterval(delta int) (tea.Model, tea.Cmd) {

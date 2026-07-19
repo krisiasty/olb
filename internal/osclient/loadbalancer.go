@@ -76,19 +76,22 @@ var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
 var ErrAdminRequired = errors.New("requires admin")
 
-// ListLoadBalancers always lists through the program's original authenticated
-// clients. A concrete project selection is applied locally to that result;
-// selecting a project never requests a narrower token or changes API clients.
+// ListLoadBalancers uses the active authentication scope. A concrete project
+// also applies a defensive local project filter in case a cloud's policy lets
+// that scoped token see a wider result.
 func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	c.mu.Lock()
 	allMode := c.allMode
 	selected := c.selected
-	services := c.services
+	services := c.activeServices
+	if services == nil {
+		services = c.services
+	}
 	c.mu.Unlock()
 
-	// An empty ProjectInfo deliberately produces Octavia's unfiltered view. For
-	// an admin this is the cluster-wide get_all result; for a tenant it is still
-	// constrained by the original token's policy and scope.
+	// An empty ProjectInfo deliberately leaves Octavia's list unfiltered. For an
+	// admin in all-projects mode this preserves the startup client's cluster-wide
+	// get_all result; a selected project uses that project's scoped client.
 	lbs, err := listWith(ctx, services, ProjectInfo{})
 	if err != nil {
 		return nil, err
@@ -125,8 +128,8 @@ func filterLoadBalancers(lbs []LB, project ProjectInfo) []LB {
 	return filtered
 }
 
-// listWith issues an Octavia list using the supplied (original) clients. proj
-// controls only the optional server-side project_id query parameter.
+// listWith issues an Octavia list using the supplied scoped clients. proj
+// controls the optional server-side project_id query parameter.
 func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, error) {
 	opts := loadbalancers.ListOpts{ProjectID: proj.ID}
 	pages, err := loadbalancers.List(sc.lb, opts).AllPages(ctx)
@@ -311,14 +314,52 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if err != nil {
 			return res, err
 		}
+		raw := innerRaw(r.Body, "listener")
 		res.Attrs["protocol"] = ln.Protocol
 		res.Attrs["port"] = fmt.Sprintf("%d", ln.ProtocolPort)
+		res.Attrs["admin_state_up"] = boolStr(ln.AdminStateUp)
 		if ln.ConnLimit >= 0 {
 			res.Attrs["connection_limit"] = fmt.Sprintf("%d", ln.ConnLimit)
+		} else {
+			res.Attrs["connection_limit"] = "unlimited"
+		}
+		if description := strings.TrimSpace(ln.Description); description != "" {
+			res.Attrs["description"] = description
+		}
+		if created := rawString(raw, "created_at"); created != "" {
+			res.Attrs["created_at"] = created
+		}
+		if updated := rawString(raw, "updated_at"); updated != "" {
+			res.Attrs["updated_at"] = updated
+		}
+		if len(ln.AllowedCIDRs) > 0 {
+			res.Attrs["allowed_cidrs"] = strings.Join(ln.AllowedCIDRs, ", ")
+		}
+		if ln.Protocol == "TERMINATED_HTTPS" {
+			res.Attrs["certificate_ref"] = ln.DefaultTlsContainerRef
+			res.Attrs["sni_certificate_count"] = fmt.Sprintf("%d", len(ln.SniContainerRefs))
+			if len(ln.TLSVersions) > 0 {
+				res.Attrs["tls_versions"] = strings.Join(ln.TLSVersions, ", ")
+			}
+			if len(ln.ALPNProtocols) > 0 {
+				res.Attrs["alpn_protocols"] = strings.Join(ln.ALPNProtocols, ", ")
+			}
+			if ln.DefaultTlsContainerRef != "" {
+				certificate, certErr := c.listenerCertificate(ctx, sc, ln.DefaultTlsContainerRef)
+				if certErr != nil {
+					res.Attrs["certificate_error"] = certErr.Error()
+				} else {
+					res.Attrs["certificate_name"] = certificate.Name
+					res.Attrs["certificate_subject"] = certificate.Subject
+					res.Attrs["certificate_issuer"] = certificate.Issuer
+					res.Attrs["certificate_not_before"] = formatAPITime(certificate.NotBefore)
+					res.Attrs["certificate_not_after"] = formatAPITime(certificate.NotAfter)
+				}
+			}
 		}
 		res.IsListener = true
 		res.ListenerDefaultPoolID = ln.DefaultPoolID
-		res.Raw = innerRaw(r.Body, "listener")
+		res.Raw = raw
 
 	case model.TypePool:
 		r := pools.Get(ctx, sc.lb, n.ID)
@@ -411,6 +452,25 @@ func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, err
 		return nil, err
 	}
 	s, err := loadbalancers.GetStats(ctx, sc.lb, lbID).Extract()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"active_connections": s.ActiveConnections,
+		"total_connections":  s.TotalConnections,
+		"bytes_in":           s.BytesIn,
+		"bytes_out":          s.BytesOut,
+		"request_errors":     s.RequestErrors,
+	}, nil
+}
+
+// ListenerStats returns the byte/connection counters for one listener.
+func (c *Clients) ListenerStats(ctx context.Context, lbID, listenerID string) (map[string]any, error) {
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	s, err := listeners.GetStats(ctx, sc.lb, listenerID).Extract()
 	if err != nil {
 		return nil, err
 	}
@@ -616,6 +676,14 @@ func innerRaw(body any, key string) map[string]any {
 		return inner
 	}
 	return m
+}
+
+func rawString(raw map[string]any, key string) string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func rawFIP(f floatingips.FloatingIP) map[string]any {

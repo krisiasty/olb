@@ -37,16 +37,16 @@ type PoolRow struct {
 	OperatingStatus    string
 }
 
-// ListListeners lists every listener visible to the original token, applying the
-// same local project presentation filter as ListLoadBalancers: an empty project
-// selection (all-projects mode) returns Octavia's unfiltered view; a concrete
-// selection keeps only that project's listeners. The authenticated scope is never
-// narrowed.
+// ListListeners lists every listener visible to the active authentication
+// scope, with a defensive local project filter for a concrete selection.
 func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 	c.mu.Lock()
 	allMode := c.allMode
 	selected := c.selected
-	sc := c.services
+	sc := c.activeServices
+	if sc == nil {
+		sc = c.services
+	}
 	c.mu.Unlock()
 
 	pages, err := listeners.List(sc.lb, listeners.ListOpts{}).AllPages(ctx)
@@ -71,13 +71,16 @@ func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 	return out, nil
 }
 
-// ListPools lists every pool visible to the original token, with the same local
-// project filter as ListListeners.
+// ListPools lists every pool visible to the active authentication scope, with
+// the same defensive local project filter as ListListeners.
 func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 	c.mu.Lock()
 	allMode := c.allMode
 	selected := c.selected
-	sc := c.services
+	sc := c.activeServices
+	if sc == nil {
+		sc = c.services
+	}
 	c.mu.Unlock()
 
 	pages, err := pools.List(sc.lb, pools.ListOpts{}).AllPages(ctx)
@@ -112,7 +115,10 @@ func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 // project filter does not apply — the owning LB gives their scope in the UI.
 func (c *Clients) ListAllAmphorae(ctx context.Context) ([]*model.Node, error) {
 	c.mu.Lock()
-	sc := c.services
+	sc := c.activeServices
+	if sc == nil {
+		sc = c.services
+	}
 	c.mu.Unlock()
 
 	pages, err := amphorae.List(sc.lb, amphorae.ListOpts{}).AllPages(ctx)

@@ -234,7 +234,7 @@ func (m Model) rowCells(e entry) []string {
 			idCell(v.networkID, m.showIDs), lbNameCell(v.lbName, v.lbID, m.showIDs)}
 	case entListener:
 		r := e.listener
-		return []string{lbNameCell(r.Name, r.ID, m.showIDs), r.Protocol, fmt.Sprintf("%d", r.ProtocolPort),
+		return []string{lbNameCell(r.Name, r.ID, m.showIDs), listenerProtocolLabel(r.Protocol), fmt.Sprintf("%d", r.ProtocolPort),
 			lbNameCell(e.lbName, r.LBID, m.showIDs), r.ProvisioningStatus, r.OperatingStatus}
 	case entPool:
 		r := e.pool

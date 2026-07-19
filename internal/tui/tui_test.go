@@ -101,6 +101,18 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 	case model.TypeListener:
 		res.IsListener = true
 		res.ListenerDefaultPoolID = "pool-1"
+		res.Attrs["protocol"] = "TERMINATED_HTTPS"
+		res.Attrs["port"] = "8443"
+		res.Attrs["admin_state_up"] = "true"
+		res.Attrs["connection_limit"] = "unlimited"
+		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
+		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+		res.Attrs["certificate_name"] = "api.example.test"
+		res.Attrs["certificate_subject"] = "api.example.test"
+		res.Attrs["certificate_issuer"] = "Example CA"
+		res.Attrs["certificate_not_before"] = "2026-06-01T00:00:00Z"
+		res.Attrs["certificate_not_after"] = "2026-08-01T00:00:00Z"
+		res.Attrs["sni_certificate_count"] = "0"
 	case model.TypeL7Policy:
 		res.IsL7Policy = true
 		res.L7Action = "REDIRECT_TO_POOL"
@@ -111,6 +123,10 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 
 func (f *fakeBackend) LBStats(context.Context, string) (map[string]any, error) {
 	return map[string]any{"active_connections": 3, "total_connections": 100, "bytes_in": 9, "bytes_out": 8, "request_errors": 1}, nil
+}
+
+func (f *fakeBackend) ListenerStats(context.Context, string, string) (map[string]any, error) {
+	return map[string]any{"active_connections": 2, "total_connections": 80, "bytes_in": 7, "bytes_out": 6, "request_errors": 1}, nil
 }
 
 func (f *fakeBackend) ListListenerSummaries(context.Context, string) (map[string]osclient.ListenerSummary, error) {
@@ -726,6 +742,92 @@ func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 	}
 }
 
+func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m.clock = func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) }
+	m = updExec(t, m, press("enter"))
+	i, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("no listener row")
+	}
+	m.cursor = i
+	m = updExec(t, m, press("enter"))
+	n := m.loc.node
+	result, err := m.backend.FetchDetail(context.Background(), n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{nodeID: n.ID, lbID: n.OwningLBID, res: result, intent: intentOverview})
+	stats, err := m.backend.ListenerStats(context.Background(), n.OwningLBID, n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerStatsMsg{lbID: n.OwningLBID, listenerID: n.ID, stats: stats, sampledAt: m.clock()})
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"DETAILS", "STATS", "HTTPS (TLS termination)", "Total connections", "80",
+		"Certificate", "api.example.test", "Expires", "13d remaining",
+		"RELATED OBJECTS", "LOAD BALANCER 1", "POOLS 1", "L7 POLICIES 1",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("listener overview missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestCertificateExpiryColors(t *testing.T) {
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name  string
+		until time.Duration
+		color lipgloss.Color
+	}{
+		{"healthy", 31 * 24 * time.Hour, lipgloss.Color("42")},
+		{"under a month", 29 * 24 * time.Hour, lipgloss.Color("226")},
+		{"under two weeks", 13 * 24 * time.Hour, lipgloss.Color("214")},
+		{"expired", -time.Second, lipgloss.Color("196")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			label, color := certificateExpiryDisplay(now.Add(test.until).Format(time.RFC3339), now)
+			if color != test.color {
+				t.Fatalf("color = %q, want %q", color, test.color)
+			}
+			if label == "" {
+				t.Fatal("empty expiry label")
+			}
+		})
+	}
+}
+
+func TestListenerCertificateErrorUsesConciseLabel(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	i, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("no listener row")
+	}
+	m.cursor = i
+	m = updExec(t, m, press("enter"))
+	m.loc.node.SetAttr("protocol", "TERMINATED_HTTPS")
+	m.loc.node.SetAttr("certificate_error", "read certificate payload: sensitive backend response")
+
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	certificateLine := lineContaining(plain, "Certificate")
+	if !strings.Contains(certificateLine, "— information unavailable —") {
+		t.Fatalf("certificate error was not summarized: %q\n%s", certificateLine, plain)
+	}
+	if strings.Contains(plain, "sensitive backend response") {
+		t.Fatalf("backend certificate error leaked into view:\n%s", plain)
+	}
+	fields := m.listenerCertificateFields()
+	if len(fields) == 0 {
+		t.Fatal("certificate fields are empty")
+	}
+	if fields[0].value != m.st.disabled.Render("— information unavailable —") {
+		t.Fatalf("unavailable certificate style differs from disabled style: %q", fields[0].value)
+	}
+}
+
 func TestInspectCopyAndOverlays(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // into LB (loc.node = LB)
@@ -814,6 +916,12 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	if m.overlay != overlayNone {
 		t.Fatalf("d should no longer open a detail overlay, got %v", m.overlay)
 	}
+	if m.showIDs {
+		t.Fatal("d should not toggle name/ID mode in a detail view")
+	}
+	if strings.Contains(m.hintLine(), "d names/ids") || strings.Contains(helpContent(false), "toggle top-level tables") {
+		t.Fatal("detail views should not advertise the name/ID toggle")
+	}
 
 	// y -> raw YAML overlay; then o copies (print mode shows it).
 	m = updExec(t, m, press("y"))
@@ -863,7 +971,7 @@ func TestHelpIncludesStatusColoredLegend(t *testing.T) {
 	if view := m.View(); view == "" {
 		t.Fatal("help overlay rendered an empty view")
 	}
-	content := helpContent()
+	content := helpContent(true)
 	plain := ansiRE.ReplaceAllString(content, "")
 	for _, want := range []string{
 		"Status colors",
@@ -881,6 +989,9 @@ func TestHelpIncludesStatusColoredLegend(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Errorf("help status legend missing %q:\n%s", want, plain)
 		}
+	}
+	if got := listenerProtocolLabel("TERMINATED_HTTPS"); got != "HTTPS (TLS termination)" {
+		t.Errorf("listenerProtocolLabel(TERMINATED_HTTPS) = %q", got)
 	}
 	for _, item := range statusLegendEntries {
 		styledDot := lipgloss.NewStyle().Foreground(statusColor(item.status)).Render("●")

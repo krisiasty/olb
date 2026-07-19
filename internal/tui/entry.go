@@ -226,6 +226,14 @@ func locationEntries(n *model.Node) []entry {
 			extra: inlineAttrs(lb),
 		}}
 	}
+	if n.Type == model.TypeListener && n.Parent != nil && n.Parent.Type == model.TypeLoadBalancer {
+		lb := n.Parent
+		entries := []entry{{
+			kind: entRelated, node: lb, label: lb.Label(),
+			oper: lb.OperatingStatus, prov: lb.ProvisioningStatus, extra: inlineAttrs(lb),
+		}}
+		return append(entries, nodeEntries(n)...)
+	}
 	return nodeEntries(n)
 }
 
@@ -259,6 +267,11 @@ func withRelatedGroupHeadings(entries []entry) []entry {
 
 func relatedObjectGroup(e entry) (key, title string) {
 	switch e.kind {
+	case entRelated:
+		if e.node != nil && e.node.Type == model.TypeLoadBalancer {
+			return "load-balancer", "LOAD BALANCER"
+		}
+		return "related", "RELATED"
 	case entChild:
 		if e.node != nil {
 			switch e.node.Type {
@@ -270,10 +283,15 @@ func relatedObjectGroup(e entry) (key, title string) {
 				return "pools", "POOLS"
 			case model.TypeAmphora:
 				return "amphorae", "AMPHORAE"
+			case model.TypeL7Policy:
+				return "l7-policies", "L7 POLICIES"
 			}
 		}
 		return "other", "OTHER"
 	case entRef:
+		if e.edge != nil && e.edge.TargetType == model.TypePool {
+			return "pools", "POOLS"
+		}
 		return "references", "REFERENCES"
 	case entBackRef:
 		return "referenced-by", "REFERENCED BY"
@@ -376,6 +394,7 @@ func refEntry(kind entryKind, edge *model.Edge) entry {
 		e.label = edge.Target.Label()
 		e.oper = edge.Target.OperatingStatus
 		e.prov = edge.Target.ProvisioningStatus
+		e.extra = inlineAttrs(edge.Target)
 	case edge.Unresolved:
 		e.label = string(edge.TargetType) // e.g. "floatingip", "instance"
 	case edge.Missing:
@@ -488,12 +507,8 @@ func listenerSummary(n *model.Node) string {
 }
 
 func listenerEndpoint(protocol, port string) string {
-	protocol = strings.ToUpper(strings.TrimSpace(protocol))
+	protocol, terminatedTLS := normalizedListenerProtocol(protocol)
 	port = strings.TrimSpace(port)
-	terminatedTLS := protocol == "TERMINATED_HTTPS"
-	if terminatedTLS {
-		protocol = "HTTPS"
-	}
 	endpoint := protocol
 	if endpoint != "" && port != "" {
 		endpoint += "/" + port
@@ -504,6 +519,23 @@ func listenerEndpoint(protocol, port string) string {
 		endpoint += " (TLS termination)"
 	}
 	return endpoint
+}
+
+func listenerProtocolLabel(protocol string) string {
+	protocol, terminatedTLS := normalizedListenerProtocol(protocol)
+	if terminatedTLS {
+		return protocol + " (TLS termination)"
+	}
+	return protocol
+}
+
+func normalizedListenerProtocol(protocol string) (string, bool) {
+	protocol = strings.ToUpper(strings.TrimSpace(protocol))
+	terminatedTLS := protocol == "TERMINATED_HTTPS"
+	if terminatedTLS {
+		protocol = "HTTPS"
+	}
+	return protocol, terminatedTLS
 }
 
 func poolListenerAttachmentCount(n *model.Node) int {

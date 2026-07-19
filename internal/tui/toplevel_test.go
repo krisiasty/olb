@@ -58,6 +58,22 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 	}
 }
 
+func TestListenerTableHumanizesTerminatedHTTPS(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("3"))
+	for _, e := range m.entries {
+		if e.kind != entListener || e.listener.ID != "lsn-2" {
+			continue
+		}
+		cells := m.rowCells(e)
+		if cells[1] != "HTTPS (TLS termination)" || cells[2] != "443" {
+			t.Fatalf("terminated HTTPS listener cells = %q / %q, want humanized protocol and separate port", cells[1], cells[2])
+		}
+		return
+	}
+	t.Fatal("terminated HTTPS listener row not found")
+}
+
 func TestTopLevelWorkspacesKeepIndependentHistory(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	lbHistory := m.hist
@@ -337,6 +353,19 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 	}
 	if firstGroupRow == "" || secondGroupRow == "" {
 		t.Fatalf("wide VIP details should use paired grouped columns:\n%s", view)
+	}
+	lines := strings.Split(view, "\n")
+	floatingAt, projectAt := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "Floating IP") {
+			floatingAt = i
+		}
+		if strings.Contains(line, "Project name") {
+			projectAt = i
+		}
+	}
+	if floatingAt < 0 || projectAt != floatingAt+2 || strings.TrimSpace(lines[floatingAt+1]) != "" {
+		t.Fatalf("project ownership should be separated from VIP addresses by a blank line:\n%s", view)
 	}
 	if len(m.entries) != 1 || m.entries[0].kind != entRelated || m.entries[0].node.ID != "lb-1" {
 		t.Fatalf("VIP related rows = %+v, want only owning load balancer", m.entries)

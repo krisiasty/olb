@@ -41,8 +41,8 @@ type Config struct {
 	// PrintMode routes copy actions to an on-screen value the user can select,
 	// instead of emitting OSC 52 — the escape hatch for terminals without it.
 	PrintMode bool
-	// AllProjects starts the tool with no project presentation filter (the
-	// backend must already have been put into that view mode).
+	// AllProjects starts the tool with its original authentication scope and no
+	// local project filter (the backend must already be in that view mode).
 	AllProjects bool
 	// CacheSize bounds the LRU of status trees; CacheTTL bounds staleness.
 	CacheSize int
@@ -171,6 +171,7 @@ type Model struct {
 	refreshLBID              string
 	refreshDetail            *detailMsg
 	refreshStats             *statsMsg
+	refreshListenerStats     *listenerStatsMsg
 	refreshFIP               *lbFloatingIPMsg
 	refreshFIPExpected       bool
 	refreshAmphorae          *amphoraeMsg

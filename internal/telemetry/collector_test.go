@@ -51,6 +51,30 @@ func TestEndpointNormalizesIDsAndQueryValues(t *testing.T) {
 	}
 }
 
+func TestEndpointIdentifiesBarbicanResources(t *testing.T) {
+	for _, test := range []struct {
+		url  string
+		want string
+	}{
+		{
+			url:  "https://key-manager.example/v1/secrets/123e4567-e89b-12d3-a456-426614174000/payload",
+			want: "GET barbican /v1/secrets/:id/payload",
+		},
+		{
+			url:  "https://key-manager.example/v1/containers/123e4567-e89b-12d3-a456-426614174000",
+			want: "GET barbican /v1/containers/:id",
+		},
+	} {
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, test.url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Endpoint(request); got != test.want {
+			t.Errorf("Endpoint(%q) = %q, want %q", test.url, got, test.want)
+		}
+	}
+}
+
 func TestTransportRecordsCompletedBodiesAndTimeouts(t *testing.T) {
 	collector := NewCollector(time.Hour)
 	client := http.Client{Transport: NewTransport(roundTripFunc(func(request *http.Request) (*http.Response, error) {

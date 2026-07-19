@@ -8,8 +8,8 @@ func IsNotFound(err error) bool {
 	return gophercloud.ResponseCodeIs(err, 404)
 }
 
-// CurrentProject returns the project currently selected as the list filter.
-// It does not describe (or alter) the immutable authentication scope.
+// CurrentProject returns the project selected in the TUI. When concrete, the
+// active service clients carry a token scoped to this project.
 func (c *Clients) CurrentProject() ProjectInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()

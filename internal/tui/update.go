@@ -42,8 +42,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		case m.statsSpinner.ID():
-			updated := m.updatedAt(m.currentLBID(), sectionStats)
-			if !m.isLBOverview() || !m.statsWithinAutoInterval(updated) {
+			updated := m.updatedAt(m.currentStatsID(), sectionStats)
+			if !m.isStatsOverview() || !m.statsWithinAutoInterval(updated) {
 				m.statsSpinnerRunning = false
 				return m, nil
 			}
@@ -67,6 +67,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onDetail(msg)
 	case statsMsg:
 		return m.onStats(msg)
+	case listenerStatsMsg:
+		return m.onListenerStats(msg)
 	case lbFloatingIPMsg:
 		return m.onLBFloatingIP(msg)
 	case listenerSummariesMsg:
@@ -254,9 +256,16 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			if m.loc.node != nil && m.loc.node.Type == model.TypeLoadBalancer {
 				return m, m.reloadLBOverview()
 			}
+			if m.loc.node != nil && m.loc.node.Type == model.TypeListener {
+				m.markFresh(m.loc.node.ID, sectionRelated)
+				return m, m.reloadListenerOverview()
+			}
 			delete(m.lbRelatedErr, msg.lbID)
 			m.markFresh(msg.lbID, sectionRelated)
 			return m, m.finishRefresh("")
+		}
+		if m.loc.node != nil && m.loc.node.Type == model.TypeListener {
+			m.markFresh(m.loc.node.ID, sectionRelated)
 		}
 		return m, m.loadLBOverview()
 	}
@@ -270,6 +279,9 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 	if msg.refresh {
 		if m.refreshing && m.refreshLBID == msg.lbID {
 			m.refreshDetail = &msg
+			if m.loc.node != nil && m.loc.node.Type == model.TypeListener && m.loc.node.ID == msg.nodeID {
+				return m, m.commitListenerRefresh()
+			}
 			return m, m.commitLBRefresh()
 		}
 		return m, nil
@@ -295,8 +307,8 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
-		if node.Type == model.TypeLoadBalancer {
-			m.markFresh(msg.lbID, sectionDetails)
+		if node.Type == model.TypeLoadBalancer || node.Type == model.TypeListener {
+			m.markFresh(node.ID, sectionDetails)
 		}
 		return m, nil
 	}
@@ -314,6 +326,17 @@ func (m *Model) applyDetailResult(msg detailMsg) *model.Node {
 	// Apply the fetched detail on the UI goroutine.
 	node.Raw = msg.res.Raw
 	node.DetailLoaded = true
+	if msg.res.IsListener {
+		for _, key := range []string{
+			"protocol", "port", "admin_state_up", "connection_limit", "description",
+			"created_at", "updated_at", "allowed_cidrs", "certificate_ref",
+			"certificate_name", "certificate_subject", "certificate_issuer",
+			"certificate_not_before", "certificate_not_after", "certificate_error",
+			"sni_certificate_count", "tls_versions", "alpn_protocols",
+		} {
+			delete(node.Attrs, key)
+		}
+	}
 	for k, v := range msg.res.Attrs {
 		node.SetAttr(k, v)
 	}
@@ -360,6 +383,32 @@ func (m Model) onStats(msg statsMsg) (tea.Model, tea.Cmd) {
 	m.markFresh(msg.lbID, sectionStats)
 	cmd := m.ensureStatsSpinner()
 	return m, cmd
+}
+
+func (m Model) onListenerStats(msg listenerStatsMsg) (tea.Model, tea.Cmd) {
+	resourceID := msg.listenerID
+	if msg.automatic {
+		delete(m.autoStatsLoading, resourceID)
+		if m.refreshing && m.refreshLBID == msg.lbID && m.loc.node != nil && m.loc.node.ID == resourceID {
+			return m, nil
+		}
+	}
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID && m.loc.node != nil && m.loc.node.ID == resourceID {
+			m.refreshListenerStats = &msg
+			return m, m.commitListenerRefresh()
+		}
+		return m, nil
+	}
+	delete(m.lbStatsLoading, resourceID)
+	if msg.err != nil {
+		m.lbStatsErr[resourceID] = msg.err.Error()
+		return m, nil
+	}
+	delete(m.lbStatsErr, resourceID)
+	m.applyStatsSample(resourceID, msg.stats, msg.sampledAt)
+	m.markFresh(resourceID, sectionStats)
+	return m, m.ensureStatsSpinner()
 }
 
 func (m Model) onLBFloatingIP(msg lbFloatingIPMsg) (tea.Model, tea.Cmd) {
@@ -433,7 +482,53 @@ func (m *Model) loadLBOverview() tea.Cmd {
 	if m.isVIPOverview() {
 		return m.loadVIPOverview()
 	}
+	if m.isListenerOverview() {
+		return m.loadListenerOverview(false)
+	}
 	return m.startLBOverview(false)
+}
+
+func (m *Model) reloadListenerOverview() tea.Cmd {
+	return m.loadListenerOverview(true)
+}
+
+func (m *Model) loadListenerOverview(refresh bool) tea.Cmd {
+	n := m.loc.node
+	if n == nil || n.Type != model.TypeListener {
+		return nil
+	}
+	if refresh {
+		m.refreshDetail = nil
+		m.refreshListenerStats = nil
+		m.lbDetailLoading[n.ID] = true
+		m.lbStatsLoading[n.ID] = true
+		return tea.Batch(
+			m.refreshDetailCmd(n),
+			m.listenerStatsCmd(n.OwningLBID, n.ID, true, false),
+		)
+	}
+	var cmds []tea.Cmd
+	if !n.DetailLoaded && !m.lbDetailLoading[n.ID] {
+		m.lbDetailLoading[n.ID] = true
+		delete(m.lbDetailErr, n.ID)
+		cmds = append(cmds, m.fetchDetailCmd(n, intentOverview))
+	}
+	if _, loaded := m.lbStats[n.ID]; !loaded && !m.lbStatsLoading[n.ID] {
+		m.lbStatsLoading[n.ID] = true
+		delete(m.lbStatsErr, n.ID)
+		cmds = append(cmds, m.listenerStatsCmd(n.OwningLBID, n.ID, false, false))
+	}
+	if cmd := m.ensureStatsSpinner(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return tea.Batch(cmds...)
+	}
 }
 
 func (m *Model) loadVIPOverview() tea.Cmd {
@@ -601,8 +696,13 @@ func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
 					replacement.Raw = child.Raw
 				}
 			case model.TypeListener:
-				replacement.SetAttr("protocol", child.Attrs["protocol"])
-				replacement.SetAttr("port", child.Attrs["port"])
+				for key, value := range child.Attrs {
+					replacement.SetAttr(key, value)
+				}
+				if child.DetailLoaded {
+					replacement.DetailLoaded = true
+					replacement.Raw = child.Raw
+				}
 			case model.TypePool:
 				replacement.SetAttr("protocol", child.Attrs["protocol"])
 				replacement.SetAttr("lb_algorithm", child.Attrs["lb_algorithm"])
@@ -715,6 +815,42 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 	return batchWithOptional(finish, m.ensureStatsSpinner())
 }
 
+func (m *Model) commitListenerRefresh() tea.Cmd {
+	if m.refreshDetail == nil || m.refreshListenerStats == nil {
+		return nil
+	}
+	detail := *m.refreshDetail
+	stats := *m.refreshListenerStats
+	resourceID := detail.nodeID
+	delete(m.lbDetailLoading, resourceID)
+	delete(m.lbStatsLoading, resourceID)
+
+	var failures []string
+	if detail.err != nil {
+		m.lbDetailErr[resourceID] = detail.err.Error()
+		failures = append(failures, "details: "+detail.err.Error())
+	} else {
+		delete(m.lbDetailErr, resourceID)
+		m.applyDetailResult(detail)
+		m.markFresh(resourceID, sectionDetails)
+	}
+	if stats.err != nil {
+		m.lbStatsErr[resourceID] = stats.err.Error()
+		failures = append(failures, "stats: "+stats.err.Error())
+	} else {
+		delete(m.lbStatsErr, resourceID)
+		m.applyStatsSample(resourceID, stats.stats, stats.sampledAt)
+		m.markFresh(resourceID, sectionStats)
+	}
+	if len(failures) > 0 {
+		return batchWithOptional(
+			m.finishRefresh("refresh incomplete ("+strings.Join(failures, "; ")+")"),
+			m.ensureStatsSpinner(),
+		)
+	}
+	return batchWithOptional(m.finishRefresh(""), m.ensureStatsSpinner())
+}
+
 func batchWithOptional(primary, optional tea.Cmd) tea.Cmd {
 	if optional == nil {
 		return primary
@@ -745,6 +881,7 @@ func (m *Model) endRefresh() {
 	m.refreshLBID = ""
 	m.refreshDetail = nil
 	m.refreshStats = nil
+	m.refreshListenerStats = nil
 	m.refreshFIP = nil
 	m.refreshFIPExpected = false
 	m.refreshAmphorae = nil
@@ -1041,6 +1178,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshLBID = ""
 	m.refreshDetail = nil
 	m.refreshStats = nil
+	m.refreshListenerStats = nil
 	m.refreshFIP = nil
 	m.refreshFIPExpected = false
 	m.refreshAmphorae = nil
@@ -1054,8 +1192,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m, m.setFlash(msg.err.Error(), true)
 	}
-	// A new project filter means a different visible object set: drop caches and
-	// history, without implying that the backend authentication scope changed.
+	// A new project scope means a different visible object set: drop caches and
+	// history so objects from the previous authorization context cannot leak in.
 	m.project = msg.project
 	m.allProjects = msg.all
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
@@ -1134,6 +1272,17 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	delete(m.lbListenersLoaded, id.OwningLBID)
 	delete(m.lbPoolsLoading, id.OwningLBID)
 	delete(m.lbPoolsLoaded, id.OwningLBID)
+	if id.Type == model.TypeListener {
+		delete(m.lbStats, id.ID)
+		delete(m.lbStatsChanges, id.ID)
+		delete(m.lbStatsSampledAt, id.ID)
+		delete(m.lbDetailLoading, id.ID)
+		delete(m.lbStatsLoading, id.ID)
+		delete(m.lbDetailErr, id.ID)
+		delete(m.lbStatsErr, id.ID)
+		delete(m.lbRelatedErr, id.ID)
+		delete(m.lbFreshness, id.ID)
+	}
 	m.loading, m.loadingWhat = true, "tree"
 	return m.getTreeCmd(id.OwningLBID, id, false)
 }
@@ -1248,7 +1397,7 @@ func (m *Model) applyFilters() {
 		}
 		res = append(res, e)
 	}
-	if m.isLBOverview() {
+	if m.isLBOverview() || m.isListenerOverview() {
 		res = withRelatedGroupHeadings(res)
 	}
 	m.entries = res

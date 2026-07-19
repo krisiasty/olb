@@ -113,6 +113,8 @@ func (m Model) visibleRows() int {
 	h := m.bodyHeight()
 	if m.isLBOverview() {
 		_, h = m.lbOverviewParts(h)
+	} else if m.isListenerOverview() {
+		_, h = m.listenerOverviewParts(h)
 	} else if m.isVIPOverview() {
 		_, h = m.vipOverviewParts(h)
 	}
@@ -129,6 +131,9 @@ func (m Model) bodyLines() []string {
 	h := m.bodyHeight()
 	if m.isLBOverview() {
 		return m.lbOverviewLines(h)
+	}
+	if m.isListenerOverview() {
+		return m.listenerOverviewLines(h)
 	}
 	if m.isVIPOverview() {
 		return m.vipOverviewLines(h)
@@ -206,8 +211,16 @@ func (m Model) isVIPOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeVIP
 }
 
+func (m Model) isListenerOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeListener
+}
+
+func (m Model) isStatsOverview() bool {
+	return m.isLBOverview() || m.isListenerOverview()
+}
+
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -307,7 +320,7 @@ func (m Model) vipDetailGroups() []overviewGroup {
 			{label: "Type", value: kind},
 			{label: "Address", value: displayValue(n.Attrs["address"])},
 			{label: "Floating IP", value: displayValue(n.Attrs["floating_ip"])},
-			{label: "Project name", value: displayValue(projectName)},
+			{label: "Project name", value: displayValue(projectName), breakBefore: true},
 			{label: "Project ID", value: displayValue(projectID)},
 		}},
 		{title: "PORT", fields: []overviewField{
@@ -350,6 +363,9 @@ func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
 	}
 	lines := []string{m.st.groupHeading.Render(group.title)}
 	for _, field := range group.fields {
+		if field.breakBefore {
+			lines = append(lines, "")
+		}
 		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
 		line := "  " + label + "  " + field.value
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
@@ -423,9 +439,227 @@ func (m Model) lbOverviewLines(h int) []string {
 }
 
 type overviewField struct {
-	label  string
-	value  string
-	status bool
+	label       string
+	value       string
+	status      bool
+	color       lipgloss.Color
+	breakBefore bool
+}
+
+func (m Model) listenerOverviewParts(h int) (summary []string, relatedHeight int) {
+	const fixedChrome = 3
+	if h <= fixedChrome {
+		return nil, 0
+	}
+	minRelated := 1
+	if len(m.entries) > 0 {
+		selectable := 0
+		for i, entry := range m.entries {
+			if entry.selectable() {
+				selectable++
+			}
+			minRelated = i + 1
+			if selectable == 3 {
+				break
+			}
+		}
+	}
+	if minRelated > h-fixedChrome {
+		minRelated = h - fixedChrome
+	}
+	summary = m.listenerOverviewSummary(h - fixedChrome - minRelated)
+	relatedHeight = h - len(summary) - fixedChrome
+	if relatedHeight < 0 {
+		relatedHeight = 0
+	}
+	return summary, relatedHeight
+}
+
+func (m Model) listenerOverviewLines(h int) []string {
+	summary, relatedHeight := m.listenerOverviewParts(h)
+	lines := make([]string, 0, h)
+	lines = append(lines, "")
+	lines = append(lines, summary...)
+	if len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) < h {
+		visibleCount := selectableEntryCount(m.entries)
+		allCount := selectableEntryCount(m.allEntries)
+		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
+		if visibleCount != allCount {
+			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
+		}
+		rendered := m.st.title.Render(title)
+		errors, degraded := relatedIssueCounts(m.entries)
+		rendered = m.renderIssueCounts(rendered, errors, degraded)
+		id := m.loc.node.ID
+		rendered = m.overviewPanelTitleRendered(rendered, false, m.lbRelatedErr[id], m.updatedAt(id, sectionRelated), m.lbRelatedErr[id] != "")
+		lines = append(lines, m.clip(rendered))
+	}
+	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) listenerOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[n.ID], m.lbDetailErr[n.ID], m.updatedAt(n.ID, sectionDetails), m.lbDetailErr[n.ID] != "")
+	statsTitle := m.statsPanelTitle(n.ID)
+	details := m.listenerDetailFields()
+	stats := m.lbStatFields()
+	if m.width >= 90 {
+		limit := budget - 1
+		if limit < 0 {
+			limit = 0
+		}
+		gap := 3
+		available := m.width - gap
+		leftWidth := available * 3 / 5
+		rightWidth := available - leftWidth
+		left := m.renderOverviewPanel(detailTitle, details, leftWidth, limit)
+		right := m.renderOverviewPanel(statsTitle, stats, rightWidth, limit)
+		return limitLines(strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right), "\n"), budget)
+	}
+	if budget == 1 {
+		return []string{m.clip(m.st.title.Render("DETAILS · STATS"))}
+	}
+	if budget == 2 {
+		return []string{m.clip(detailTitle), ""}
+	}
+	fieldBudget := budget - 3
+	detailLimit := (fieldBudget + 1) / 2
+	statsLimit := fieldBudget - detailLimit
+	if detailLimit > len(details) {
+		statsLimit += detailLimit - len(details)
+		detailLimit = len(details)
+	}
+	if statsLimit > len(stats) {
+		detailLimit += statsLimit - len(stats)
+		statsLimit = len(stats)
+		if detailLimit > len(details) {
+			detailLimit = len(details)
+		}
+	}
+	left := strings.Split(m.renderOverviewPanel(detailTitle, details, m.width, detailLimit), "\n")
+	right := strings.Split(m.renderOverviewPanel(statsTitle, stats, m.width, statsLimit), "\n")
+	return limitLines(append(append(left, ""), right...), budget)
+}
+
+func (m Model) listenerDetailFields() []overviewField {
+	n := m.loc.node
+	name := n.Name
+	if name == "" {
+		name = shortID(n.ID)
+	}
+	projectID, projectName := "", ""
+	if m.loc.tree != nil {
+		projectID = m.loc.tree.Meta.ProjectID
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	fields := []overviewField{
+		{label: "Name", value: name},
+		{label: "ID", value: n.ID},
+		{label: "Project name", value: displayValue(projectName)},
+		{label: "Project ID", value: displayValue(projectID)},
+	}
+	if description := strings.TrimSpace(n.Attrs["description"]); description != "" {
+		fields = append(fields, overviewField{label: "Description", value: description})
+	}
+	fields = append(fields,
+		overviewField{label: "Protocol", value: displayValue(listenerProtocolLabel(n.Attrs["protocol"]))},
+		overviewField{label: "Port", value: displayValue(n.Attrs["port"])},
+		overviewField{label: "Connection limit", value: displayValue(n.Attrs["connection_limit"])},
+	)
+	if allowed := strings.TrimSpace(n.Attrs["allowed_cidrs"]); allowed != "" {
+		fields = append(fields, overviewField{label: "Allowed CIDRs", value: allowed})
+	}
+	fields = append(fields,
+		overviewField{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		overviewField{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		overviewField{label: "Admin state", value: adminStateLabel(n.Attrs["admin_state_up"]), status: true},
+		overviewField{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+		overviewField{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+	)
+	if n.Attrs["protocol"] == "TERMINATED_HTTPS" {
+		fields = append(fields, m.listenerCertificateFields()...)
+	}
+	return fields
+}
+
+func (m Model) listenerCertificateFields() []overviewField {
+	n := m.loc.node
+	certificate := n.Attrs["certificate_name"]
+	if certificate == "" {
+		certificate = shortReference(n.Attrs["certificate_ref"])
+	}
+	if certErr := strings.TrimSpace(n.Attrs["certificate_error"]); certErr != "" {
+		certificate = m.st.disabled.Render("— information unavailable —")
+	}
+	expires, expiryColor := certificateExpiryDisplay(n.Attrs["certificate_not_after"], m.clock())
+	fields := []overviewField{
+		{label: "Certificate", value: displayValue(certificate)},
+		{label: "Expires", value: expires, color: expiryColor},
+		{label: "Subject", value: displayValue(n.Attrs["certificate_subject"])},
+		{label: "Issuer", value: displayValue(n.Attrs["certificate_issuer"])},
+		{label: "Valid from", value: displayTimestamp(n.Attrs["certificate_not_before"])},
+		{label: "SNI certificates", value: displayValue(n.Attrs["sni_certificate_count"])},
+	}
+	if versions := strings.TrimSpace(n.Attrs["tls_versions"]); versions != "" {
+		fields = append(fields, overviewField{label: "TLS versions", value: versions})
+	}
+	if protocols := strings.TrimSpace(n.Attrs["alpn_protocols"]); protocols != "" {
+		fields = append(fields, overviewField{label: "ALPN", value: protocols})
+	}
+	return fields
+}
+
+func shortReference(ref string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(ref), "/"), "/")
+	if len(parts) == 0 || parts[len(parts)-1] == "" {
+		return ""
+	}
+	return shortID(parts[len(parts)-1])
+}
+
+func certificateExpiryDisplay(value string, now time.Time) (string, lipgloss.Color) {
+	if value == "" {
+		return "—", lipgloss.Color("")
+	}
+	expires, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value, lipgloss.Color("")
+	}
+	remaining := expires.Sub(now)
+	label := displayTimestamp(value)
+	var color lipgloss.Color
+	switch {
+	case remaining <= 0:
+		label += " (expired)"
+		color = lipgloss.Color("196")
+	case remaining < 14*24*time.Hour:
+		label += fmt.Sprintf(" (%dd remaining)", daysRemaining(remaining))
+		color = lipgloss.Color("214")
+	case remaining < 30*24*time.Hour:
+		label += fmt.Sprintf(" (%dd remaining)", daysRemaining(remaining))
+		color = lipgloss.Color("226")
+	default:
+		label += fmt.Sprintf(" (%dd remaining)", daysRemaining(remaining))
+		color = lipgloss.Color("42")
+	}
+	return label, color
+}
+
+func daysRemaining(duration time.Duration) int {
+	return int((duration + 24*time.Hour - 1) / (24 * time.Hour))
 }
 
 func (m Model) lbOverviewSummary(budget int) []string {
@@ -656,6 +890,8 @@ func (m Model) renderOverviewPanel(title string, fields []overviewField, width, 
 		value := field.value
 		if field.status && value != "—" {
 			value = lipgloss.NewStyle().Foreground(statusColor(value)).Render(value)
+		} else if field.color != lipgloss.Color("") && value != "—" {
+			value = lipgloss.NewStyle().Foreground(field.color).Render(value)
 		}
 		line := label + "  " + value
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
@@ -1294,8 +1530,17 @@ func (m Model) hintLine() string {
 	if m.filtering {
 		return m.clip(m.filter.View())
 	}
-	hint := "enter open · ←/esc back · → fwd · 1-5 views · y/j raw · i/n/o copy · d names/ids · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
-	return m.clip(m.st.help.Render(hint))
+	parts := []string{
+		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n/o copy",
+	}
+	if m.loc.isTopLevelList() {
+		parts = append(parts, "d names/ids")
+	}
+	parts = append(parts,
+		"/ filter", "s status", "p project", "r refresh", "a auto", "+/- interval",
+		"h history", "t telemetry", "? help", "q quit",
+	)
+	return m.clip(m.st.help.Render(strings.Join(parts, " · ")))
 }
 
 // --- overlays -------------------------------------------------------------
@@ -1303,7 +1548,7 @@ func (m Model) hintLine() string {
 func (m *Model) setupHelpViewport() {
 	m.vp.Width = m.width
 	m.vp.Height = m.height - 2
-	m.vp.SetContent(helpContent())
+	m.vp.SetContent(helpContent(m.loc.isTopLevelList()))
 	m.vp.GotoTop()
 }
 
@@ -1532,7 +1777,7 @@ func marshalRaw(v any, format string) string {
 	}
 }
 
-func helpContent() string {
+func helpContent(showNameIDToggle bool) string {
 	content := strings.TrimLeft(`
 Move
   ↑ / ↓            selection up / down
@@ -1560,8 +1805,7 @@ Inspect
   o                copy the displayed raw object (after y or j)
 
 List
-  d                toggle the load balancer list between names and IDs
-  /                filter current list (substring)
+{{name_id_toggle}}  /                filter current list (substring)
   s                cycle status filter — all / error / degraded
 
 Global
@@ -1600,6 +1844,11 @@ Notes
     timings only—never bodies, credentials, query values, or full UUIDs. Its
     overlay does not pause the application's normal API auto-refresh.
 `, "\n")
+	nameIDHelp := ""
+	if showNameIDToggle {
+		nameIDHelp = "  d                toggle top-level tables between names and IDs\n"
+	}
+	content = strings.Replace(content, "{{name_id_toggle}}", nameIDHelp, 1)
 	return strings.Replace(content, "{{status_legend}}", statusLegend(), 1)
 }
 

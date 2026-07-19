@@ -187,6 +187,8 @@ func inferService(path string) string {
 	switch {
 	case strings.Contains(path, "/lbaas/"):
 		return "octavia"
+	case strings.Contains(path, "/secrets") || strings.Contains(path, "/containers"):
+		return "barbican"
 	case strings.Contains(path, "/floatingips") || strings.Contains(path, "/ports"):
 		return "neutron"
 	case strings.Contains(path, "/servers"):

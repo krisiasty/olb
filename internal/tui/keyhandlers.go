@@ -119,6 +119,9 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.setFlash("status filter: "+m.status.String(), false)
 		return m, cmd
 	case key.Matches(msg, m.keys.ShowIDs):
+		if !m.loc.isTopLevelList() {
+			return m, nil
+		}
 		return m.toggleIDs()
 
 	case key.Matches(msg, m.keys.Project):
@@ -143,7 +146,7 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleIDs flips the load-balancer list between name and ID columns. It is a
+// toggleIDs flips top-level tables between name and ID columns. It is a
 // pure presentation switch — the underlying entries, cursor, and filters are
 // untouched — so it takes effect the moment the list is shown.
 func (m Model) toggleIDs() (tea.Model, tea.Cmd) {
@@ -251,6 +254,7 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	m.refreshLBID = lbID
 	m.refreshDetail = nil
 	m.refreshStats = nil
+	m.refreshListenerStats = nil
 	return m, m.getTreeCmd(lbID, m.loc.id, false)
 }
 

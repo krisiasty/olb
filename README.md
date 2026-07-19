@@ -76,22 +76,22 @@ jq 'select(.event == "response" and (.slow or .outcome != "success"))' api.jsonl
 
 ### Project switching
 
-Press `p` to filter the load-balancer view by project without leaving the tool.
-The selection is deliberately **not** an authentication operation: `olb` keeps
-the token and service clients created at startup and locally filters the
-load-balancers visible through that original authorization context. This means
-an admin does not lose cluster-wide visibility after viewing one project, and
-the selector also works with bare tokens and application credentials.
+Press `p` to change the active project without leaving the tool. The selector is
+populated by Keystone's `GET /v3/auth/projects` endpoint. Selecting a concrete
+project exchanges the startup token for a new token scoped to that project and
+creates matching Octavia, Neutron, Nova, and Barbican clients. This lets a
+regular user enter every project in which they have an assignment. Each switch
+requests a fresh scoped token rather than reusing a previous project session.
 
 The switcher's first entry, **⟨ all accessible projects ⟩** (or start with
-`--all-projects`), shows the original unfiltered Octavia result, with each row
-tagged by project where a name is known. For an admin this is Octavia's global
-list (the whole cluster, including projects on which the admin has no explicit
-role). For a tenant, it remains constrained by the original token's policy and
-scope. Drilling into a load balancer likewise continues to use the original
-service clients. Changing the project filter clears all five workspace
+`--all-projects`), restores the exact startup authentication and shows its
+unfiltered Octavia result, with each row tagged by project where a name is
+known. For an admin this preserves Octavia's global list (including projects on
+which the admin has no explicit role). For a project-scoped regular user this
+view remains limited to the startup token's scope; select another project to
+obtain and use its scoped token. Changing scope clears all five workspace
 histories and returns to the load-balancer list because their previous objects
-may not exist in the newly visible scope.
+may not exist in the newly active scope.
 
 ### Keybindings
 

@@ -16,6 +16,7 @@ type Backend interface {
 	GetTree(ctx context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error)
 	FetchDetail(ctx context.Context, n *model.Node) (osclient.DetailResult, error)
 	LBStats(ctx context.Context, lbID string) (map[string]any, error)
+	ListenerStats(ctx context.Context, lbID, listenerID string) (map[string]any, error)
 	ListListenerSummaries(ctx context.Context, lbID string) (map[string]osclient.ListenerSummary, error)
 	ListPoolSummaries(ctx context.Context, lbID string) (map[string]osclient.PoolSummary, error)
 	ListListeners(ctx context.Context) ([]osclient.ListenerRow, error)

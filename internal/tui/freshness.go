@@ -96,10 +96,10 @@ func (m Model) statsWithinAutoInterval(updated time.Time) bool {
 }
 
 func (m *Model) ensureStatsSpinner() tea.Cmd {
-	if !m.isLBOverview() {
+	if !m.isStatsOverview() {
 		return nil
 	}
-	updated := m.updatedAt(m.currentLBID(), sectionStats)
+	updated := m.updatedAt(m.currentStatsID(), sectionStats)
 	if m.statsSpinnerRunning || !m.statsWithinAutoInterval(updated) {
 		return nil
 	}
@@ -107,9 +107,9 @@ func (m *Model) ensureStatsSpinner() tea.Cmd {
 	return m.statsSpinner.Tick
 }
 
-func (m Model) currentLBID() string {
+func (m Model) currentStatsID() string {
 	if m.loc.node == nil {
 		return ""
 	}
-	return m.loc.node.OwningLBID
+	return m.loc.node.ID
 }

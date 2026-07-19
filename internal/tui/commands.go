@@ -108,6 +108,16 @@ type statsMsg struct {
 	err       error
 }
 
+type listenerStatsMsg struct {
+	lbID       string
+	listenerID string
+	stats      map[string]any
+	sampledAt  time.Time
+	refresh    bool
+	automatic  bool
+	err        error
+}
+
 type lbFloatingIPMsg struct {
 	lbID    string
 	nodes   map[string]*model.Node // keyed by fixed VIP address
@@ -294,10 +304,6 @@ func (m Model) lbStatsCmd(lbID string) tea.Cmd {
 	return m.statsCmd(lbID, false, false)
 }
 
-func (m Model) autoStatsCmd(lbID string) tea.Cmd {
-	return m.statsCmd(lbID, false, true)
-}
-
 func (m Model) listenerSummariesCmd(lbID string, refresh bool) tea.Cmd {
 	b := m.backend
 	return func() tea.Msg {
@@ -330,6 +336,32 @@ func (m Model) statsCmd(lbID string, refresh, automatic bool) tea.Cmd {
 		stats, err := b.LBStats(ctx, lbID)
 		return statsMsg{lbID: lbID, stats: stats, sampledAt: m.clock(), refresh: refresh, automatic: automatic, err: err}
 	}
+}
+
+func (m Model) listenerStatsCmd(lbID, listenerID string, refresh, automatic bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		stats, err := b.ListenerStats(ctx, lbID, listenerID)
+		return listenerStatsMsg{
+			lbID: lbID, listenerID: listenerID, stats: stats, sampledAt: m.clock(),
+			refresh: refresh, automatic: automatic, err: err,
+		}
+	}
+}
+
+func (m Model) currentStatsCmd(refresh, automatic bool) tea.Cmd {
+	if m.loc.node == nil {
+		return nil
+	}
+	if m.loc.node.Type == model.TypeListener {
+		return m.listenerStatsCmd(m.loc.node.OwningLBID, m.loc.node.ID, refresh, automatic)
+	}
+	if m.loc.node.Type == model.TypeLoadBalancer {
+		return m.statsCmd(m.loc.node.ID, refresh, automatic)
+	}
+	return nil
 }
 
 // flashCmd clears the status flash after a short delay. The token guards against

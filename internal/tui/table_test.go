@@ -115,6 +115,9 @@ func TestLBNameCellSwitchesBetweenNameAndID(t *testing.T) {
 
 func TestLBTableToggleShowsIDs(t *testing.T) {
 	m := lbListModel(t, true)
+	if !strings.Contains(m.hintLine(), "d names/ids") || !strings.Contains(helpContent(true), "toggle top-level tables") {
+		t.Fatal("top-level tables should advertise the name/ID toggle")
+	}
 
 	headerOf := func(view string) string {
 		for _, l := range strings.Split(view, "\n") {

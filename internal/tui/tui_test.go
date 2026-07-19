@@ -882,6 +882,20 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 			t.Errorf("telemetry overlay missing %q:\n%s", want, plain)
 		}
 	}
+	content := m.telemetryContent(true)
+	for description, want := range map[string]string{
+		"slow endpoint heading": m.st.groupHeading.Foreground(statusColor("DEGRADED")).Render("GET octavia /v2/lbaas/loadbalancers"),
+		"slow endpoint count":   telemetryMetric("slow", 1, statusColor("DEGRADED")),
+		"timeout heading":       m.st.groupHeading.Foreground(telemetryTimeoutColor()).Render("GET neutron /v2.0/floatingips?port_id"),
+		"timeout count":         telemetryMetric("timeout", 1, telemetryTimeoutColor()),
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("telemetry overlay missing colored %s", description)
+		}
+	}
+	if got := string(telemetryTimeoutColor()); got != "135" {
+		t.Fatalf("telemetry timeout color = %q, want violet (135)", got)
+	}
 
 	// Manual mode freezes the displayed snapshot until r is pressed.
 	m = upd(t, m, press("a"))
@@ -902,6 +916,15 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	m = upd(t, m, press("r"))
 	if m.telemetrySnapshot.Calls != 4 || m.telemetrySnapshot.Errors != 1 {
 		t.Fatalf("manual telemetry refresh = %+v", m.telemetrySnapshot)
+	}
+	content = m.telemetryContent(true)
+	for description, want := range map[string]string{
+		"error endpoint heading": m.st.groupHeading.Foreground(statusColor("ERROR")).Render("GET nova /v2.1/:id/servers"),
+		"error endpoint count":   telemetryMetric("error", 1, statusColor("ERROR")),
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("telemetry overlay missing colored %s", description)
+		}
 	}
 
 	// '=' uses the same interval-increase action as '+', even in manual mode.

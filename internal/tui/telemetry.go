@@ -156,13 +156,13 @@ func (m Model) telemetryContent(available bool) string {
 	b.WriteString("\n")
 	b.WriteString(m.st.title.Render(fmt.Sprintf("TOTAL %d", snapshot.Calls)))
 	b.WriteString(m.st.statusBar.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(statusColor("ONLINE")).Render(fmt.Sprintf("SUCCESS %d", snapshot.Successes)))
+	b.WriteString(telemetryMetric("SUCCESS", snapshot.Successes, statusColor("ONLINE")))
 	b.WriteString(m.st.statusBar.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(statusColor("DEGRADED")).Render(fmt.Sprintf("SLOW %d", snapshot.Slow)))
+	b.WriteString(telemetryMetric("SLOW", snapshot.Slow, statusColor("DEGRADED")))
 	b.WriteString(m.st.statusBar.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(statusColor("ERROR")).Render(fmt.Sprintf("TIMEOUT %d", snapshot.Timeouts)))
+	b.WriteString(telemetryMetric("TIMEOUT", snapshot.Timeouts, telemetryTimeoutColor()))
 	b.WriteString(m.st.statusBar.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(statusColor("ERROR")).Render(fmt.Sprintf("ERROR %d", snapshot.Errors)))
+	b.WriteString(telemetryMetric("ERROR", snapshot.Errors, statusColor("ERROR")))
 	b.WriteString("\n")
 	if !snapshot.StartedAt.IsZero() {
 		b.WriteString(m.st.disabled.Render("collected since " + snapshot.StartedAt.Local().Format("2006-01-02 15:04:05") + " · SLOW overlaps response outcomes"))
@@ -174,10 +174,21 @@ func (m Model) telemetryContent(available bool) string {
 	}
 	for _, endpoint := range snapshot.Endpoints {
 		b.WriteString("\n")
-		b.WriteString(m.st.groupHeading.Render(endpoint.Endpoint))
+		heading := m.st.groupHeading
+		if color, ok := telemetryEndpointIssueColor(endpoint); ok {
+			heading = heading.Foreground(color)
+		}
+		b.WriteString(heading.Render(endpoint.Endpoint))
 		b.WriteString("\n  ")
-		fmt.Fprintf(&b, "calls %d · success %d · slow %d · timeout %d · error %d",
-			endpoint.Calls, endpoint.Successes, endpoint.Slow, endpoint.Timeouts, endpoint.Errors)
+		fmt.Fprintf(&b, "calls %d", endpoint.Calls)
+		b.WriteString(m.st.statusBar.Render(" · "))
+		b.WriteString(telemetryMetric("success", endpoint.Successes, statusColor("ONLINE")))
+		b.WriteString(m.st.statusBar.Render(" · "))
+		b.WriteString(telemetryMetric("slow", endpoint.Slow, statusColor("DEGRADED")))
+		b.WriteString(m.st.statusBar.Render(" · "))
+		b.WriteString(telemetryMetric("timeout", endpoint.Timeouts, telemetryTimeoutColor()))
+		b.WriteString(m.st.statusBar.Render(" · "))
+		b.WriteString(telemetryMetric("error", endpoint.Errors, statusColor("ERROR")))
 		b.WriteString("\n  ")
 		b.WriteString(m.st.attrs.Render(fmt.Sprintf("latency min %s · avg %s · median %s · p95 %s · p99 %s · max %s",
 			formatTelemetryDuration(endpoint.Min), formatTelemetryDuration(endpoint.Average),
@@ -186,6 +197,31 @@ func (m Model) telemetryContent(available bool) string {
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func telemetryTimeoutColor() lipgloss.Color {
+	return lipgloss.Color("135") // violet, distinct from red errors
+}
+
+func telemetryMetric(label string, count int, color lipgloss.Color) string {
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	if count > 0 {
+		style = style.Bold(true).Foreground(color)
+	}
+	return style.Render(fmt.Sprintf("%s %d", label, count))
+}
+
+func telemetryEndpointIssueColor(endpoint telemetry.EndpointStats) (lipgloss.Color, bool) {
+	switch {
+	case endpoint.Errors > 0:
+		return statusColor("ERROR"), true
+	case endpoint.Timeouts > 0:
+		return telemetryTimeoutColor(), true
+	case endpoint.Slow > 0:
+		return statusColor("DEGRADED"), true
+	default:
+		return "", false
+	}
 }
 
 func formatTelemetryDuration(duration time.Duration) string {

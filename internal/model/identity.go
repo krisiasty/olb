@@ -37,5 +37,26 @@ func (i Identity) IsLBList() bool {
 	return i.ID == "" && i.Type == ""
 }
 
-// LBListIdentity is the sentinel identity for the top-level load balancer list.
-var LBListIdentity = Identity{}
+// IsResourceList reports whether this identity is a synthetic top-level list of a
+// resource type (a type with no concrete object ID), e.g. the listeners list.
+// The LB list is the zero identity and is reported by IsLBList instead.
+func (i Identity) IsResourceList() bool {
+	return i.ID == "" && i.OwningLBID == "" && i.Type != ""
+}
+
+// IsTopLevelList reports whether this identity is any top-level list root — the
+// LB list or a resource list. These are the breadcrumb/history boundaries.
+func (i Identity) IsTopLevelList() bool {
+	return i.IsLBList() || i.IsResourceList()
+}
+
+// Sentinel identities for the top-level list views. Each carries only a type so
+// it round-trips through navigation history like the LB list, which is the zero
+// identity below.
+var (
+	LBListIdentity       = Identity{}
+	VIPListIdentity      = Identity{Type: TypeVIP}
+	ListenerListIdentity = Identity{Type: TypeListener}
+	PoolListIdentity     = Identity{Type: TypePool}
+	AmphoraListIdentity  = Identity{Type: TypeAmphora}
+)

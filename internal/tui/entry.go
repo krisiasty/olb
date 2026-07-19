@@ -14,11 +14,15 @@ import (
 type entryKind int
 
 const (
-	entLB      entryKind = iota // a load balancer in the top-level list
-	entChild                    // a containment child of the current node
-	entRef                      // an outgoing reference edge ("→")
-	entBackRef                  // an incoming back-reference ("←")
-	entGroup                    // a non-selectable related-object group heading
+	entLB       entryKind = iota // a load balancer in the top-level list
+	entVIP                       // a VIP in the top-level VIPs list
+	entListener                  // a listener in the top-level listeners list
+	entPool                      // a pool in the top-level pools list
+	entAmphora                   // an amphora in the top-level amphorae list
+	entChild                     // a containment child of the current node
+	entRef                       // an outgoing reference edge ("→")
+	entBackRef                   // an incoming back-reference ("←")
+	entGroup                     // a non-selectable related-object group heading
 )
 
 // entry is one visible row. Selectable rows follow their containment child or
@@ -26,9 +30,13 @@ const (
 type entry struct {
 	kind entryKind
 
-	lb   osclient.LB // set for entLB
-	node *model.Node // child node, or resolved edge target
-	edge *model.Edge // set for entRef / entBackRef
+	lb       osclient.LB          // set for entLB
+	vip      vipRow               // set for entVIP
+	listener osclient.ListenerRow // set for entListener
+	pool     osclient.PoolRow     // set for entPool
+	lbName   string               // owning load balancer name for resource rows
+	node     *model.Node          // child node, resolved edge target, or amphora row
+	edge     *model.Edge          // set for entRef / entBackRef
 
 	label         string // target label, e.g. "pool:backend-v2"
 	relationship  string // edge relationship, e.g. "default pool"
@@ -91,6 +99,21 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 	switch e.kind {
 	case entLB:
 		return model.Identity{Type: model.TypeLoadBalancer, ID: e.lb.ID, OwningLBID: e.lb.ID, Label: lbLabel(e.lb)}, false, false
+	case entListener:
+		return model.Identity{Type: model.TypeListener, ID: e.listener.ID, OwningLBID: e.listener.LBID, Label: e.label}, false, false
+	case entPool:
+		return model.Identity{Type: model.TypePool, ID: e.pool.ID, OwningLBID: e.pool.LBID, Label: e.label}, false, false
+	case entVIP:
+		// The VIP is a node in its owning LB's tree; fall back to the LB itself
+		// when the port id (its node key) is unknown.
+		if e.vip.nodeID != "" {
+			return model.Identity{Type: model.TypeVIP, ID: e.vip.nodeID, OwningLBID: e.vip.lbID, Label: e.label}, false, false
+		}
+		return lbIdentity(e.vip.lbID, e.lbName), false, false
+	case entAmphora:
+		// Amphorae are not part of the status tree fetched on drill-in, so open
+		// the owning load balancer, whose overview lists them.
+		return lbIdentity(e.node.OwningLBID, e.lbName), false, false
 	case entChild:
 		return e.node.Identity(), false, false
 	case entRef, entBackRef:
@@ -344,6 +367,16 @@ func lbLabel(lb osclient.LB) string {
 		return "lb:" + lb.Name
 	}
 	return "lb:" + shortID(lb.ID)
+}
+
+// lbIdentity builds a load-balancer identity for drilling in from a resource row
+// that only knows its owning LB's id and (maybe) name.
+func lbIdentity(lbID, lbName string) model.Identity {
+	label := "lb:" + lbName
+	if lbName == "" {
+		label = "lb:" + shortID(lbID)
+	}
+	return model.Identity{Type: model.TypeLoadBalancer, ID: lbID, OwningLBID: lbID, Label: label}
 }
 
 // inlineAttrs renders a node's most useful facts for the trailing column.

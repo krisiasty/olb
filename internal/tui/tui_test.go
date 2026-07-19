@@ -35,9 +35,10 @@ const sampleStatus = `
 }}}`
 
 type fakeBackend struct {
-	cap       osclient.SwitchCapability
-	all       bool
-	telemetry *telemetry.Collector
+	cap         osclient.SwitchCapability
+	all         bool
+	telemetry   *telemetry.Collector
+	amphoraeErr error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
 }
 
 func newTree() *model.Tree {
@@ -156,6 +157,35 @@ func (f *fakeBackend) ListAmphorae(_ context.Context, lbID string) ([]*model.Nod
 		makeAmphora("11111111-1111-1111-1111-111111111111", "MASTER", "10.0.3.20", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
 		makeAmphora("22222222-2222-2222-2222-222222222222", "BACKUP", "10.0.3.21", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
 	}, nil
+}
+
+func (f *fakeBackend) ListListeners(context.Context) ([]osclient.ListenerRow, error) {
+	return []osclient.ListenerRow{
+		{ID: "lsn-1", Name: "http", Protocol: "HTTP", ProtocolPort: 80, LBID: "lb-1", ProjectID: "p1", ProvisioningStatus: "ACTIVE", OperatingStatus: "ONLINE"},
+		{ID: "lsn-2", Name: "https", Protocol: "TERMINATED_HTTPS", ProtocolPort: 443, LBID: "lb-1", ProjectID: "p1", ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED"},
+	}, nil
+}
+
+func (f *fakeBackend) ListPools(context.Context) ([]osclient.PoolRow, error) {
+	return []osclient.PoolRow{
+		{ID: "pool-1", Name: "web", Protocol: "HTTP", LBMethod: "ROUND_ROBIN", MemberCount: 2, LBID: "lb-1", ProjectID: "p1", ProvisioningStatus: "ACTIVE", OperatingStatus: "ONLINE"},
+	}, nil
+}
+
+func (f *fakeBackend) ListAllAmphorae(_ context.Context) ([]*model.Node, error) {
+	if f.amphoraeErr != nil {
+		return nil, f.amphoraeErr
+	}
+	a := model.NewNode(model.TypeAmphora, "amp-1", "amp-1")
+	a.OwningLBID = "lb-1"
+	a.ProvisioningStatus = "ALLOCATED"
+	a.SetAttr("role", "MASTER")
+	a.SetAttr("status", "ALLOCATED")
+	a.SetAttr("lb_network_ip", "10.0.3.20")
+	a.SetAttr("compute_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	a.DetailLoaded = true
+	a.Raw = map[string]any{"id": "amp-1", "loadbalancer_id": "lb-1", "role": "MASTER", "status": "ALLOCATED"}
+	return []*model.Node{a}, nil
 }
 
 func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, error) {

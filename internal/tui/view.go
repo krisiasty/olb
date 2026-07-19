@@ -8,7 +8,6 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"gopkg.in/yaml.v3"
 
 	"github.com/krisiasty/olb/internal/model"
@@ -60,7 +59,7 @@ func (m Model) listView() string {
 
 func (m Model) breadcrumbLine() string {
 	trail := m.hist.trail()
-	out := m.st.breadcrumb.Render("load balancers")
+	out := m.st.breadcrumb.Render(listKindOf(m.hist.rootIdentity()).rootLabel())
 	for _, e := range trail {
 		marker := " › "
 		if e.viaRef {
@@ -115,8 +114,8 @@ func (m Model) visibleRows() int {
 	if m.isLBOverview() {
 		_, h = m.lbOverviewParts(h)
 	}
-	if m.loc.isList() && len(m.entries) > 0 {
-		h--
+	if m.loc.isTopLevelList() && len(m.entries) > 0 {
+		h -= 2 // blank scope separator + column-header row
 	}
 	if h < 1 {
 		h = 1
@@ -138,6 +137,8 @@ func (m Model) bodyLines() []string {
 			msg = m.spinner.View() + " loading " + m.loadingWhat + "…"
 		case m.loc.dead:
 			msg = "this object was deleted since you last viewed it (press ← back or ctrl+home)"
+		case m.loc.listKind() == kindAmphora && m.amphoraeErr != "":
+			msg = m.amphoraeErr
 		case m.filter.Value() != "" || m.status != statusAll:
 			msg = "— no matches —"
 		}
@@ -147,8 +148,10 @@ func (m Model) bodyLines() []string {
 		}
 		return lines
 	}
-	if m.loc.isList() {
-		return m.lbTableLines(h)
+	if m.loc.isTopLevelList() {
+		// A blank line separates the scope line from the column headers, matching
+		// the load-balancer overview's spacing above.
+		return append([]string{""}, m.lbTableLines(h-1)...)
 	}
 	return m.resourceLines(h, "— empty —")
 }
@@ -560,12 +563,22 @@ func lbNameCell(name, id string, showIDs bool) string {
 	return shortID(id)
 }
 
-// lbTableLines renders the load-balancer list as a Lip Gloss table (column
-// header plus the scrolled window of rows), the selected row highlighted and
-// the status columns colored. It returns exactly h lines.
+// tableColumnGap is the number of spaces rendered after every column (including
+// the last, so the row fills the width and the selection bar spans it).
+const tableColumnGap = 2
+
+// lbTableLines renders the active top-level list as a fixed-width table: a header
+// row plus the scrolled window of rows, the selected row highlighted and the
+// status columns colored. It returns exactly h lines.
+//
+// Column widths are computed here rather than delegated to lip gloss's table,
+// whose auto-sizer enforces no per-column minimum and starves narrow columns
+// (protocol, port) to a single character whenever another column (a long name or
+// a UUID) is wide. layoutColumnWidths keeps every column readable and always
+// sums to the terminal width so the highlight bar is flush.
 func (m Model) lbTableLines(h int) []string {
-	titles := m.lbColumnTitles()
-	statusCols := map[int]bool{len(titles) - 1: true, len(titles) - 2: true} // OPERATING, PROVISIONING
+	titles := m.columnTitles()
+	statusCols := m.statusColumnSet(len(titles))
 
 	vis := h - 1 // header row
 	if vis < 1 {
@@ -579,31 +592,22 @@ func (m Model) lbTableLines(h int) []string {
 	window := m.entries[start:end]
 	rows := make([][]string, len(window))
 	for i, e := range window {
-		rows[i] = m.lbRowCells(e)
+		rows[i] = m.rowCells(e)
 	}
-	selRow := m.cursor - start
 
-	t := table.New().
-		Border(lipgloss.HiddenBorder()).
-		BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
-		BorderColumn(false).BorderRow(false).BorderHeader(false).
-		Width(m.width).
-		Headers(titles...).
-		Rows(rows...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			switch {
-			case row == table.HeaderRow:
-				return m.st.tableHeader
-			case row == selRow:
-				return m.st.tableSelected
-			case statusCols[col] && row >= 0 && row < len(rows):
-				return m.st.tableCell.Foreground(statusColor(rows[row][col]))
-			default:
-				return m.st.tableCell
-			}
-		})
+	widths := layoutColumnWidths(titles, rows, m.width, tableColumnGap)
+	headerStyle := m.st.tableHeader.Padding(0)
+	selStyle := m.st.tableSelected.Padding(0)
 
-	out := strings.Split(t.Render(), "\n")
+	out := make([]string, 0, h)
+	out = append(out, headerStyle.Render(tableRowText(titles, widths)))
+	for i, cells := range rows {
+		if i == m.cursor-start {
+			out = append(out, selStyle.Render(tableRowText(cells, widths)))
+			continue
+		}
+		out = append(out, m.tableDataRow(cells, widths, statusCols))
+	}
 	for len(out) < h {
 		out = append(out, "")
 	}
@@ -612,6 +616,124 @@ func (m Model) lbTableLines(h int) []string {
 	}
 	return out
 }
+
+// tableRowText lays cells into fixed columns with the standard gap, producing an
+// unstyled line exactly (sum(widths) + gap*len) wide.
+func tableRowText(cells []string, widths []int) string {
+	var b strings.Builder
+	for j, w := range widths {
+		cell := ""
+		if j < len(cells) {
+			cell = cells[j]
+		}
+		b.WriteString(truncPad(cell, w))
+		b.WriteString(strings.Repeat(" ", tableColumnGap))
+	}
+	return b.String()
+}
+
+// tableDataRow renders a non-selected row, coloring only the status columns.
+func (m Model) tableDataRow(cells []string, widths []int, statusCols map[int]bool) string {
+	var b strings.Builder
+	for j, w := range widths {
+		cell := ""
+		if j < len(cells) {
+			cell = cells[j]
+		}
+		text := truncPad(cell, w)
+		if statusCols[j] {
+			text = m.st.tableCell.Padding(0).Foreground(statusColor(cell)).Render(text)
+		}
+		b.WriteString(text)
+		b.WriteString(strings.Repeat(" ", tableColumnGap))
+	}
+	return b.String()
+}
+
+// layoutColumnWidths sizes columns to their natural content width, then expands
+// the shortest columns (or shrinks the widest, never below a readable minimum) so
+// the row exactly fills total. gap is the inter-column spacing counted for every
+// column.
+func layoutColumnWidths(titles []string, rows [][]string, total, gap int) []int {
+	n := len(titles)
+	widths := make([]int, n)
+	for j, title := range titles {
+		widths[j] = runeLen(title)
+	}
+	for _, cells := range rows {
+		for j := 0; j < n && j < len(cells); j++ {
+			if w := runeLen(cells[j]); w > widths[j] {
+				widths[j] = w
+			}
+		}
+	}
+
+	budget := total - gap*n
+	if budget < n {
+		budget = n // degenerate: at least one column of width 1 each
+	}
+	sum := 0
+	for _, w := range widths {
+		sum += w
+	}
+
+	const minWidth = 4 // never starve a column below this while others can give
+	for sum < budget { // expand the shortest column, evening the row out
+		mi := 0
+		for j := 1; j < n; j++ {
+			if widths[j] < widths[mi] {
+				mi = j
+			}
+		}
+		widths[mi]++
+		sum++
+	}
+	for sum > budget { // shrink the widest column above the floor
+		mi := -1
+		for j := 0; j < n; j++ {
+			if widths[j] > minWidth && (mi < 0 || widths[j] > widths[mi]) {
+				mi = j
+			}
+		}
+		if mi < 0 {
+			break
+		}
+		widths[mi]--
+		sum--
+	}
+	for sum > budget { // terminal too narrow even at the floor: take from the widest
+		mi := 0
+		for j := 1; j < n; j++ {
+			if widths[j] > widths[mi] {
+				mi = j
+			}
+		}
+		if widths[mi] <= 1 {
+			break
+		}
+		widths[mi]--
+		sum--
+	}
+	return widths
+}
+
+// truncPad fits s into exactly w display cells, truncating with an ellipsis or
+// right-padding with spaces.
+func truncPad(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) > w {
+		if w == 1 {
+			return "…"
+		}
+		return string(r[:w-1]) + "…"
+	}
+	return s + strings.Repeat(" ", w-len(r))
+}
+
+func runeLen(s string) int { return len([]rune(s)) }
 
 func (m Model) renderRow(e entry, sel bool) string {
 	if e.kind == entGroup {
@@ -866,7 +988,7 @@ func (m Model) hintLine() string {
 	if m.filtering {
 		return m.clip(m.filter.View())
 	}
-	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · d names/ids · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
+	hint := "enter open · ←/esc back · → fwd · 1-5 views · y/j raw · i/n/o copy · d names/ids · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
 	return m.clip(m.st.help.Render(hint))
 }
 
@@ -1108,6 +1230,13 @@ Navigate
   ← / esc / ⌫      back (history)      → forward (history)
   ctrl+home        return to the load balancer list
   h                history picker overlay
+
+Top-level views (drill into an item to open its detail)
+  1                load balancers
+  2                virtual IPs (VIP address, port, subnet, network, owner)
+  3                listeners
+  4                pools
+  5                amphorae (admin only)
 
 Inspect
   y                show raw API object as YAML

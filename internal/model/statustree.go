@@ -106,6 +106,8 @@ type StatusL7Rule struct {
 type LBMeta struct {
 	VipAddress     string
 	VipPortID      string
+	VipSubnetID    string
+	VipNetworkID   string
 	AdditionalVIPs []AdditionalVIP
 	Provider       string
 	ProjectID      string

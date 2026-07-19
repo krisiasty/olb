@@ -87,6 +87,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.goBack()
 	case key.Matches(msg, m.keys.LBList):
 		return m.goLBList()
+	case key.Matches(msg, m.keys.TopLevel):
+		return m.goTopLevel(msg.String())
 	case key.Matches(msg, m.keys.Picker):
 		return m.openPicker()
 
@@ -180,6 +182,21 @@ func (m Model) goLBList() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// goTopLevel switches to the top-level list bound to a number key ("1".."5").
+func (m Model) goTopLevel(digit string) (tea.Model, tea.Cmd) {
+	if len(digit) != 1 || digit[0] < '1' || digit[0] > '5' {
+		return m, nil
+	}
+	idx := int(digit[0] - '1')
+	if idx >= len(topLevelKinds) {
+		return m, nil
+	}
+	m.hist.navigate(histEntry{id: topLevelKinds[idx].identity()})
+	m.clearFilter()
+	cmd := m.render()
+	return m, cmd
+}
+
 func (m Model) quitOrBack() (tea.Model, tea.Cmd) {
 	if m.hist.canBack() {
 		return m.goBack()
@@ -202,9 +219,18 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	m.refreshAutomatic = automatic
 	m.loading, m.loadingWhat = true, "refreshing…"
 	m.captureRefreshSelection()
-	if m.loc.isList() {
+	if m.loc.isTopLevelList() {
 		m.refreshLBID = ""
-		return m, m.loadLBsCmd()
+		switch m.loc.listKind() {
+		case kindListener:
+			return m, m.loadListenersCmd(true)
+		case kindPool:
+			return m, m.loadPoolsCmd(true)
+		case kindAmphora:
+			return m, m.loadAmphoraeListCmd(true)
+		default: // LB list and the derived VIPs list both reload the LB list
+			return m, m.loadLBsCmd()
+		}
 	}
 	lbID := m.loc.id.OwningLBID
 	if lbID == "" {
@@ -332,9 +358,18 @@ func (m Model) currentIDName() (id, name string) {
 	if m.loc.node != nil {
 		return m.loc.node.ID, m.loc.node.Name
 	}
-	if m.loc.isList() && len(m.entries) > 0 {
-		if e := m.entries[m.cursor]; e.kind == entLB {
+	if m.loc.isTopLevelList() && m.cursor >= 0 && m.cursor < len(m.entries) {
+		switch e := m.entries[m.cursor]; e.kind {
+		case entLB:
 			return e.lb.ID, e.lb.Name
+		case entListener:
+			return e.listener.ID, e.listener.Name
+		case entPool:
+			return e.pool.ID, e.pool.Name
+		case entVIP:
+			return e.vip.portID, e.vip.address
+		case entAmphora:
+			return e.node.ID, ""
 		}
 	}
 	return "", ""

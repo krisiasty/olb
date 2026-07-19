@@ -130,18 +130,30 @@ func (h *history) pruneDead() {
 	h.cursor = newCursor
 }
 
-// trail returns the identities from the most recent LB-list boundary up to and
-// including the cursor, used to render the breadcrumb.
+// trail returns the identities from the most recent top-level-list boundary up
+// to and including the cursor, used to render the breadcrumb. The boundary entry
+// itself is excluded; its label is the breadcrumb root (see rootIdentity).
 func (h *history) trail() []histEntry {
 	if h.cursor < 0 {
 		return nil
 	}
 	start := 0
 	for i := h.cursor; i >= 0; i-- {
-		if h.entries[i].id.IsLBList() {
+		if h.entries[i].id.IsTopLevelList() {
 			start = i + 1
 			break
 		}
 	}
 	return h.entries[start : h.cursor+1]
+}
+
+// rootIdentity is the most recent top-level-list boundary at or before the
+// cursor; it names the breadcrumb root. Defaults to the LB list.
+func (h *history) rootIdentity() model.Identity {
+	for i := h.cursor; i >= 0; i-- {
+		if h.entries[i].id.IsTopLevelList() {
+			return h.entries[i].id
+		}
+	}
+	return model.LBListIdentity
 }

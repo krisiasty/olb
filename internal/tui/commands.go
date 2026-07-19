@@ -65,6 +65,26 @@ type amphoraeMsg struct {
 	err     error
 }
 
+// Top-level resource-list load results (keys 3/4/5). Each carries whether it was
+// a background refresh so a failure can be reported without wiping the view.
+type listenersMsg struct {
+	rows    []osclient.ListenerRow
+	refresh bool
+	err     error
+}
+
+type poolsMsg struct {
+	rows    []osclient.PoolRow
+	refresh bool
+	err     error
+}
+
+type amphoraeListMsg struct {
+	nodes   []*model.Node
+	refresh bool
+	err     error
+}
+
 type projectsMsg struct {
 	projects []osclient.ProjectInfo
 	err      error
@@ -117,6 +137,36 @@ func (m Model) loadLBsCmd() tea.Cmd {
 		defer cancel()
 		lbs, err := b.ListLoadBalancers(ctx)
 		return lbsMsg{lbs: lbs, err: err}
+	}
+}
+
+func (m Model) loadListenersCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		rows, err := b.ListListeners(ctx)
+		return listenersMsg{rows: rows, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadPoolsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		rows, err := b.ListPools(ctx)
+		return poolsMsg{rows: rows, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		nodes, err := b.ListAllAmphorae(ctx)
+		return amphoraeListMsg{nodes: nodes, refresh: refresh, err: err}
 	}
 }
 

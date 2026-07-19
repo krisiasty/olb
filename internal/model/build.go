@@ -52,9 +52,12 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 		vip.OwningLBID = lb.ID
 		vip.SetAttr("address", meta.VipAddress)
 		vip.SetAttr("port_id", meta.VipPortID)
+		vip.SetAttr("subnet_id", meta.VipSubnetID)
+		vip.SetAttr("network_id", meta.VipNetworkID)
 		vip.SetAttr("vip_kind", "primary")
 		vip.Raw = map[string]any{
 			"vip_address": meta.VipAddress, "vip_port_id": meta.VipPortID,
+			"vip_subnet_id": meta.VipSubnetID, "vip_network_id": meta.VipNetworkID,
 			"vip_kind": "primary",
 		}
 		vip.DetailLoaded = true // the VIP has no separate show; its facts are inline
@@ -70,7 +73,7 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 		if extra.Address == "" {
 			continue
 		}
-		vip := NewNode(TypeVIP, additionalVIPID(lb.ID, extra), extra.Address)
+		vip := NewNode(TypeVIP, AdditionalVIPID(lb.ID, extra), extra.Address)
 		vip.OwningLBID = lb.ID
 		vip.SetAttr("address", extra.Address)
 		vip.SetAttr("port_id", meta.VipPortID)
@@ -151,7 +154,10 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 	return t
 }
 
-func additionalVIPID(lbID string, vip AdditionalVIP) string {
+// AdditionalVIPID is the stable node ID for an additional VIP. It is exported so
+// callers building an additional-VIP navigation target (e.g. the VIPs list view)
+// address the same node this package registers in the tree.
+func AdditionalVIPID(lbID string, vip AdditionalVIP) string {
 	key := vip.SubnetID
 	if key == "" {
 		key = vip.Address

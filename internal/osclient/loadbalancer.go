@@ -27,6 +27,8 @@ type LB struct {
 	Provider           string
 	VipAddress         string
 	VipPortID          string
+	VipSubnetID        string
+	VipNetworkID       string
 	AdditionalVIPs     []model.AdditionalVIP
 	ProjectID          string
 	ProjectName        string // owning project's name (shown in all-projects mode)
@@ -57,7 +59,9 @@ type PoolSummary struct {
 // Meta returns the LB-level facts the graph builder needs.
 func (l LB) Meta() model.LBMeta {
 	return model.LBMeta{
-		VipAddress: l.VipAddress, VipPortID: l.VipPortID, AdditionalVIPs: l.AdditionalVIPs, Provider: l.Provider,
+		VipAddress: l.VipAddress, VipPortID: l.VipPortID,
+		VipSubnetID: l.VipSubnetID, VipNetworkID: l.VipNetworkID,
+		AdditionalVIPs: l.AdditionalVIPs, Provider: l.Provider,
 		ProjectID: l.ProjectID, ProjectName: l.ProjectName,
 	}
 }
@@ -134,8 +138,10 @@ func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, 
 	for _, l := range raw {
 		out = append(out, LB{
 			ID: l.ID, Name: l.Name, Provider: l.Provider,
-			VipAddress: l.VipAddress, VipPortID: l.VipPortID, AdditionalVIPs: additionalVIPMeta(l.AdditionalVips),
-			ProjectID: l.ProjectID, ProjectName: proj.Name,
+			VipAddress: l.VipAddress, VipPortID: l.VipPortID,
+			VipSubnetID: l.VipSubnetID, VipNetworkID: l.VipNetworkID,
+			AdditionalVIPs: additionalVIPMeta(l.AdditionalVips),
+			ProjectID:      l.ProjectID, ProjectName: proj.Name,
 			ProvisioningStatus: l.ProvisioningStatus, OperatingStatus: l.OperatingStatus,
 		})
 	}
@@ -161,8 +167,10 @@ func (c *Clients) GetTree(ctx context.Context, lbID string, hint *model.LBMeta) 
 			return nil, err
 		}
 		meta = model.LBMeta{
-			VipAddress: lb.VipAddress, VipPortID: lb.VipPortID, AdditionalVIPs: additionalVIPMeta(lb.AdditionalVips),
-			Provider: lb.Provider, ProjectID: lb.ProjectID,
+			VipAddress: lb.VipAddress, VipPortID: lb.VipPortID,
+			VipSubnetID: lb.VipSubnetID, VipNetworkID: lb.VipNetworkID,
+			AdditionalVIPs: additionalVIPMeta(lb.AdditionalVips),
+			Provider:       lb.Provider, ProjectID: lb.ProjectID,
 		}
 	}
 
@@ -515,22 +523,30 @@ func (c *Clients) ListAmphorae(ctx context.Context, lbID string) ([]*model.Node,
 	}
 	out := make([]*model.Node, 0, len(as))
 	for _, a := range as {
-		n := model.NewNode(model.TypeAmphora, a.ID, a.ID)
-		n.OwningLBID = lbID
-		n.ProvisioningStatus = a.Status
-		n.SetAttr("role", a.Role)
-		n.SetAttr("status", a.Status)
-		n.SetAttr("lb_network_ip", a.LBNetworkIP)
-		n.SetAttr("ha_ip", a.HAIP)
-		n.SetAttr("compute_id", a.ComputeID)
-		n.Raw = map[string]any{
-			"id": a.ID, "loadbalancer_id": a.LoadbalancerID, "compute_id": a.ComputeID,
-			"role": a.Role, "status": a.Status, "lb_network_ip": a.LBNetworkIP, "ha_ip": a.HAIP,
-		}
-		n.DetailLoaded = true
-		out = append(out, n)
+		out = append(out, amphoraNode(a, lbID))
 	}
 	return out, nil
+}
+
+// amphoraNode builds a model node from an amphora, keyed for both the per-LB
+// overview and the top-level amphorae list. owningLBID lets the caller supply the
+// query-scoped LB for the per-LB list or the amphora's own loadbalancer_id for
+// the cluster-wide list.
+func amphoraNode(a amphorae.Amphora, owningLBID string) *model.Node {
+	n := model.NewNode(model.TypeAmphora, a.ID, a.ID)
+	n.OwningLBID = owningLBID
+	n.ProvisioningStatus = a.Status
+	n.SetAttr("role", a.Role)
+	n.SetAttr("status", a.Status)
+	n.SetAttr("lb_network_ip", a.LBNetworkIP)
+	n.SetAttr("ha_ip", a.HAIP)
+	n.SetAttr("compute_id", a.ComputeID)
+	n.Raw = map[string]any{
+		"id": a.ID, "loadbalancer_id": a.LoadbalancerID, "compute_id": a.ComputeID,
+		"role": a.Role, "status": a.Status, "lb_network_ip": a.LBNetworkIP, "ha_ip": a.HAIP,
+	}
+	n.DetailLoaded = true
+	return n
 }
 
 // innerRaw pulls the wrapped object out of a gophercloud response body,

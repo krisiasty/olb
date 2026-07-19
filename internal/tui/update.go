@@ -55,6 +55,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case lbsMsg:
 		return m.onLBs(msg)
+	case listenersMsg:
+		return m.onListeners(msg)
+	case poolsMsg:
+		return m.onPools(msg)
+	case amphoraeListMsg:
+		return m.onAmphoraeList(msg)
 	case treeMsg:
 		return m.onTree(msg)
 	case detailMsg:
@@ -108,11 +114,85 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.lbs = msg.lbs
 	m.lbsLoaded = true
-	if cur, ok := m.hist.current(); ok && cur.id.IsLBList() {
-		m.setLBLocation()
+	// The LB list and the derived VIPs list both rebuild from this data.
+	if m.loc.isTopLevelList() && (m.loc.listKind() == kindLB || m.loc.listKind() == kindVIP) {
+		m.setTopLevelEntries()
 		m.restoreRefreshSelection()
 	}
 	if wasRefresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onListeners(msg listenersMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	if msg.err != nil {
+		if msg.refresh {
+			return m, m.finishRefresh("refresh listeners: " + msg.err.Error())
+		}
+		return m, m.setFlash("list listeners: "+msg.err.Error(), true)
+	}
+	m.listeners = msg.rows
+	m.listenersLoaded = true
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindListener {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onPools(msg poolsMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	if msg.err != nil {
+		if msg.refresh {
+			return m, m.finishRefresh("refresh pools: " + msg.err.Error())
+		}
+		return m, m.setFlash("list pools: "+msg.err.Error(), true)
+	}
+	m.pools = msg.rows
+	m.poolsLoaded = true
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindPool {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onAmphoraeList(msg amphoraeListMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.amphoraeLoaded = true
+	m.amphoraeErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			// Not an error state: show an explanatory empty list instead.
+			m.amphorae = nil
+			m.amphoraeErr = "amphora listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh amphorae: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list amphorae: "+msg.err.Error(), true)
+		}
+	} else {
+		m.amphorae = msg.nodes
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindAmphora {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
 		return m, m.finishRefresh("")
 	}
 	return m, nil
@@ -916,6 +996,10 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbPoolsLoaded = map[string]bool{}
 	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
+	// The top-level resource lists are scope-dependent too; drop their caches.
+	m.listeners, m.listenersLoaded = nil, false
+	m.pools, m.poolsLoaded = nil, false
+	m.amphorae, m.amphoraeLoaded, m.amphoraeErr = nil, false, ""
 	m.hist = newHistory(m.cfg.HistoryCap)
 	m.hist.navigate(histEntry{id: model.LBListIdentity})
 	m.loc = location{id: model.LBListIdentity}
@@ -942,14 +1026,8 @@ func (m *Model) render() tea.Cmd {
 }
 
 func (m *Model) showIdentity(id model.Identity) tea.Cmd {
-	if id.IsLBList() {
-		m.loc = location{id: id}
-		if m.lbsLoaded {
-			m.setLBLocation()
-			return nil
-		}
-		m.loading, m.loadingWhat = true, "load balancers"
-		return m.loadLBsCmd()
+	if id.IsTopLevelList() {
+		return m.showTopLevelList(id)
 	}
 	entry, fresh := m.cache.Get(id.OwningLBID)
 	if entry.Tree != nil && fresh {
@@ -977,9 +1055,72 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	return m.getTreeCmd(id.OwningLBID, id, false)
 }
 
-func (m *Model) setLBLocation() {
-	m.loc = location{id: model.LBListIdentity}
-	m.allEntries = lbEntries(m.lbs, m.allProjects)
+// showTopLevelList makes id the active top-level list, building its rows from
+// already-loaded data or kicking off the load that will fill it in. VIPs and the
+// LB list both source from the LB list; the other three load their own data.
+func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
+	m.loc = location{id: id}
+	switch listKindOf(id) {
+	case kindLB, kindVIP:
+		if m.lbsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "load balancers"
+		m.showLoadingList()
+		return m.loadLBsCmd()
+	case kindListener:
+		if m.listenersLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "listeners"
+		m.showLoadingList()
+		return m.loadListenersCmd(false)
+	case kindPool:
+		if m.poolsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "pools"
+		m.showLoadingList()
+		return m.loadPoolsCmd(false)
+	case kindAmphora:
+		if m.amphoraeLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "amphorae"
+		m.showLoadingList()
+		return m.loadAmphoraeListCmd(false)
+	}
+	return nil
+}
+
+// showLoadingList clears the rows so the body shows the loading indicator while a
+// top-level list's data is in flight.
+func (m *Model) showLoadingList() {
+	m.allEntries = nil
+	m.entries = nil
+	m.cursor, m.top = 0, 0
+	m.applyFilters()
+}
+
+// setTopLevelEntries rebuilds the visible rows for the active top-level list from
+// currently-loaded data.
+func (m *Model) setTopLevelEntries() {
+	switch m.loc.listKind() {
+	case kindVIP:
+		m.allEntries = vipEntries(deriveVIPs(m.lbs))
+	case kindListener:
+		m.allEntries = listenerEntries(m.listeners, m.lbNameByID())
+	case kindPool:
+		m.allEntries = poolEntries(m.pools, m.lbNameByID())
+	case kindAmphora:
+		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID())
+	default:
+		m.allEntries = lbEntries(m.lbs, m.allProjects)
+	}
 	m.entries = nil
 	m.cursor, m.top = 0, 0
 	m.applyFilters()

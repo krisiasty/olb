@@ -79,6 +79,16 @@ type Model struct {
 	lbs       []osclient.LB
 	lbsLoaded bool
 
+	// Top-level resource lists (keys 2-5). VIPs derive from lbs; the rest load on
+	// demand and are cached until the next refresh or scope change.
+	listeners       []osclient.ListenerRow
+	pools           []osclient.PoolRow
+	amphorae        []*model.Node
+	listenersLoaded bool
+	poolsLoaded     bool
+	amphoraeLoaded  bool
+	amphoraeErr     string // e.g. admin RBAC required
+
 	hist *history
 	loc  location
 

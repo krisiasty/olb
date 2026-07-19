@@ -24,7 +24,7 @@ func lbListModel(t *testing.T, all bool) Model {
 		{ID: "f6a7b8c9d0", Name: "db-lb", Provider: "amphora", VipAddress: "10.30.176.48", ProjectID: "p2", ProjectName: "platform", ProvisioningStatus: "PENDING_UPDATE", OperatingStatus: "DEGRADED"},
 	}
 	m.lbsLoaded = true
-	(&m).setLBLocation()
+	(&m).setTopLevelEntries()
 	return m
 }
 
@@ -145,6 +145,38 @@ func TestLBTableToggleShowsIDs(t *testing.T) {
 	view = ansiRE.ReplaceAllString(m.View(), "")
 	if !strings.Contains(view, "web-prod") || !strings.Contains(view, "payments") {
 		t.Errorf("name mode should restore names; got:\n%s", view)
+	}
+}
+
+func TestLayoutColumnWidthsKeepsNarrowColumnsReadable(t *testing.T) {
+	titles := []string{"NAME", "PROTOCOL", "PORT", "LOAD BALANCER", "PROVISIONING", "OPERATING"}
+	rows := [][]string{
+		{strings.Repeat("x", 120), "TERMINATED_HTTPS", "443", "web-prod", "ACTIVE", "ONLINE"},
+		{"http", "HTTP", "80", "web-prod", "ACTIVE", "ONLINE"},
+	}
+	for _, width := range []int{170, 120, 100, 80, 60} {
+		w := layoutColumnWidths(titles, rows, width, tableColumnGap)
+		if len(w) != len(titles) {
+			t.Fatalf("width %d: got %d columns, want %d", width, len(w), len(titles))
+		}
+		// The row (columns + a gap per column) must exactly fill the terminal.
+		sum := 0
+		for _, cw := range w {
+			if cw < 1 {
+				t.Errorf("width %d: column collapsed to %d", width, cw)
+			}
+			sum += cw
+		}
+		if got := sum + tableColumnGap*len(titles); got != width {
+			t.Errorf("width %d: row fills %d, want %d", width, got, width)
+		}
+		// PORT (col 2) and PROTOCOL (col 1) must never be starved by the long NAME.
+		if w[2] < 4 {
+			t.Errorf("width %d: PORT column starved to %d", width, w[2])
+		}
+		if w[1] < 4 {
+			t.Errorf("width %d: PROTOCOL column starved to %d", width, w[1])
+		}
 	}
 }
 

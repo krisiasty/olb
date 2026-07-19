@@ -31,6 +31,7 @@ olb                        # uses OS_* env / clouds.yaml
 olb --os-cloud mycloud     # pick a clouds.yaml entry
 olb --project other-proj   # select an initial project filter (name or ID)
 olb --print                # copy actions show the value instead of OSC 52
+olb --api-log api.jsonl    # append sanitized API metadata for debugging
 olb --licenses             # print embedded third-party notices
 olb --version
 ```
@@ -45,6 +46,33 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 `--project` selects the initial TUI project filter without changing the
 authentication scope. Use `--os-project-name` or `--os-project-id` when the
 authentication request itself must be scoped to a particular project.
+
+### API debugging log
+
+`--api-log PATH` appends one JSON Lines request event and one correlated
+response event for every OpenStack HTTP call, including authentication and
+automatic reauthentication. Each completed response records its duration,
+HTTP status, OpenStack request ID header, telemetry-compatible `outcome`
+(`success`, `timeout`, or `error`), and whether it crossed the one-second slow
+threshold. The generated `call_id` connects each request to its response. The
+file is created with owner-only (`0600`) permissions.
+
+By default the log contains sanitized URLs, headers, and request/response
+metadata but no bodies. `--api-log-bodies` additionally captures valid JSON
+bodies up to 64 KiB, recursively redacts fields whose names indicate passwords,
+tokens, secrets, credentials, keys, cookies, or signatures, and suppresses
+Keystone authentication bodies completely. Oversized, non-JSON, and partially
+read bodies are marked but not written. The option requires `--api-log PATH`.
+
+Redaction is deliberately conservative but cannot prove that an unusually
+named application field is harmless. API logs can also contain tenant names,
+resource addresses, and other operational data, so treat them as sensitive and
+remove them when debugging is complete. Problem calls can be selected without
+a second log file, for example:
+
+```sh
+jq 'select(.event == "response" and (.slow or .outcome != "success"))' api.jsonl
+```
 
 ### Project switching
 
@@ -125,8 +153,10 @@ status fields, and issue counts throughout the TUI.
   p99/max latency. The snapshot display defaults to five-second auto-refresh,
   with `r`, `a`, `+`/`-` (`=` is `+`), and `z` providing manual refresh, cadence,
   and reset controls. The overlay does not pause normal API auto-refresh.
-  Collection is in-memory only and never stores or exports bodies, credentials,
-  query values, or full resource UUIDs.
+  Telemetry collection itself is in-memory only and never stores or exports
+  bodies, credentials, query values, or full resource UUIDs. The independent,
+  explicitly enabled `--api-log` debugging facility can persist sanitized
+  request metadata and, only with `--api-log-bodies`, size-limited JSON bodies.
 - **A graph, not a tree.** Nodes carry typed **containment** and **reference**
   edges, both traversable in either direction, so shared pools and boundary
   crossings (VIP → floating IP, member → Nova instance) are first-class and the

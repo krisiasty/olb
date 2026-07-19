@@ -1,6 +1,6 @@
-// Package telemetry collects anonymous in-memory timing and outcome statistics
-// for OpenStack HTTP requests. It never records request or response bodies,
-// query values, credentials, or full resource IDs.
+// Package telemetry instruments OpenStack HTTP requests. Its collector keeps
+// anonymous timing and outcome statistics in memory; the separately enabled
+// APILogger can persist sanitized debugging records.
 package telemetry
 
 import (

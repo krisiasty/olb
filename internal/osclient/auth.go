@@ -47,6 +47,22 @@ type Options struct {
 	ApplicationCredentialSecret string
 }
 
+type authenticateConfig struct {
+	apiLogger *telemetry.APILogger
+}
+
+// AuthenticateOption configures optional HTTP instrumentation without mixing
+// it into the OpenStack credential options.
+type AuthenticateOption func(*authenticateConfig)
+
+// WithAPILogger enables sanitized HTTP request/response logging on the same
+// transport that gathers in-memory telemetry.
+func WithAPILogger(logger *telemetry.APILogger) AuthenticateOption {
+	return func(config *authenticateConfig) {
+		config.apiLogger = logger
+	}
+}
+
 // applyToEnv overlays the non-empty CLI options onto the process environment so
 // that clientconfig's env>clouds.yaml resolution yields CLI>env>clouds.yaml.
 func (o Options) applyToEnv() {
@@ -113,8 +129,14 @@ type Clients struct {
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,
 // builds the service clients, and determines the project-switch capability.
-func Authenticate(ctx context.Context, o Options) (*Clients, error) {
+func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption) (*Clients, error) {
 	o.applyToEnv()
+	config := authenticateConfig{}
+	for _, option := range options {
+		if option != nil {
+			option(&config)
+		}
+	}
 
 	cloud := o.Cloud
 	if cloud == "" {
@@ -143,7 +165,7 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	// Authenticate exactly once with the credentials' original scope.
 	sc, err := buildServiceClients(ctx, *ao, gophercloud.EndpointOpts{
 		Region: region, Availability: gophercloud.AvailabilityPublic,
-	}, c.telemetry)
+	}, c.telemetry, config.apiLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -152,14 +174,14 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	return c, nil
 }
 
-func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts, collector *telemetry.Collector) (*serviceClients, error) {
+func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts, collector *telemetry.Collector, apiLogger *telemetry.APILogger) (*serviceClients, error) {
 	ao.AllowReauth = true
 
 	provider, err := openstack.NewClient(ao.IdentityEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}
-	provider.HTTPClient = http.Client{Transport: telemetry.NewTransport(http.DefaultTransport, collector)}
+	provider.HTTPClient = http.Client{Transport: telemetry.NewTransport(http.DefaultTransport, collector, apiLogger)}
 	if err = openstack.Authenticate(ctx, provider, ao); err != nil {
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}

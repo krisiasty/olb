@@ -63,11 +63,14 @@ func newStyles() styles {
 		panelLabel:    lipgloss.NewStyle().Foreground(subtle),
 		groupHeading:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245")),
 
-		// The load-balancer list is a Lip Gloss table; one right-pad per cell is
-		// the column gap. The selected row carries a full-width highlight.
-		tableHeader:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Padding(0, 1, 0, 0),
-		tableSelected: lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("39")).Padding(0, 1, 0, 0),
-		tableCell:     lipgloss.NewStyle().Padding(0, 1, 0, 0),
+		// The load-balancer list is a Lip Gloss table; the right-pad per cell is
+		// the column gap. Two spaces keep long name/project columns legible in
+		// narrow/condensed fonts. The selected row carries a full-width highlight,
+		// so the pad (part of the cell) stays on the highlight background — keep
+		// all three padding values equal so columns and the bar stay aligned.
+		tableHeader:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Padding(0, 2, 0, 0),
+		tableSelected: lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("39")).Padding(0, 2, 0, 0),
+		tableCell:     lipgloss.NewStyle().Padding(0, 2, 0, 0),
 	}
 }
 

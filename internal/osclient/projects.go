@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
 )
+
+// projNamesTTL bounds how long a resolved project-name map is reused before the
+// next all-projects refresh re-enumerates Keystone. Projects change rarely, so a
+// few minutes keeps newly-created projects resolvable without per-refresh load.
+const projNamesTTL = 5 * time.Minute
 
 // SelectProject applies the command-line project selector as the same local
 // presentation filter used by the TUI. It never changes the token or service
@@ -113,6 +120,97 @@ func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// listAllProjects enumerates every project via the admin Keystone listing
+// (GET /v3/projects). Unlike ListProjects (GET /v3/auth/projects, limited to the
+// token's own assignments) this covers the whole cluster, which is what
+// all-projects rows need to show names rather than bare IDs. Requires admin RBAC;
+// a 403 is translated to ErrAdminRequired so callers can fall back gracefully.
+func (c *Clients) listAllProjects(ctx context.Context) ([]ProjectInfo, error) {
+	c.mu.Lock()
+	identity := c.services.identity
+	c.mu.Unlock()
+	pages, err := projects.List(identity, projects.ListOpts{}).AllPages(ctx)
+	if err != nil {
+		if gophercloud.ResponseCodeIs(err, 403) {
+			return nil, ErrAdminRequired
+		}
+		return nil, err
+	}
+	ps, err := projects.ExtractProjects(pages)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProjectInfo, 0, len(ps))
+	for _, p := range ps {
+		if p.IsDomain {
+			continue
+		}
+		out = append(out, ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.DomainID})
+	}
+	return out, nil
+}
+
+// projectNameMap returns a best-effort project ID→name map for labeling
+// all-projects rows, cached for projNamesTTL. The admin full listing is the
+// authoritative source (Octavia lists LBs cluster-wide, but the token is usually
+// assigned to only a few projects, so the accessible list alone leaves most rows
+// showing a bare ID); the accessible list fills any gaps and is the sole source
+// for non-admins, where a 403 on the admin listing is expected. An empty map is
+// returned (never nil) if both enumerations fail, so rows fall back to their IDs.
+func (c *Clients) projectNameMap(ctx context.Context) map[string]string {
+	c.mu.Lock()
+	if c.projNames != nil && time.Since(c.projNamesAt) < projNamesTTL {
+		cached := c.projNames
+		c.mu.Unlock()
+		return cached
+	}
+	c.mu.Unlock()
+
+	// The admin full listing is authoritative; the accessible list supplements it
+	// (and, for non-admins where the admin call 403s, is the sole source). Both
+	// enumerations are best-effort — a nil slice from a failed call simply
+	// contributes no names.
+	var admin, accessible []ProjectInfo
+	if all, err := c.listAllProjects(ctx); err == nil {
+		admin = all
+	}
+	if acc, err := c.ListProjects(ctx); err == nil {
+		accessible = acc
+	}
+	names := mergeProjectNames(admin, accessible)
+
+	// Only cache a non-empty result; a total failure shouldn't be pinned for the
+	// full TTL when the next refresh might succeed.
+	if len(names) > 0 {
+		c.mu.Lock()
+		c.projNames = names
+		c.projNamesAt = time.Now()
+		c.mu.Unlock()
+	}
+	return names
+}
+
+// mergeProjectNames builds an ID→name map from the authoritative admin listing
+// overlaid by the accessible listing, which only fills IDs the admin list did
+// not cover (so admin names win on overlap). Projects without a name are skipped.
+func mergeProjectNames(admin, accessible []ProjectInfo) map[string]string {
+	names := make(map[string]string, len(admin)+len(accessible))
+	for _, p := range admin {
+		if p.Name != "" {
+			names[p.ID] = p.Name
+		}
+	}
+	for _, p := range accessible {
+		if p.Name == "" {
+			continue
+		}
+		if _, ok := names[p.ID]; !ok {
+			names[p.ID] = p.Name
+		}
+	}
+	return names
 }
 
 // SwitchProject changes only the presentation filter. The original token and

@@ -88,6 +88,66 @@ func TestLBTableNoProjectColumnSingleMode(t *testing.T) {
 	}
 }
 
+func TestLBNameCellSwitchesBetweenNameAndID(t *testing.T) {
+	if got := lbNameCell("web-prod", "a1b2c3d4e5f6", true); got != "a1b2c3d4e5f6" {
+		t.Errorf("ID mode = %q, want the full id", got)
+	}
+	if got := lbNameCell("web-prod", "a1b2c3d4e5f6", false); got != "web-prod" {
+		t.Errorf("name mode = %q, want the name", got)
+	}
+	if got := lbNameCell("", "a1b2c3d4e5f6", false); got != "a1b2c3d4" {
+		t.Errorf("name mode with no name = %q, want the short id", got)
+	}
+}
+
+func TestLBTableToggleShowsIDs(t *testing.T) {
+	m := lbListModel(t, true)
+
+	headerOf := func(view string) string {
+		for _, l := range strings.Split(view, "\n") {
+			if strings.Contains(l, "OPERATING") {
+				return l
+			}
+		}
+		return ""
+	}
+
+	// Names by default.
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	if h := headerOf(view); !strings.Contains(h, "NAME") || !strings.Contains(h, "PROJECT") || strings.Contains(h, "PROJECT ID") {
+		t.Fatalf("default header = %q, want NAME/PROJECT", h)
+	}
+	if !strings.Contains(view, "web-prod") || !strings.Contains(view, "payments") {
+		t.Fatalf("default view should show names; got:\n%s", view)
+	}
+
+	// Press d: columns switch to IDs, headers relabel.
+	m = upd(t, m, press("d"))
+	if !m.showIDs {
+		t.Fatal("pressing d should enable ID mode")
+	}
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	if h := headerOf(view); !strings.Contains(h, "LOAD BALANCER ID") || !strings.Contains(h, "PROJECT ID") || strings.Contains(h, "NAME") {
+		t.Fatalf("ID-mode header = %q, want LOAD BALANCER ID/PROJECT ID and no NAME", h)
+	}
+	if !strings.Contains(view, "a1b2c3d4e5") {
+		t.Errorf("ID mode should show the full LB id; got:\n%s", view)
+	}
+	if strings.Contains(view, "web-prod") || strings.Contains(view, "payments") {
+		t.Errorf("ID mode should not show names; got:\n%s", view)
+	}
+
+	// Press d again: back to names.
+	m = upd(t, m, press("d"))
+	if m.showIDs {
+		t.Fatal("pressing d again should return to name mode")
+	}
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	if !strings.Contains(view, "web-prod") || !strings.Contains(view, "payments") {
+		t.Errorf("name mode should restore names; got:\n%s", view)
+	}
+}
+
 func TestResourceNavigationRows(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // open first load balancer

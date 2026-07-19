@@ -171,6 +171,7 @@ type Model struct {
 
 	project     osclient.ProjectInfo
 	allProjects bool // listing across all accessible projects
+	showIDs     bool // list columns show object/project IDs instead of names
 	quitting    bool
 	clock       func() time.Time
 }

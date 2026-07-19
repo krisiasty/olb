@@ -4,7 +4,48 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestMergeProjectNamesPrefersAdminAndFillsGaps(t *testing.T) {
+	admin := []ProjectInfo{
+		{ID: "a", Name: "admin-name-a"},
+		{ID: "b", Name: "admin-name-b"},
+		{ID: "c", Name: ""}, // no name: skipped
+	}
+	accessible := []ProjectInfo{
+		{ID: "a", Name: "accessible-name-a"}, // overlaps: admin must win
+		{ID: "d", Name: "accessible-name-d"}, // gap: filled from accessible
+		{ID: "e", Name: ""},                  // no name: skipped
+	}
+
+	got := mergeProjectNames(admin, accessible)
+	want := map[string]string{
+		"a": "admin-name-a",
+		"b": "admin-name-b",
+		"d": "accessible-name-d",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("merged map = %v, want %v", got, want)
+	}
+	for id, name := range want {
+		if got[id] != name {
+			t.Errorf("merged[%q] = %q, want %q", id, got[id], name)
+		}
+	}
+}
+
+func TestProjectNameMapServesCachedWithinTTL(t *testing.T) {
+	// A nil services would nil-panic on any Keystone call, so completing without
+	// panic proves the fresh cache short-circuits enumeration entirely.
+	cached := map[string]string{"a": "project-a"}
+	c := &Clients{projNames: cached, projNamesAt: time.Now()}
+
+	got := c.projectNameMap(context.Background())
+	if got["a"] != "project-a" || len(got) != 1 {
+		t.Fatalf("cached project map = %v, want %v", got, cached)
+	}
+}
 
 func TestProjectSelectionKeepsOriginalAuthenticationClients(t *testing.T) {
 	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}

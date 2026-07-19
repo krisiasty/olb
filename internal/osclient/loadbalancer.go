@@ -92,12 +92,7 @@ func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 
 	// Project enumeration is only for friendly names. Failure does not discard
 	// the authoritative Octavia list; rows fall back to their project IDs.
-	nameByID := map[string]string{}
-	if projs, err := c.ListProjects(ctx); err == nil {
-		for _, p := range projs {
-			nameByID[p.ID] = p.Name
-		}
-	}
+	nameByID := c.projectNameMap(ctx)
 	for i := range lbs {
 		if lbs[i].ProjectName == "" {
 			if n := nameByID[lbs[i].ProjectID]; n != "" {

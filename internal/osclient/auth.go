@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
@@ -125,6 +126,11 @@ type Clients struct {
 	telemetry *telemetry.Collector
 	selected  ProjectInfo // project whose rows are shown when allMode is false
 	allMode   bool
+
+	// projNames caches the ID→display-name map used to label all-projects rows,
+	// so repeated (auto-)refreshes don't re-enumerate Keystone every time.
+	projNames   map[string]string
+	projNamesAt time.Time
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,

@@ -520,28 +520,44 @@ func limitLines(lines []string, limit int) []string {
 }
 
 // lbColumnTitles are the load-balancer table headers; the project column
-// appears only in all-projects mode.
+// appears only in all-projects mode. The d toggle relabels the name/project
+// columns to reflect whether they show IDs or names.
 func (m Model) lbColumnTitles() []string {
-	if m.allProjects {
-		return []string{"NAME", "PROJECT", "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
+	name := "NAME"
+	if m.showIDs {
+		name = "LOAD BALANCER ID"
 	}
-	return []string{"NAME", "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
+	if m.allProjects {
+		project := "PROJECT"
+		if m.showIDs {
+			project = "PROJECT ID"
+		}
+		return []string{name, project, "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
+	}
+	return []string{name, "PROVIDER", "VIP", "PROVISIONING", "OPERATING"}
 }
 
 func (m Model) lbRowCells(e entry) []string {
 	lb := e.lb
-	name := lb.Name
-	if name == "" {
-		name = shortID(lb.ID)
-	}
+	name := lbNameCell(lb.Name, lb.ID, m.showIDs)
 	if m.allProjects {
-		proj := lb.ProjectName
-		if proj == "" {
-			proj = shortID(lb.ProjectID)
-		}
-		return []string{name, proj, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
+		project := lbNameCell(lb.ProjectName, lb.ProjectID, m.showIDs)
+		return []string{name, project, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
 	}
 	return []string{name, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
+}
+
+// lbNameCell renders a name/ID column cell. In ID mode it shows the full id
+// (the point of the toggle is to read/copy it); otherwise the name, falling back
+// to a short id when the name is unknown.
+func lbNameCell(name, id string, showIDs bool) string {
+	if showIDs {
+		return id
+	}
+	if name != "" {
+		return name
+	}
+	return shortID(id)
 }
 
 // lbTableLines renders the load-balancer list as a Lip Gloss table (column
@@ -850,7 +866,7 @@ func (m Model) hintLine() string {
 	if m.filtering {
 		return m.clip(m.filter.View())
 	}
-	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
+	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · d names/ids · / filter · s status · p project · r refresh · a auto · +/- interval · h history · t telemetry · ? help · q quit"
 	return m.clip(m.st.help.Render(hint))
 }
 
@@ -1100,7 +1116,8 @@ Inspect
   n                copy object name to clipboard
   o                copy the displayed raw object (after y or j)
 
-Search
+List
+  d                toggle the load balancer list between names and IDs
   /                filter current list (substring)
   s                cycle status filter — all / error / degraded
 

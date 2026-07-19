@@ -24,8 +24,9 @@ type keyMap struct {
 	CopyNm  key.Binding // n
 	CopyRaw key.Binding // o
 
-	Filter key.Binding // /
-	Status key.Binding // s
+	Filter  key.Binding // /
+	Status  key.Binding // s
+	ShowIDs key.Binding // d
 
 	Project      key.Binding // p
 	Refresh      key.Binding // r
@@ -63,8 +64,9 @@ func defaultKeys() keyMap {
 		CopyNm:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "copy name")),
 		CopyRaw: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "copy raw")),
 
-		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Status: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
+		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Status:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
+		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
 
 		Project:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),

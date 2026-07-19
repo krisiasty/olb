@@ -52,7 +52,7 @@ func newTree() *model.Tree {
 	}
 	_ = json.Unmarshal([]byte(sampleStatus), &top)
 	return model.Build(&top.Statuses, model.LBMeta{
-		VipAddress: "203.0.113.9", VipPortID: "port-9", Provider: "amphora",
+		VipAddress: "203.0.113.9", VipPortID: "port-9", VipSubnetID: "subnet-9", VipNetworkID: "network-9", Provider: "amphora",
 		AdditionalVIPs: []model.AdditionalVIP{{Address: "203.0.114.9", SubnetID: "subnet-10"}},
 		ProjectID:      "p1", ProjectName: "alpha",
 	})
@@ -90,6 +90,14 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["flavor_id"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
 		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+	case model.TypeVIP:
+		res.Attrs["port_name"] = "octavia-vip-port"
+		res.Attrs["port_id"] = "port-9"
+		res.Attrs["subnet_name"] = "public-subnet"
+		res.Attrs["subnet_id"] = n.Attrs["subnet_id"]
+		res.Attrs["network_name"] = "public-network"
+		res.Attrs["network_id"] = "network-9"
+		res.Attrs["security_group_ids"] = "sg-1, sg-2"
 	case model.TypeListener:
 		res.IsListener = true
 		res.ListenerDefaultPoolID = "pool-1"
@@ -222,7 +230,7 @@ func (f *fakeBackend) ResetTelemetry() {
 func start(t *testing.T, cap osclient.SwitchCapability) Model {
 	t.Helper()
 	m := New(&fakeBackend{cap: cap}, Config{PrintMode: true, HistoryCap: 50})
-	m.Init() // populates history with the LB-list root
+	m.Init() // schedules initial list loading; New initializes workspace histories
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
 	return m
@@ -656,8 +664,8 @@ func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
 	if heading := lineContaining(plain, "LISTENERS 1"); !strings.HasPrefix(heading, "── ") || !strings.Contains(heading, "DEGRADED 1") {
 		t.Fatalf("group heading should render as a panel-aligned divider: %q", heading)
 	}
-	if listener := navigationLineContaining(plain, "http"); !strings.HasPrefix(listener, "  ●") {
-		t.Fatalf("related object should be indented below its group: %q", listener)
+	if listener := navigationLineContaining(plain, "http"); !strings.HasPrefix(listener, "▶ ●") {
+		t.Fatalf("selected related object should show cursor and status markers: %q", listener)
 	}
 	if line := lineContaining(plain, "RELATED OBJECTS"); !strings.Contains(line, "RELATED OBJECTS 1/7") {
 		t.Fatalf("filtered related-object count should exclude headings: %q", line)
@@ -1370,11 +1378,17 @@ func TestHistoryBackForwardAndTruncation(t *testing.T) {
 		t.Errorf("back/forward must not change history length: %d != %d", len(m.hist.entries), beforeLen)
 	}
 
-	// New navigation after a back must truncate the forward portion.
+	// Ctrl+Home is history navigation: it jumps to the pinned root and preserves
+	// the forward path. A subsequent new navigation truncates that path.
 	m = updExec(t, m, press("esc")) // back to LB (cursor not at tip)
+	beforeLen = len(m.hist.entries)
 	m = updExec(t, m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+	if len(m.hist.entries) != beforeLen || m.hist.cursor != 0 || !m.hist.canForward() {
+		t.Errorf("ctrl+home changed history instead of moving to its root: %+v", m.hist)
+	}
+	m = updExec(t, m, press("enter"))
 	if m.hist.canForward() {
-		t.Errorf("new navigation should have truncated the forward history")
+		t.Errorf("new navigation after ctrl+home should truncate forward history")
 	}
 }
 

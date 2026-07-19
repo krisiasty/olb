@@ -15,7 +15,7 @@ type keyMap struct {
 	Open     key.Binding // enter: the only descent key
 	Back     key.Binding // left / esc / backspace
 	Forward  key.Binding // right
-	LBList   key.Binding // ctrl+home
+	LBList   key.Binding // ctrl+home: active workspace root
 	TopLevel key.Binding // 1-5: switch top-level list view
 	Picker   key.Binding // h
 
@@ -56,7 +56,7 @@ func defaultKeys() keyMap {
 		Open:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 		Back:     key.NewBinding(key.WithKeys("left", "esc", "backspace"), key.WithHelp("←/esc", "back")),
 		Forward:  key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "forward")),
-		LBList:   key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "LB list")),
+		LBList:   key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "view root")),
 		TopLevel: key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "lbs/vips/listeners/pools/amphorae")),
 		Picker:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 

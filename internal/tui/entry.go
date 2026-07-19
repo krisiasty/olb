@@ -20,6 +20,7 @@ const (
 	entPool                      // a pool in the top-level pools list
 	entAmphora                   // an amphora in the top-level amphorae list
 	entChild                     // a containment child of the current node
+	entRelated                   // a directly related object rendered as a normal link
 	entRef                       // an outgoing reference edge ("→")
 	entBackRef                   // an incoming back-reference ("←")
 	entGroup                     // a non-selectable related-object group heading
@@ -116,6 +117,8 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 		return lbIdentity(e.node.OwningLBID, e.lbName), false, false
 	case entChild:
 		return e.node.Identity(), false, false
+	case entRelated:
+		return e.node.Identity(), false, false
 	case entRef, entBackRef:
 		if e.edge.Target != nil {
 			return e.edge.Target.Identity(), true, false
@@ -203,6 +206,27 @@ func nodeEntries(n *model.Node) []entry {
 		es = append(es, refEntry(entBackRef, br))
 	}
 	return es
+}
+
+// locationEntries adapts the graph to a resource-specific related-object
+// surface. A VIP's floating IP is rendered as a detail field, leaving its
+// owning load balancer as the sole navigable related object.
+func locationEntries(n *model.Node) []entry {
+	if n == nil {
+		return nil
+	}
+	if n.Type == model.TypeVIP {
+		if n.Parent == nil || n.Parent.Type != model.TypeLoadBalancer {
+			return nil
+		}
+		lb := n.Parent
+		return []entry{{
+			kind: entRelated, node: lb, label: lb.Label(),
+			oper: lb.OperatingStatus, prov: lb.ProvisioningStatus,
+			extra: inlineAttrs(lb),
+		}}
+	}
+	return nodeEntries(n)
 }
 
 // withRelatedGroupHeadings adds compact, non-selectable boundaries to the LB
@@ -382,6 +406,8 @@ func lbIdentity(lbID, lbName string) model.Identity {
 // inlineAttrs renders a node's most useful facts for the trailing column.
 func inlineAttrs(n *model.Node) string {
 	switch n.Type {
+	case model.TypeLoadBalancer:
+		return loadBalancerSummary(n)
 	case model.TypeListener:
 		return listenerSummary(n)
 	case model.TypePool:
@@ -403,6 +429,31 @@ func inlineAttrs(n *model.Node) string {
 	default:
 		return ""
 	}
+}
+
+func loadBalancerSummary(n *model.Node) string {
+	var parts []string
+	if provider := strings.TrimSpace(n.Attrs["provider"]); provider != "" {
+		parts = append(parts, provider)
+	}
+	listeners, pools := 0, 0
+	for _, child := range n.Children {
+		switch child.Type {
+		case model.TypeListener:
+			listeners++
+		case model.TypePool:
+			pools++
+		}
+	}
+	parts = append(parts, countedNoun(listeners, "listener"), countedNoun(pools, "pool"))
+	return strings.Join(parts, " · ")
+}
+
+func countedNoun(count int, noun string) string {
+	if count != 1 {
+		noun += "s"
+	}
+	return fmt.Sprintf("%d %s", count, noun)
 }
 
 func amphoraSummary(n *model.Node) string {

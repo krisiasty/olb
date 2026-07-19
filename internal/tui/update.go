@@ -114,10 +114,25 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	}
 	m.lbs = msg.lbs
 	m.lbsLoaded = true
-	// The LB list and the derived VIPs list both rebuild from this data.
-	if m.loc.isTopLevelList() && (m.loc.listKind() == kindLB || m.loc.listKind() == kindVIP) {
-		m.setTopLevelEntries()
-		m.restoreRefreshSelection()
+	// The LB list and derived VIPs are sourced directly from this data. The
+	// other top-level lists also use it to resolve owning load-balancer names,
+	// so rebuild them when their own rows have already arrived.
+	if m.loc.isTopLevelList() {
+		ready := false
+		switch m.loc.listKind() {
+		case kindLB, kindVIP:
+			ready = true
+		case kindListener:
+			ready = m.listenersLoaded
+		case kindPool:
+			ready = m.poolsLoaded
+		case kindAmphora:
+			ready = m.amphoraeLoaded
+		}
+		if ready {
+			m.setTopLevelEntries()
+			m.restoreRefreshSelection()
+		}
 	}
 	if wasRefresh {
 		return m, m.finishRefresh("")
@@ -260,24 +275,32 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
-		delete(m.lbDetailLoading, msg.lbID)
-	} else {
+		delete(m.lbDetailLoading, msg.nodeID)
+	} else if msg.workspace == m.activeWorkspace {
 		m.loading = false
 	}
 	if msg.err != nil {
 		if msg.intent == intentOverview {
-			m.lbDetailErr[msg.lbID] = msg.err.Error()
+			m.lbDetailErr[msg.nodeID] = msg.err.Error()
+			return m, nil
+		}
+		if msg.workspace != m.activeWorkspace {
 			return m, nil
 		}
 		return m, m.setFlash("load detail: "+msg.err.Error(), true)
 	}
-	delete(m.lbDetailErr, msg.lbID)
+	delete(m.lbDetailErr, msg.nodeID)
 	node := m.applyDetailResult(msg)
 	if node == nil {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
-		m.markFresh(msg.lbID, sectionDetails)
+		if node.Type == model.TypeLoadBalancer {
+			m.markFresh(msg.lbID, sectionDetails)
+		}
+		return m, nil
+	}
+	if msg.workspace != m.activeWorkspace {
 		return m, nil
 	}
 	return m, m.openInspect(node, msg.intent)
@@ -305,7 +328,7 @@ func (m *Model) applyDetailResult(msg detailMsg) *model.Node {
 	node.RefsResolved = true
 	// Newly-resolved reference edges can add rows to the current view.
 	if m.loc.node == node {
-		m.allEntries = nodeEntries(node)
+		m.allEntries = locationEntries(node)
 		m.applyFilters()
 	}
 	return node
@@ -407,7 +430,38 @@ func (m Model) detailTarget(lbID, nodeID string) (*model.Tree, *model.Node) {
 // loadLBOverview starts the two independent requests backing the inline LB
 // overview. Re-entering a cached LB does not refetch data already present.
 func (m *Model) loadLBOverview() tea.Cmd {
+	if m.isVIPOverview() {
+		return m.loadVIPOverview()
+	}
 	return m.startLBOverview(false)
+}
+
+func (m *Model) loadVIPOverview() tea.Cmd {
+	n := m.loc.node
+	if n == nil || n.Type != model.TypeVIP {
+		return nil
+	}
+	var cmds []tea.Cmd
+	if !n.DetailLoaded && !m.lbDetailLoading[n.ID] {
+		m.lbDetailLoading[n.ID] = true
+		delete(m.lbDetailErr, n.ID)
+		cmds = append(cmds, m.fetchDetailCmd(n, intentOverview))
+	}
+	lbID := n.OwningLBID
+	if !m.lbFIPLoaded[lbID] && !m.lbFIPLoading[lbID] {
+		if portID := n.Attrs["port_id"]; portID != "" {
+			m.lbFIPLoading[lbID] = true
+			cmds = append(cmds, m.lbFloatingIPCmd(lbID, portID, false))
+		}
+	}
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return tea.Batch(cmds...)
+	}
 }
 
 // reloadLBOverview forces both requests for an explicit refresh while leaving
@@ -539,7 +593,13 @@ func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
 		if replacement := fresh.Node(child.ID); replacement != nil {
 			switch child.Type {
 			case model.TypeVIP:
-				replacement.SetAttr("floating_ip", child.Attrs["floating_ip"])
+				for key, value := range child.Attrs {
+					replacement.SetAttr(key, value)
+				}
+				if child.DetailLoaded {
+					replacement.DetailLoaded = true
+					replacement.Raw = child.Raw
+				}
 			case model.TypeListener:
 				replacement.SetAttr("protocol", child.Attrs["protocol"])
 				replacement.SetAttr("port", child.Attrs["port"])
@@ -728,7 +788,7 @@ func (m *Model) applyLBFloatingIP(msg lbFloatingIPMsg) {
 		vip.SetAttr("floating_ip", address)
 	}
 	if m.loc.node != nil && m.loc.node.Type == model.TypeVIP && m.loc.node.OwningLBID == msg.lbID {
-		m.allEntries = nodeEntries(m.loc.node)
+		m.allEntries = locationEntries(m.loc.node)
 		m.applyFilters()
 	}
 }
@@ -765,18 +825,30 @@ func (m *Model) restoreRefreshSelection() {
 }
 
 func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
+	active := msg.workspace == m.activeWorkspace
+	if active {
+		m.loading = false
+	}
 	if msg.err != nil {
+		if !active {
+			return m, nil
+		}
 		if errors.Is(msg.err, osclient.ErrUnavailable) {
 			return m, m.setFlash(msg.label+" lookup is unavailable in this cloud/scope", true)
 		}
 		return m, m.setFlash("resolve "+msg.label+": "+msg.err.Error(), true)
 	}
-	if m.loc.tree == nil {
+	var tree *model.Tree
+	if active && m.loc.tree != nil && (msg.lbID == "" || m.loc.tree.Root.ID == msg.lbID) {
+		tree = m.loc.tree
+	} else if cached, ok := m.cache.Peek(msg.lbID); ok {
+		tree = cached.Tree
+	}
+	if tree == nil {
 		return m, nil
 	}
-	src := m.loc.tree.Node(msg.sourceID)
-	if src == nil {
+	src := tree.Node(msg.sourceID)
+	if src == nil && active {
 		src = m.loc.node
 	}
 	if msg.node == nil {
@@ -787,10 +859,13 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 			if msg.label == "floating IP" {
 				delete(src.Attrs, "floating_ip")
 			}
-			if m.loc.node == src {
-				m.allEntries = nodeEntries(src)
+			if active && m.loc.node == src {
+				m.allEntries = locationEntries(src)
 				m.applyFilters()
 			}
+		}
+		if !active {
+			return m, nil
 		}
 		return m, m.setFlash("no "+msg.label+" associated with this object", false)
 	}
@@ -804,13 +879,19 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 			src.SetAttr("floating_ip", address)
 		}
 	}
-	m.loc.tree.Attach(msg.node)
+	tree.Attach(msg.node)
 	if src != nil {
 		src.ResolveEdge(msg.label, msg.node)
 	}
-	m.hist.navigate(histEntry{id: msg.node.Identity(), viaRef: true})
-	m.clearFilter()
-	return m, m.render()
+	if active {
+		m.hist.navigate(histEntry{id: msg.node.Identity(), viaRef: true})
+		m.clearFilter()
+		return m, m.render()
+	}
+	state := &m.workspaces[msg.workspace]
+	state.hist.navigate(histEntry{id: msg.node.Identity(), viaRef: true})
+	state.filterValue = ""
+	return m, nil
 }
 
 func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
@@ -954,6 +1035,7 @@ func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
+	activeWorkspace := m.activeWorkspace
 	m.loading = false
 	m.refreshing = false
 	m.refreshLBID = ""
@@ -1000,18 +1082,19 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.listeners, m.listenersLoaded = nil, false
 	m.pools, m.poolsLoaded = nil, false
 	m.amphorae, m.amphoraeLoaded, m.amphoraeErr = nil, false, ""
-	m.hist = newHistory(m.cfg.HistoryCap)
-	m.hist.navigate(histEntry{id: model.LBListIdentity})
-	m.loc = location{id: model.LBListIdentity}
+	m.resetWorkspacesAt(activeWorkspace)
 	m.overlay = overlayNone
-	m.clearFilter()
-	m.loading = true
-	m.loadingWhat = "load balancers"
+	loadCmd := m.showTopLevelList(activeWorkspace.identity())
+	if activeWorkspace != kindLB && activeWorkspace != kindVIP {
+		// Listener, pool, and amphora rows label their owning load balancer by
+		// name, which comes from the LB list rather than their own API response.
+		loadCmd = tea.Batch(loadCmd, m.loadLBsCmd())
+	}
 	scope := "project " + projectLabel(msg.project)
 	if msg.all {
 		scope = "all accessible projects"
 	}
-	return m, tea.Batch(m.loadLBsCmd(), m.setFlash("switched to "+scope, false))
+	return m, tea.Batch(loadCmd, m.setFlash("switched to "+scope, false))
 }
 
 // --- navigation & rendering ----------------------------------------------
@@ -1124,6 +1207,7 @@ func (m *Model) setTopLevelEntries() {
 	m.entries = nil
 	m.cursor, m.top = 0, 0
 	m.applyFilters()
+	m.restoreWorkspacePosition()
 }
 
 func (m *Model) buildNodeLocation(id model.Identity, tree *model.Tree) {
@@ -1136,11 +1220,12 @@ func (m *Model) buildNodeLocation(id model.Identity, tree *model.Tree) {
 		return
 	}
 	m.loc = location{id: id, node: node, tree: tree}
-	m.allEntries = nodeEntries(node)
+	m.allEntries = locationEntries(node)
 	m.entries = nil
 	m.rawContent, m.rawFormat = "", ""
 	m.cursor, m.top = 0, 0
 	m.applyFilters()
+	m.restoreWorkspacePosition()
 }
 
 // applyFilters recomputes the visible rows from the substring filter and the

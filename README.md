@@ -89,7 +89,9 @@ tagged by project where a name is known. For an admin this is Octavia's global
 list (the whole cluster, including projects on which the admin has no explicit
 role). For a tenant, it remains constrained by the original token's policy and
 scope. Drilling into a load balancer likewise continues to use the original
-service clients.
+service clients. Changing the project filter clears all five workspace
+histories and returns to the load-balancer list because their previous objects
+may not exist in the newly visible scope.
 
 ### Keybindings
 
@@ -99,7 +101,7 @@ service clients.
 | Navigate | `enter` | Open selected — drill into a child **or** follow a reference edge (the only "go in" key) |
 | | `←` / `esc` / `⌫` | Back (history) |
 | | `→` | Forward (history) |
-| | `ctrl+home` | Return to the load balancer list |
+| | `ctrl+home` | Jump to the active view's pinned root history entry |
 | | `h` | History picker overlay |
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` / `o` | Copy id / name / displayed raw object |
@@ -111,8 +113,12 @@ service clients.
 `enter` is the only descent key; the arrows are reserved for history. `esc`
 clears an active filter first, otherwise it is *back*. Reference edges render as
 `→` rows and back-references as `←` rows; `↦` in the breadcrumb marks a
-reference jump. The `?` overlay includes a status-color legend matching dots,
-status fields, and issue counts throughout the TUI.
+reference jump. Keys `1`–`5` switch persistent load-balancer, VIP, listener,
+pool, and Amphora workspaces without adding history entries. Each workspace
+retains its own back/forward history, selection, scroll position, and filters;
+cross-resource links remain in the workspace where navigation began. The `?`
+overlay includes a status-color legend matching dots, status fields, and issue
+counts throughout the TUI.
 
 ## How it works
 

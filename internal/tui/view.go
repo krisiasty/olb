@@ -84,7 +84,7 @@ func (m Model) subtitleLine() string {
 		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all accessible projects")
 	}
 	parts := []string{scope, m.styledAutoRefreshLabel()}
-	if !m.isLBOverview() {
+	if !m.isOverview() {
 		if len(m.entries) != len(m.allEntries) {
 			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries))))
 		} else {
@@ -113,6 +113,8 @@ func (m Model) visibleRows() int {
 	h := m.bodyHeight()
 	if m.isLBOverview() {
 		_, h = m.lbOverviewParts(h)
+	} else if m.isVIPOverview() {
+		_, h = m.vipOverviewParts(h)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -128,6 +130,9 @@ func (m Model) bodyLines() []string {
 	if m.isLBOverview() {
 		return m.lbOverviewLines(h)
 	}
+	if m.isVIPOverview() {
+		return m.vipOverviewLines(h)
+	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
@@ -142,7 +147,13 @@ func (m Model) bodyLines() []string {
 		case m.filter.Value() != "" || m.status != statusAll:
 			msg = "— no matches —"
 		}
-		lines := []string{"  " + m.st.disabled.Render(msg)}
+		lines := make([]string, 0, h)
+		if m.loc.isTopLevelList() {
+			// Keep the same visual separation from the scope line that populated
+			// top-level lists get before their table header.
+			lines = append(lines, "")
+		}
+		lines = append(lines, "  "+m.st.disabled.Render(msg))
 		for len(lines) < h {
 			lines = append(lines, "")
 		}
@@ -189,6 +200,161 @@ func (m Model) resourceLines(h int, empty string) []string {
 
 func (m Model) isLBOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeLoadBalancer
+}
+
+func (m Model) isVIPOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeVIP
+}
+
+func (m Model) isOverview() bool {
+	return m.isLBOverview() || m.isVIPOverview()
+}
+
+func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
+	const fixedChrome = 3 // top gap, gap before related objects, related heading
+	if h <= fixedChrome {
+		return nil, 0
+	}
+	minRelated := 0
+	if len(m.entries) > 0 {
+		minRelated = 1
+	}
+	summary = m.vipOverviewSummary(h - fixedChrome - minRelated)
+	relatedHeight = h - len(summary) - fixedChrome
+	if relatedHeight < 0 {
+		relatedHeight = 0
+	}
+	return summary, relatedHeight
+}
+
+func (m Model) vipOverviewLines(h int) []string {
+	summary, relatedHeight := m.vipOverviewParts(h)
+	lines := make([]string, 0, h)
+	if len(lines) < h {
+		lines = append(lines, "")
+	}
+	lines = append(lines, summary...)
+	if len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) < h {
+		visibleCount := selectableEntryCount(m.entries)
+		allCount := selectableEntryCount(m.allEntries)
+		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
+		if visibleCount != allCount {
+			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
+		}
+		rendered := m.st.title.Render(title)
+		errors, degraded := relatedIssueCounts(m.entries)
+		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+	}
+	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) vipOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	loading := m.lbDetailLoading[n.ID] || m.lbFIPLoading[n.OwningLBID]
+	title := m.overviewPanelTitle("DETAILS", loading, m.lbDetailErr[n.ID], time.Time{}, false)
+	groups := m.vipDetailGroups()
+	lines := []string{m.clip(title)}
+	if m.width >= 96 {
+		gap := 3
+		available := m.width - gap
+		leftWidth := available / 2
+		rightWidth := available - leftWidth
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		lines = append(lines, "")
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[2], groups[3], leftWidth, rightWidth, gap), "\n")...)
+		return limitLines(lines, budget)
+	}
+	for i, group := range groups {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+	}
+	return limitLines(lines, budget)
+}
+
+type overviewGroup struct {
+	title  string
+	fields []overviewField
+}
+
+func (m Model) vipDetailGroups() []overviewGroup {
+	n := m.loc.node
+	kind := "Primary VIP"
+	if n.Attrs["vip_kind"] == "additional" {
+		kind = "Additional VIP"
+	}
+	projectID, projectName := "", ""
+	if m.loc.tree != nil {
+		projectID = m.loc.tree.Meta.ProjectID
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	return []overviewGroup{
+		{title: "VIP", fields: []overviewField{
+			{label: "Type", value: kind},
+			{label: "Address", value: displayValue(n.Attrs["address"])},
+			{label: "Floating IP", value: displayValue(n.Attrs["floating_ip"])},
+			{label: "Project name", value: displayValue(projectName)},
+			{label: "Project ID", value: displayValue(projectID)},
+		}},
+		{title: "PORT", fields: []overviewField{
+			{label: "Name", value: displayValue(n.Attrs["port_name"])},
+			{label: "ID", value: displayValue(n.Attrs["port_id"])},
+			{label: "Security groups", value: displayValue(n.Attrs["security_group_ids"])},
+		}},
+		{title: "SUBNET", fields: []overviewField{
+			{label: "Name", value: displayValue(n.Attrs["subnet_name"])},
+			{label: "ID", value: displayValue(n.Attrs["subnet_id"])},
+		}},
+		{title: "NETWORK", fields: []overviewField{
+			{label: "Name", value: displayValue(n.Attrs["network_name"])},
+			{label: "ID", value: displayValue(n.Attrs["network_id"])},
+		}},
+	}
+}
+
+func (m Model) renderOverviewGroupPair(left, right overviewGroup, leftWidth, rightWidth, gap int) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		m.renderOverviewGroup(left, leftWidth),
+		strings.Repeat(" ", gap),
+		m.renderOverviewGroup(right, rightWidth),
+	)
+}
+
+func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	labelWidth := 0
+	for _, field := range group.fields {
+		if fieldWidth := lipgloss.Width(field.label); fieldWidth > labelWidth {
+			labelWidth = fieldWidth
+		}
+	}
+	if cap := (width - 2) / 2; labelWidth > cap {
+		labelWidth = cap
+	}
+	lines := []string{m.st.groupHeading.Render(group.title)}
+	for _, field := range group.fields {
+		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
+		line := "  " + label + "  " + field.value
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
 // lbOverviewParts computes the summary and related-list allocation. The
@@ -759,39 +925,176 @@ func (m Model) renderRow(e entry, sel bool) string {
 	relationWidth := m.navigationRelationWidth()
 	relationCell := padRight(relation, relationWidth)
 	indent := ""
-	if m.isLBOverview() {
+	if m.isOverview() {
 		indent = "  "
 	}
-	plain := indent + navigationMarker(e) + relationCell + "  " + target
+	showLBStatuses := relatedLoadBalancerEntry(e)
+	if showLBStatuses {
+		target = m.fitRelatedLoadBalancerTarget(e, relationCell, extra)
+	}
+	body := relationCell + "  " + target
 	if extra != "" {
-		plain += "  " + extra
+		body += "  " + extra
 	}
-	if notable {
-		plain += "  [" + eff + "]"
+	if showLBStatuses {
+		if statuses := relatedLoadBalancerStatusPlain(e); statuses != "" {
+			if extra != "" {
+				body += " · " + statuses
+			} else {
+				body += "  " + statuses
+			}
+		}
+	} else if notable {
+		body += "  [" + eff + "]"
 	}
-	plain = navigationChevron(plain, m.width)
 
 	if sel {
-		return m.st.selected.Width(m.width).Render(clipRunes(plain, m.width))
+		if m.isOverview() {
+			return m.renderSelectedOverviewRow(e, eff, relationCell, target, extra, notable, showLBStatuses)
+		}
+		marker := navigationMarker(e)
+		prefix := indent + marker
+		prefixWidth := lipgloss.Width(prefix)
+		if m.width <= prefixWidth {
+			return m.selectedMarkerStyle(e, eff).Width(m.width).Render(clipRunes(prefix, m.width))
+		}
+		remaining := m.width - prefixWidth
+		body = navigationChevron(body, remaining)
+		return m.selectedMarkerStyle(e, eff).Render(prefix) +
+			m.st.selected.Width(remaining).Render(clipRunes(body, remaining))
 	}
 
-	var marker string
-	switch e.kind {
-	case entRef:
-		marker = m.st.refMarker.Render("→ ")
-	case entBackRef:
-		marker = m.st.backRefMarker.Render("← ")
-	default:
-		marker = lipgloss.NewStyle().Foreground(statusColor(eff)).Render("●") + " "
-	}
+	marker := m.styledNavigationMarker(e, eff)
 	seg := indent + marker + m.st.panelLabel.Render(relationCell) + "  " + target
 	if extra != "" {
 		seg += "  " + m.st.attrs.Render(extra)
 	}
-	if notable {
+	if showLBStatuses {
+		if extra != "" {
+			seg += m.st.attrs.Render(" · ") + m.relatedLoadBalancerStatus(e)
+		} else {
+			seg += "  " + m.relatedLoadBalancerStatus(e)
+		}
+	} else if notable {
 		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
 	}
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+func (m Model) renderSelectedOverviewRow(e entry, status, relationCell, target, extra string, notable, showLBStatuses bool) string {
+	seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, status) +
+		m.st.panelLabel.Bold(true).Render(relationCell) + "  " + lipgloss.NewStyle().Bold(true).Render(target)
+	if extra != "" {
+		seg += "  " + m.st.attrs.Render(extra)
+	}
+	if showLBStatuses {
+		if extra != "" {
+			seg += m.st.attrs.Render(" · ") + m.relatedLoadBalancerStatus(e)
+		} else {
+			seg += "  " + m.relatedLoadBalancerStatus(e)
+		}
+	} else if notable {
+		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(status)).Render("["+status+"]")
+	}
+	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+func (m Model) styledNavigationMarker(e entry, status string) string {
+	switch e.kind {
+	case entRef:
+		return m.st.refMarker.Render("→ ")
+	case entBackRef:
+		return m.st.backRefMarker.Render("← ")
+	default:
+		return lipgloss.NewStyle().Foreground(statusColor(status)).Render("●") + " "
+	}
+}
+
+func relatedLoadBalancerEntry(e entry) bool {
+	return e.kind == entRelated && e.node != nil && e.node.Type == model.TypeLoadBalancer
+}
+
+func relatedLoadBalancerStatusPlain(e entry) string {
+	var parts []string
+	if e.oper != "" {
+		parts = append(parts, e.oper)
+	}
+	if e.prov != "" {
+		parts = append(parts, e.prov)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// fitRelatedLoadBalancerTarget reserves the diagnostic suffix before sizing the
+// target. Only the human name is shortened; the short ID and both statuses stay
+// visible whenever the fixed row chrome itself fits the terminal.
+func (m Model) fitRelatedLoadBalancerTarget(e entry, relationCell, extra string) string {
+	if e.node == nil {
+		return navigationTarget(e)
+	}
+	name := e.node.Name
+	hasName := name != ""
+	if !hasName {
+		name = shortID(e.node.ID)
+	}
+	idSuffix := ""
+	if hasName && e.node.ID != "" {
+		idSuffix = " (" + shortID(e.node.ID) + ")"
+	}
+	full := name + idSuffix
+
+	// Selection/status marker (4), relationship, target gap (2), trailing open
+	// chevron (3), then the summary and status separators.
+	fixed := 4 + lipgloss.Width(relationCell) + 2 + 3
+	if extra != "" {
+		fixed += 2 + lipgloss.Width(extra)
+	}
+	if statuses := relatedLoadBalancerStatusPlain(e); statuses != "" {
+		if extra != "" {
+			fixed += 3 // " · "
+		} else {
+			fixed += 2
+		}
+		fixed += lipgloss.Width(statuses)
+	}
+	available := m.width - fixed
+	if available >= lipgloss.Width(full) {
+		return full
+	}
+	if available <= 0 {
+		return ""
+	}
+	suffixWidth := lipgloss.Width(idSuffix)
+	if idSuffix == "" || available <= suffixWidth {
+		return clipRunes(full, available)
+	}
+	nameWidth := available - suffixWidth
+	if nameWidth == 1 && lipgloss.Width(name) > 1 {
+		return "…" + idSuffix
+	}
+	return clipRunes(name, nameWidth) + idSuffix
+}
+
+func (m Model) relatedLoadBalancerStatus(e entry) string {
+	var parts []string
+	if e.oper != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(statusColor(e.oper)).Render(e.oper))
+	}
+	if e.prov != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(statusColor(e.prov)).Render(e.prov))
+	}
+	return strings.Join(parts, m.st.attrs.Render(", "))
+}
+
+func (m Model) selectedMarkerStyle(e entry, status string) lipgloss.Style {
+	var color lipgloss.TerminalColor = statusColor(status)
+	switch e.kind {
+	case entRef:
+		color = m.st.refMarker.GetForeground()
+	case entBackRef:
+		color = m.st.backRefMarker.GetForeground()
+	}
+	return m.st.selected.Foreground(color)
 }
 
 func (m Model) renderIssueCounts(base string, errors, degraded int) string {
@@ -816,7 +1119,7 @@ func navigationRelation(e entry) string {
 		if e.edge != nil {
 			return nodeTypeLabel(e.edge.TargetType)
 		}
-	case entChild:
+	case entChild, entRelated:
 		if e.node != nil {
 			if e.node.Type == model.TypeVIP {
 				if e.node.Attrs["vip_kind"] == "additional" {
@@ -834,7 +1137,7 @@ func navigationRelation(e entry) string {
 // Child rows don't repeat their type prefix because it already occupies the
 // relationship column; reference targets retain it to disambiguate graph jumps.
 func navigationTarget(e entry) string {
-	if e.kind == entChild && e.node != nil {
+	if (e.kind == entChild || e.kind == entRelated) && e.node != nil {
 		target := e.node.Name
 		if target == "" {
 			target = shortID(e.node.ID)
@@ -851,6 +1154,9 @@ func navigationTarget(e entry) string {
 			if role := e.node.Attrs["role"]; role != "" {
 				target += " (" + role + ")"
 			}
+		}
+		if e.kind == entRelated && e.node.Type == model.TypeLoadBalancer && e.node.Name != "" && e.node.ID != "" {
+			target += " (" + shortID(e.node.ID) + ")"
 		}
 		return target
 	}
@@ -1106,8 +1412,10 @@ func (m Model) pickerItems() []pickItem {
 	q := strings.ToLower(strings.TrimSpace(m.search.Value()))
 	var items []pickItem
 	for i, e := range m.hist.entries {
-		label := "load balancers"
-		if !e.id.IsLBList() {
+		label := ""
+		if e.id.IsTopLevelList() {
+			label = listKindOf(e.id).rootLabel()
+		} else {
 			label = e.id.Label
 			if label == "" {
 				label = string(e.id.Type) + ":" + shortID(e.id.ID)
@@ -1122,7 +1430,7 @@ func (m Model) pickerItems() []pickItem {
 }
 
 func (m Model) pickerView() string {
-	title := m.st.overlayTitle.Render("History")
+	title := m.st.overlayTitle.Render("History · " + m.activeWorkspace.rootLabel())
 	items := m.pickerItems()
 	var b strings.Builder
 	b.WriteString(title + "\n")
@@ -1145,14 +1453,20 @@ func (m Model) pickerView() string {
 	for i := start; i < end; i++ {
 		it := items[i]
 		label := it.label
+		selectedLabel := it.label
+		if it.dead {
+			label = m.st.dead.Render(it.label)
+		}
 		if it.current {
 			label += m.st.relationship.Render(" (here)")
+			selectedLabel += " (here)"
 		}
 		if it.dead {
-			label = m.st.dead.Render(it.label) + m.st.relationship.Render(" (deleted)")
+			label += m.st.relationship.Render(" (deleted)")
+			selectedLabel += " (deleted)"
 		}
 		if i == m.pickCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+it.label, m.width)) + "\n")
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+selectedLabel, m.width)) + "\n")
 		} else {
 			b.WriteString("  " + m.clip(label) + "\n")
 		}
@@ -1228,7 +1542,7 @@ Move
 Navigate
   enter            open selected — drill into a child or follow a reference edge
   ← / esc / ⌫      back (history)      → forward (history)
-  ctrl+home        return to the load balancer list
+  ctrl+home        jump to the active view's pinned root history entry
   h                history picker overlay
 
 Top-level views (drill into an item to open its detail)
@@ -1272,6 +1586,7 @@ Status colors
 Notes
 	• auto-refresh header intervals are stats/full (for example, 5s/30s).
 	• enter is the only descent key; arrows are reserved for history.
+	• 1-5 switch persistent views; each keeps its own history, cursor, and filters.
   • esc clears an active filter first, otherwise it is back.
   • → reference edges are shared/cross-cutting; ← back-references answer
     "who points at me?".  ↦ in the breadcrumb marks a reference jump.

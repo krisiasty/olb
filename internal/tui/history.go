@@ -12,7 +12,7 @@ type histEntry struct {
 	dead   bool // object was gone at last resolution
 }
 
-// history is a browser-style single ordered list plus a cursor.
+// history is one workspace's browser-style ordered list plus a cursor.
 //
 //   - Back / forward move the cursor only, never truncate.
 //   - Opening a node is new navigation: if the cursor is not at the tip, the
@@ -23,6 +23,7 @@ type history struct {
 	entries []histEntry
 	cursor  int // -1 when empty
 	cap     int
+	root    model.Identity // workspace boundary used if the root entry ages out
 }
 
 func newHistory(capacity int) *history {
@@ -52,12 +53,31 @@ func (h *history) navigate(e histEntry) {
 	h.cursor = len(h.entries) - 1
 	if len(h.entries) > h.cap {
 		drop := len(h.entries) - h.cap
-		h.entries = append(h.entries[:0], h.entries[drop:]...)
+		if len(h.entries) > 0 && h.entries[0].id.Equal(h.root) {
+			// The workspace root is a permanent anchor. Evict the oldest
+			// drill-down entries immediately after it instead.
+			kept := make([]histEntry, 0, h.cap)
+			kept = append(kept, h.entries[0])
+			kept = append(kept, h.entries[drop+1:]...)
+			h.entries = kept
+		} else {
+			h.entries = append(h.entries[:0], h.entries[drop:]...)
+		}
 		h.cursor -= drop
 		if h.cursor < 0 {
 			h.cursor = 0
 		}
 	}
+}
+
+// toRoot moves to the pinned workspace root without creating navigation or
+// truncating forward history.
+func (h *history) toRoot() (histEntry, bool) {
+	if len(h.entries) == 0 || !h.entries[0].id.Equal(h.root) {
+		return histEntry{}, false
+	}
+	h.cursor = 0
+	return h.entries[0], true
 }
 
 func (h *history) canBack() bool    { return h.cursor > 0 }
@@ -108,6 +128,11 @@ func (h *history) pruneDead() {
 	kept := make([]histEntry, 0, len(h.entries))
 	newCursor := 0
 	for i, e := range h.entries {
+		if i == 0 && e.id.Equal(h.root) {
+			e.dead = false
+			kept = append(kept, e)
+			continue
+		}
 		if e.dead {
 			if i <= h.cursor && newCursor > 0 {
 				newCursor--
@@ -148,12 +173,13 @@ func (h *history) trail() []histEntry {
 }
 
 // rootIdentity is the most recent top-level-list boundary at or before the
-// cursor; it names the breadcrumb root. Defaults to the LB list.
+// cursor; it names the breadcrumb root. If the original boundary aged out of a
+// capped history, the workspace's durable root remains the fallback.
 func (h *history) rootIdentity() model.Identity {
 	for i := h.cursor; i >= 0; i-- {
 		if h.entries[i].id.IsTopLevelList() {
 			return h.entries[i].id
 		}
 	}
-	return model.LBListIdentity
+	return h.root
 }

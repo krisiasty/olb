@@ -17,6 +17,9 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/monitors"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/pools"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/networks"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/ports"
+	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/subnets"
 	"github.com/krisiasty/olb/internal/model"
 )
 
@@ -249,6 +252,59 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		}
 		res.Raw = innerRaw(r.Body, "loadbalancer")
 
+	case model.TypeVIP:
+		if sc.network == nil {
+			return res, ErrUnavailable
+		}
+		portID := n.Attrs["port_id"]
+		subnetID := n.Attrs["subnet_id"]
+		networkID := n.Attrs["network_id"]
+		res.Raw = map[string]any{"vip": n.Raw}
+
+		if portID != "" {
+			r := ports.Get(ctx, sc.network, portID)
+			port, err := r.Extract()
+			if err != nil {
+				return res, err
+			}
+			res.Attrs["port_name"] = port.Name
+			res.Attrs["port_id"] = port.ID
+			if networkID == "" {
+				networkID = port.NetworkID
+			}
+			securityGroups := strings.Join(port.SecurityGroups, ", ")
+			if securityGroups == "" {
+				securityGroups = "none"
+			}
+			res.Attrs["security_group_ids"] = securityGroups
+			res.Raw["port"] = innerRaw(r.Body, "port")
+		}
+
+		if subnetID != "" {
+			r := subnets.Get(ctx, sc.network, subnetID)
+			subnet, err := r.Extract()
+			if err != nil {
+				return res, err
+			}
+			res.Attrs["subnet_name"] = subnet.Name
+			res.Attrs["subnet_id"] = subnet.ID
+			if networkID == "" {
+				networkID = subnet.NetworkID
+			}
+			res.Raw["subnet"] = innerRaw(r.Body, "subnet")
+		}
+
+		if networkID != "" {
+			r := networks.Get(ctx, sc.network, networkID)
+			network, err := r.Extract()
+			if err != nil {
+				return res, err
+			}
+			res.Attrs["network_name"] = network.Name
+			res.Attrs["network_id"] = network.ID
+			res.Raw["network"] = innerRaw(r.Body, "network")
+		}
+
 	case model.TypeListener:
 		r := listeners.Get(ctx, sc.lb, n.ID)
 		ln, err := r.Extract()
@@ -336,7 +392,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "rule")
 
 	default:
-		// VIP / floating IP / instance / amphora carry their detail from the
+		// Floating IP / instance / amphora carry their detail from the
 		// resolution step; expose whatever raw object is already attached.
 		if m, ok := n.Raw.(map[string]any); ok {
 			res.Raw = m

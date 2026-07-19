@@ -86,7 +86,7 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Back): // left / backspace
 		return m.goBack()
 	case key.Matches(msg, m.keys.LBList):
-		return m.goLBList()
+		return m.goWorkspaceRoot()
 	case key.Matches(msg, m.keys.TopLevel):
 		return m.goTopLevel(msg.String())
 	case key.Matches(msg, m.keys.Picker):
@@ -175,14 +175,18 @@ func (m Model) goForward() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) goLBList() (tea.Model, tea.Cmd) {
-	m.hist.navigate(histEntry{id: model.LBListIdentity})
+func (m Model) goWorkspaceRoot() (tea.Model, tea.Cmd) {
+	if _, ok := m.hist.toRoot(); !ok {
+		return m, nil
+	}
 	m.clearFilter()
 	cmd := m.render()
 	return m, cmd
 }
 
-// goTopLevel switches to the top-level list bound to a number key ("1".."5").
+// goTopLevel switches persistent workspaces without adding either root to a
+// navigation stack. Pressing the active workspace's key is deliberately a no-op;
+// ctrl+home is the explicit action for returning to that workspace's root.
 func (m Model) goTopLevel(digit string) (tea.Model, tea.Cmd) {
 	if len(digit) != 1 || digit[0] < '1' || digit[0] > '5' {
 		return m, nil
@@ -191,8 +195,15 @@ func (m Model) goTopLevel(digit string) (tea.Model, tea.Cmd) {
 	if idx >= len(topLevelKinds) {
 		return m, nil
 	}
-	m.hist.navigate(histEntry{id: topLevelKinds[idx].identity()})
-	m.clearFilter()
+	target := topLevelKinds[idx]
+	if target == m.activeWorkspace {
+		return m, nil
+	}
+	m.saveWorkspaceState()
+	m.restoreWorkspaceState(target)
+	m.prepareWorkspacePosition()
+	m.loading = false
+	m.loadingWhat = ""
 	cmd := m.render()
 	return m, cmd
 }
@@ -520,8 +531,14 @@ func (m Model) openPicker() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.overlay = overlayPicker
-	m.pickCursor = 0
 	m.search.SetValue("")
+	m.pickCursor = 0
+	for i, item := range m.pickerItems() {
+		if item.current {
+			m.pickCursor = i
+			break
+		}
+	}
 	m.search.Focus()
 	return m, textinput.Blink
 }

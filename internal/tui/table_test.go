@@ -71,6 +71,19 @@ func TestLBTableHeaderAndRows(t *testing.T) {
 	}
 }
 
+func TestEmptyTopLevelListKeepsScopeSeparator(t *testing.T) {
+	m := lbListModel(t, false)
+	m.lbs = nil
+	m.setTopLevelEntries()
+	lines := m.bodyLines()
+	if len(lines) < 2 || lines[0] != "" {
+		t.Fatalf("empty top-level list should start with a blank separator: %q", lines)
+	}
+	if plain := ansiRE.ReplaceAllString(lines[1], ""); !strings.Contains(plain, "— empty —") {
+		t.Fatalf("empty-state message should follow the separator: %q", lines)
+	}
+}
+
 func TestLBTableNoProjectColumnSingleMode(t *testing.T) {
 	m := lbListModel(t, false)
 	view := ansiRE.ReplaceAllString(m.View(), "")

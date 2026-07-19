@@ -36,8 +36,6 @@ type location struct {
 	dead bool
 }
 
-func (l location) isList() bool { return l.node == nil && l.id.IsLBList() }
-
 // Config holds the runtime knobs passed in from main.
 type Config struct {
 	// PrintMode routes copy actions to an on-screen value the user can select,
@@ -49,7 +47,8 @@ type Config struct {
 	// CacheSize bounds the LRU of status trees; CacheTTL bounds staleness.
 	CacheSize int
 	CacheTTL  time.Duration
-	// HistoryCap bounds the navigation history (picker usability, not memory).
+	// HistoryCap bounds each workspace's navigation history (picker usability,
+	// not memory).
 	HistoryCap int
 	// Stdout is where OSC 52 sequences are written (defaults to os.Stdout).
 	Stdout io.Writer
@@ -91,6 +90,13 @@ type Model struct {
 
 	hist *history
 	loc  location
+
+	// Keys 1-5 select persistent workspaces. The active workspace is projected
+	// into hist/loc/list fields so the existing navigation and rendering code can
+	// stay focused on one browser-like stack at a time.
+	workspaces      [5]workspaceState
+	activeWorkspace listKind
+	workspaceResume workspacePosition
 
 	// Current list rows (allEntries unfiltered; entries after filters applied).
 	allEntries []entry
@@ -214,7 +220,7 @@ func New(backend Backend, cfg Config) Model {
 	se.Prompt = "search: "
 	se.CharLimit = 128
 
-	return Model{
+	m := Model{
 		backend:                backend,
 		keys:                   defaultKeys(),
 		st:                     newStyles(),
@@ -225,7 +231,6 @@ func New(backend Backend, cfg Config) Model {
 		search:                 se,
 		vp:                     viewport.New(0, 0),
 		cache:                  cache.New(cfg.CacheSize, cfg.CacheTTL),
-		hist:                   newHistory(cfg.HistoryCap),
 		project:                backend.CurrentProject(),
 		allProjects:            cfg.AllProjects,
 		lbStats:                map[string]map[string]any{},
@@ -254,10 +259,11 @@ func New(backend Backend, cfg Config) Model {
 		telemetryGeneration:    1,
 		clock:                  time.Now,
 	}
+	m.resetWorkspaces()
+	return m
 }
 
 // Init loads the initial load balancer list.
 func (m Model) Init() tea.Cmd {
-	m.hist.navigate(histEntry{id: model.LBListIdentity})
 	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), m.scheduleAutoRefresh(), freshnessTickCmd())
 }

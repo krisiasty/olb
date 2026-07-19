@@ -60,7 +60,9 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 			"vip_subnet_id": meta.VipSubnetID, "vip_network_id": meta.VipNetworkID,
 			"vip_kind": "primary",
 		}
-		vip.DetailLoaded = true // the VIP has no separate show; its facts are inline
+		// Octavia has no standalone VIP show, but the TUI enriches these inline
+		// facts with the backing Neutron port, subnet, and network on first open.
+		vip.DetailLoaded = false
 		// The floating IP is a Neutron lookup against the VIP port; often absent
 		// (internal LBs). Rendered as a jump entry, resolved on landing.
 		vip.AddUnresolvedRef("floating IP", TypeFloatingIP, meta.VipPortID)
@@ -83,7 +85,7 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 			"ip_address": extra.Address, "subnet_id": extra.SubnetID,
 			"vip_port_id": meta.VipPortID, "vip_kind": "additional",
 		}
-		vip.DetailLoaded = true
+		vip.DetailLoaded = false
 		vip.AddUnresolvedRef("floating IP", TypeFloatingIP, meta.VipPortID)
 		root.addChild(vip)
 		t.register(vip)

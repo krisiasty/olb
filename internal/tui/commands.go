@@ -43,19 +43,22 @@ const (
 )
 
 type detailMsg struct {
-	nodeID  string
-	lbID    string
-	res     osclient.DetailResult
-	intent  detailIntent
-	refresh bool
-	err     error
+	nodeID    string
+	lbID      string
+	res       osclient.DetailResult
+	intent    detailIntent
+	refresh   bool
+	workspace listKind
+	err       error
 }
 
 type refResolveMsg struct {
-	sourceID string // node whose unresolved edge we followed
-	label    string // edge label (e.g. "floating IP", "instance")
-	node     *model.Node
-	err      error
+	sourceID  string // node whose unresolved edge we followed
+	lbID      string
+	workspace listKind
+	label     string // edge label (e.g. "floating IP", "instance")
+	node      *model.Node
+	err       error
 }
 
 type amphoraeMsg struct {
@@ -200,11 +203,12 @@ func (m Model) detailCmd(n *model.Node, intent detailIntent, refresh bool) tea.C
 	b := m.backend
 	id := n.ID
 	lbID := n.OwningLBID
+	workspace := m.activeWorkspace
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		res, err := b.FetchDetail(ctx, n)
-		return detailMsg{nodeID: id, lbID: lbID, res: res, intent: intent, refresh: refresh, err: err}
+		return detailMsg{nodeID: id, lbID: lbID, res: res, intent: intent, refresh: refresh, workspace: workspace, err: err}
 	}
 }
 
@@ -213,12 +217,13 @@ func (m Model) resolveFloatingIPCmd(source *model.Node, portID string) tea.Cmd {
 	sid := source.ID
 	lbID := source.OwningLBID
 	fixedIP := source.Attrs["address"]
+	workspace := m.activeWorkspace
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		nodes, err := b.ResolveFloatingIPs(ctx, lbID, portID)
 		node := nodes[fixedIP]
-		return refResolveMsg{sourceID: sid, label: "floating IP", node: node, err: err}
+		return refResolveMsg{sourceID: sid, lbID: lbID, workspace: workspace, label: "floating IP", node: node, err: err}
 	}
 }
 
@@ -236,11 +241,12 @@ func (m Model) resolveInstanceCmd(source *model.Node, address string) tea.Cmd {
 	b := m.backend
 	sid := source.ID
 	lbID := source.OwningLBID
+	workspace := m.activeWorkspace
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		node, err := b.ResolveInstance(ctx, lbID, address)
-		return refResolveMsg{sourceID: sid, label: "instance", node: node, err: err}
+		return refResolveMsg{sourceID: sid, lbID: lbID, workspace: workspace, label: "instance", node: node, err: err}
 	}
 }
 

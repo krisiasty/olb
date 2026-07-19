@@ -131,19 +131,24 @@ func (f *fakeBackend) ResolveInstance(_ context.Context, lbID, addr string) (*mo
 }
 
 func (f *fakeBackend) ListAmphorae(_ context.Context, lbID string) ([]*model.Node, error) {
-	makeAmphora := func(id, role string) *model.Node {
+	makeAmphora := func(id, role, managementIP, computeID string) *model.Node {
 		a := model.NewNode(model.TypeAmphora, id, id)
 		a.OwningLBID = lbID
 		a.ProvisioningStatus = "ALLOCATED"
 		a.SetAttr("role", role)
 		a.SetAttr("status", "ALLOCATED")
+		a.SetAttr("lb_network_ip", managementIP)
+		a.SetAttr("compute_id", computeID)
 		a.DetailLoaded = true
-		a.Raw = map[string]any{"id": id, "role": role, "status": "ALLOCATED"}
+		a.Raw = map[string]any{
+			"id": id, "role": role, "status": "ALLOCATED",
+			"lb_network_ip": managementIP, "compute_id": computeID,
+		}
 		return a
 	}
 	return []*model.Node{
-		makeAmphora("11111111-1111-1111-1111-111111111111", "MASTER"),
-		makeAmphora("22222222-2222-2222-2222-222222222222", "BACKUP"),
+		makeAmphora("11111111-1111-1111-1111-111111111111", "MASTER", "10.0.3.20", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		makeAmphora("22222222-2222-2222-2222-222222222222", "BACKUP", "10.0.3.21", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
 	}, nil
 }
 
@@ -1222,13 +1227,18 @@ func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 	m = upd(t, m, amphoraeMsg{lbID: "lb-1", nodes: nodes})
+	m = upd(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
 	view := ansiRE.ReplaceAllString(m.View(), "")
-	for _, row := range []string{
-		"11111111-1111-1111-1111-111111111111 (MASTER)",
-		"22222222-2222-2222-2222-222222222222 (BACKUP)",
+	for _, row := range []struct {
+		target  string
+		summary string
+	}{
+		{target: "11111111-1111-1111-1111-111111111111 (MASTER)", summary: "mgmt 10.0.3.20 · vm aaaaaaaa"},
+		{target: "22222222-2222-2222-2222-222222222222 (BACKUP)", summary: "mgmt 10.0.3.21 · vm bbbbbbbb"},
 	} {
-		if navigationLineContaining(view, row) == "" {
-			t.Fatalf("LB overview missing direct amphora row %q:\n%s", row, view)
+		line := navigationLineContaining(view, row.target)
+		if line == "" || !strings.Contains(line, row.summary) {
+			t.Fatalf("LB overview missing Amphora target %q with summary %q:\n%s", row.target, row.summary, view)
 		}
 	}
 	if strings.Contains(view, "Amphorae") || strings.Contains(view, "instances") {
@@ -1239,6 +1249,15 @@ func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 	}
 	if got := string(statusColor("ALLOCATED")); got != "42" {
 		t.Fatalf("ALLOCATED color = %q, want green (42)", got)
+	}
+	partial := model.NewNode(model.TypeAmphora, "amphora-partial", "")
+	partial.SetAttr("compute_id", "cccccccc-cccc-cccc-cccc-cccccccccccc")
+	if got := amphoraSummary(partial); got != "vm cccccccc" {
+		t.Fatalf("Amphora summary should omit a missing management IP, got %q", got)
+	}
+	partial.Attrs = map[string]string{"lb_network_ip": "10.0.3.22"}
+	if got := amphoraSummary(partial); got != "mgmt 10.0.3.22" {
+		t.Fatalf("Amphora summary should omit a missing compute ID, got %q", got)
 	}
 	i, ok := m.selectLabel("11111111-1111-1111-1111-111111111111")
 	if !ok {

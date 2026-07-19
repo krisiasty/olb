@@ -97,10 +97,11 @@ reference jump.
   exists. Additional VIPs are selectable related objects; because all VIPs
   share one Neutron port, floating IPs are matched to them by fixed address. Full
   LB config and traffic counters load independently; Amphora-backed LBs also
-  list each backing VM directly by ID and role. The results are cached with the
-  status tree. Listener rows include normalized endpoints such as `TCP/443` or
-  `HTTPS/8443 (TLS termination)`, always using the listener's actual protocol
-  port, so duplicate listener names remain legible.
+  list each backing VM directly by ID and role, with its management IP and a
+  shortened compute ID shown as `mgmt 10.0.3.20 · vm a1b2c3d4`. The results are
+  cached with the status tree. Listener rows include normalized endpoints such
+  as `TCP/443` or `HTTPS/8443 (TLS termination)`, always using the listener's
+  actual protocol port, so duplicate listener names remain legible.
   Pool rows similarly include protocol, a readable balancing algorithm, and
   member and listener-attachment counts, for example
   `HTTP · round robin · 4 members · 2 listeners`; duplicate sibling names gain

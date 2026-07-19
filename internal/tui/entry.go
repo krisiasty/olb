@@ -357,6 +357,8 @@ func inlineAttrs(n *model.Node) string {
 			listenerCount = fmt.Sprintf("%d", poolListenerAttachmentCount(n))
 		}
 		return poolSummary(n.Attrs["protocol"], n.Attrs["lb_algorithm"], n.Attrs["member_count"], listenerCount)
+	case model.TypeAmphora:
+		return amphoraSummary(n)
 	case model.TypeMember:
 		return joinAttrs(n, "address", "port")
 	case model.TypeHealthMonitor:
@@ -368,6 +370,17 @@ func inlineAttrs(n *model.Node) string {
 	default:
 		return ""
 	}
+}
+
+func amphoraSummary(n *model.Node) string {
+	var parts []string
+	if managementIP := strings.TrimSpace(n.Attrs["lb_network_ip"]); managementIP != "" {
+		parts = append(parts, "mgmt "+managementIP)
+	}
+	if computeID := strings.TrimSpace(n.Attrs["compute_id"]); computeID != "" {
+		parts = append(parts, "vm "+shortID(computeID))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func listenerSummary(n *model.Node) string {

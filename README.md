@@ -103,7 +103,9 @@ reference jump.
   port, so duplicate listener names remain legible.
   Pool rows similarly include protocol, a readable balancing algorithm, and
   member count, for example `HTTP · round robin · 4 members`; duplicate sibling
-  names gain a short ID suffix.
+  names gain a short ID suffix. Non-selectable headings divide related objects
+  into VIP, listener, pool, and Amphora groups; their visible counts update with
+  the active text and status filters.
 - **Other detail is lazy.** Per-object `show` calls used for raw inspection and
   precise reference resolution are fetched only when needed.
 - **A graph, not a tree.** Nodes carry typed **containment** and **reference**

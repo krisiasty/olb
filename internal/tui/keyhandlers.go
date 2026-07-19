@@ -55,11 +55,16 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.PageDown):
 		m.moveCursor(m.visibleRows())
 	case key.Matches(msg, m.keys.Home):
-		m.cursor = 0
+		if first := firstSelectableIndex(m.entries); first >= 0 {
+			m.cursor = first
+		} else {
+			m.cursor = 0
+		}
 		m.ensureVisible()
 	case key.Matches(msg, m.keys.End):
-		m.cursor = len(m.entries) - 1
-		if m.cursor < 0 {
+		if last := lastSelectableIndex(m.entries); last >= 0 {
+			m.cursor = last
+		} else {
 			m.cursor = 0
 		}
 		m.ensureVisible()
@@ -197,16 +202,40 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 }
 
 func (m *Model) moveCursor(delta int) {
-	if len(m.entries) == 0 {
+	if len(m.entries) == 0 || delta == 0 {
 		m.cursor = 0
 		return
 	}
-	m.cursor += delta
+	if m.cursor < 0 || m.cursor >= len(m.entries) || !m.entries[m.cursor].selectable() {
+		m.cursor = nearestSelectableIndex(m.entries, m.cursor)
+	}
 	if m.cursor < 0 {
 		m.cursor = 0
+		return
 	}
-	if m.cursor >= len(m.entries) {
-		m.cursor = len(m.entries) - 1
+	target := m.cursor + delta
+	if target < 0 {
+		target = 0
+	}
+	if target >= len(m.entries) {
+		target = len(m.entries) - 1
+	}
+	direction := 1
+	if delta < 0 {
+		direction = -1
+	}
+	for i := target; i >= 0 && i < len(m.entries); i += direction {
+		if m.entries[i].selectable() {
+			m.cursor = i
+			m.ensureVisible()
+			return
+		}
+	}
+	for i := target - direction; i >= 0 && i < len(m.entries); i -= direction {
+		if m.entries[i].selectable() {
+			m.cursor = i
+			break
+		}
 	}
 	m.ensureVisible()
 }
@@ -214,7 +243,7 @@ func (m *Model) moveCursor(delta int) {
 // openSelected acts on the highlighted row — new navigation into a containment
 // child or along a reference edge, resolving lazily where needed.
 func (m *Model) openSelected() tea.Cmd {
-	if len(m.entries) == 0 {
+	if m.cursor < 0 || m.cursor >= len(m.entries) || !m.entries[m.cursor].selectable() {
 		return nil
 	}
 	e := m.entries[m.cursor]

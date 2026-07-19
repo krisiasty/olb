@@ -116,11 +116,16 @@ func TestResourceNavigationRows(t *testing.T) {
 		if relationAt, targetAt := strings.Index(line, tt.relation), strings.Index(line, tt.target); relationAt < 0 || relationAt >= targetAt {
 			t.Errorf("row should place relation %q before target %q: %q", tt.relation, tt.target, line)
 		}
-		if !strings.HasSuffix(line, "›") {
+		trimmed := strings.TrimRight(line, " ")
+		if !strings.HasSuffix(trimmed, "›") {
 			t.Errorf("row should end with a navigation chevron: %q", line)
 		}
-		if width := len([]rune(line)); width != m.width {
-			t.Errorf("row width = %d, want %d: %q", width, m.width, line)
+		if width := len([]rune(line)); width > m.width {
+			t.Errorf("row width = %d, exceeds terminal width %d: %q", width, m.width, line)
+		}
+		beforeChevron := strings.TrimSuffix(trimmed, "›")
+		if !strings.HasSuffix(beforeChevron, "  ") {
+			t.Errorf("navigation chevron should follow the content directly: %q", line)
 		}
 	}
 
@@ -182,7 +187,7 @@ func lineContaining(view, needle string) string {
 
 func navigationLineContaining(view, needle string) string {
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, needle) && strings.HasSuffix(line, "›") {
+		if strings.Contains(line, needle) && strings.HasSuffix(strings.TrimRight(line, " "), "›") {
 			return line
 		}
 	}

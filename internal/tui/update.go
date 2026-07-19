@@ -648,7 +648,7 @@ func (m *Model) applyLBFloatingIP(msg lbFloatingIPMsg) {
 func (m *Model) captureRefreshSelection() {
 	m.refreshAt = m.loc.id
 	m.refreshCursor = m.cursor
-	m.refreshSelectionOK = m.cursor >= 0 && m.cursor < len(m.entries)
+	m.refreshSelectionOK = m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].selectable()
 	if m.refreshSelectionOK {
 		m.refreshSelection = m.entries[m.cursor].selection()
 	}
@@ -661,20 +661,14 @@ func (m *Model) restoreRefreshSelection() {
 	selected := -1
 	if m.refreshSelectionOK {
 		for i := range m.entries {
-			if m.entries[i].selection().equal(m.refreshSelection) {
+			if m.entries[i].selectable() && m.entries[i].selection().equal(m.refreshSelection) {
 				selected = i
 				break
 			}
 		}
 	}
 	if selected < 0 && len(m.entries) > 0 {
-		selected = m.refreshCursor
-		if selected >= len(m.entries) {
-			selected = len(m.entries) - 1
-		}
-		if selected < 0 {
-			selected = 0
-		}
+		selected = nearestSelectableIndex(m.entries, m.refreshCursor)
 	}
 	if selected >= 0 {
 		m.cursor = selected
@@ -967,6 +961,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 func (m *Model) setLBLocation() {
 	m.loc = location{id: model.LBListIdentity}
 	m.allEntries = lbEntries(m.lbs, m.allProjects)
+	m.entries = nil
 	m.cursor, m.top = 0, 0
 	m.applyFilters()
 }
@@ -982,6 +977,7 @@ func (m *Model) buildNodeLocation(id model.Identity, tree *model.Tree) {
 	}
 	m.loc = location{id: id, node: node, tree: tree}
 	m.allEntries = nodeEntries(node)
+	m.entries = nil
 	m.rawContent, m.rawFormat = "", ""
 	m.cursor, m.top = 0, 0
 	m.applyFilters()
@@ -990,6 +986,12 @@ func (m *Model) buildNodeLocation(id model.Identity, tree *model.Tree) {
 // applyFilters recomputes the visible rows from the substring filter and the
 // status filter, then clamps the cursor.
 func (m *Model) applyFilters() {
+	var selected entrySelection
+	keepSelection := m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].selectable()
+	if keepSelection {
+		selected = m.entries[m.cursor].selection()
+	}
+
 	f := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	var res []entry
 	for _, e := range m.allEntries {
@@ -1001,11 +1003,22 @@ func (m *Model) applyFilters() {
 		}
 		res = append(res, e)
 	}
-	m.entries = res
-	if m.cursor >= len(m.entries) {
-		m.cursor = len(m.entries) - 1
+	if m.isLBOverview() {
+		res = withRelatedGroupHeadings(res)
 	}
-	if m.cursor < 0 {
+	m.entries = res
+	if keepSelection {
+		for i := range m.entries {
+			if m.entries[i].selectable() && m.entries[i].selection().equal(selected) {
+				m.cursor = i
+				m.ensureVisible()
+				return
+			}
+		}
+	}
+	if next := nearestSelectableIndex(m.entries, m.cursor); next >= 0 {
+		m.cursor = next
+	} else {
 		m.cursor = 0
 	}
 	m.ensureVisible()

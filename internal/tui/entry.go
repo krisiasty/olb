@@ -9,7 +9,8 @@ import (
 	"github.com/krisiasty/olb/internal/osclient"
 )
 
-// entryKind classifies a selectable row.
+// entryKind classifies a visible row. Group headings are deliberately not
+// selectable; every other kind is a navigation target.
 type entryKind int
 
 const (
@@ -17,10 +18,11 @@ const (
 	entChild                    // a containment child of the current node
 	entRef                      // an outgoing reference edge ("→")
 	entBackRef                  // an incoming back-reference ("←")
+	entGroup                    // a non-selectable related-object group heading
 )
 
-// entry is one selectable row. enter follows whatever is selected — a
-// containment child or a reference — so there is no separate "jump" key.
+// entry is one visible row. Selectable rows follow their containment child or
+// reference when opened; group headings only divide the related-object list.
 type entry struct {
 	kind entryKind
 
@@ -65,6 +67,8 @@ func (e entry) selection() entrySelection {
 	}
 	return s
 }
+
+func (e entry) selectable() bool { return e.kind != entGroup }
 
 func (s entrySelection) equal(other entrySelection) bool {
 	return s.kind == other.kind &&
@@ -174,6 +178,109 @@ func nodeEntries(n *model.Node) []entry {
 		es = append(es, refEntry(entBackRef, br))
 	}
 	return es
+}
+
+// withRelatedGroupHeadings adds compact, non-selectable boundaries to the LB
+// overview after filtering, so each count reflects only the visible rows.
+func withRelatedGroupHeadings(entries []entry) []entry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]entry, 0, len(entries)+4)
+	for start := 0; start < len(entries); {
+		key, title := relatedObjectGroup(entries[start])
+		end := start + 1
+		for end < len(entries) {
+			nextKey, _ := relatedObjectGroup(entries[end])
+			if nextKey != key {
+				break
+			}
+			end++
+		}
+		out = append(out, entry{kind: entGroup, label: fmt.Sprintf("%s · %d", title, end-start)})
+		out = append(out, entries[start:end]...)
+		start = end
+	}
+	return out
+}
+
+func relatedObjectGroup(e entry) (key, title string) {
+	switch e.kind {
+	case entChild:
+		if e.node != nil {
+			switch e.node.Type {
+			case model.TypeVIP:
+				return "vips", "VIPS"
+			case model.TypeListener:
+				return "listeners", "LISTENERS"
+			case model.TypePool:
+				return "pools", "POOLS"
+			case model.TypeAmphora:
+				return "amphorae", "AMPHORAE"
+			}
+		}
+		return "other", "OTHER"
+	case entRef:
+		return "references", "REFERENCES"
+	case entBackRef:
+		return "referenced-by", "REFERENCED BY"
+	default:
+		return "other", "OTHER"
+	}
+}
+
+func selectableEntryCount(entries []entry) int {
+	count := 0
+	for _, e := range entries {
+		if e.selectable() {
+			count++
+		}
+	}
+	return count
+}
+
+func firstSelectableIndex(entries []entry) int {
+	for i := range entries {
+		if entries[i].selectable() {
+			return i
+		}
+	}
+	return -1
+}
+
+func lastSelectableIndex(entries []entry) int {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].selectable() {
+			return i
+		}
+	}
+	return -1
+}
+
+// nearestSelectableIndex prefers the row at or below cursor, which keeps the
+// first object in a newly inserted group selected. It falls back upward at the
+// end of the list.
+func nearestSelectableIndex(entries []entry, cursor int) int {
+	if len(entries) == 0 {
+		return -1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(entries) {
+		cursor = len(entries) - 1
+	}
+	for i := cursor; i < len(entries); i++ {
+		if entries[i].selectable() {
+			return i
+		}
+	}
+	for i := cursor - 1; i >= 0; i-- {
+		if entries[i].selectable() {
+			return i
+		}
+	}
+	return -1
 }
 
 func relatedObjectRank(t model.NodeType) int {

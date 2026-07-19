@@ -105,9 +105,9 @@ func (m Model) subtitleLine() string {
 	return m.clip(strings.Join(parts, m.st.statusBar.Render("  ·  ")))
 }
 
-// visibleRows is the number of selectable rows the body can show. The
+// visibleRows is the number of resource-list lines the body can show. The
 // load-balancer list is rendered as a table, so it gives up one line to the
-// column header.
+// column header; LB overview group headings occupy list lines of their own.
 func (m Model) visibleRows() int {
 	h := m.bodyHeight()
 	if m.isLBOverview() {
@@ -194,10 +194,16 @@ func (m Model) lbOverviewParts(h int) (summary []string, relatedHeight int) {
 		return nil, 0
 	}
 	minRelated := 1
-	if len(m.entries) > 1 {
-		minRelated = len(m.entries)
-		if minRelated > 3 {
-			minRelated = 3
+	if len(m.entries) > 0 {
+		selectable := 0
+		for i, e := range m.entries {
+			if e.selectable() {
+				selectable++
+			}
+			minRelated = i + 1
+			if selectable == 3 {
+				break
+			}
 		}
 	}
 	if minRelated > h-fixedChrome {
@@ -222,9 +228,11 @@ func (m Model) lbOverviewLines(h int) []string {
 		lines = append(lines, "") // permanent separation before related objects
 	}
 	if len(lines) < h {
-		title := fmt.Sprintf("RELATED OBJECTS · %d", len(m.entries))
-		if len(m.entries) != len(m.allEntries) {
-			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", len(m.entries), len(m.allEntries))
+		visibleCount := selectableEntryCount(m.entries)
+		allCount := selectableEntryCount(m.allEntries)
+		title := fmt.Sprintf("RELATED OBJECTS · %d", visibleCount)
+		if visibleCount != allCount {
+			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", visibleCount, allCount)
 		}
 		lbID := m.loc.node.ID
 		title = m.overviewPanelTitle(title, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
@@ -535,6 +543,9 @@ func (m Model) lbTableLines(h int) []string {
 }
 
 func (m Model) renderRow(e entry, sel bool) string {
+	if e.kind == entGroup {
+		return m.clip(m.st.groupHeading.Render("── " + e.label))
+	}
 	eff := e.oper
 	if eff == "" {
 		eff = e.prov
@@ -553,7 +564,11 @@ func (m Model) renderRow(e entry, sel bool) string {
 
 	relationWidth := m.navigationRelationWidth()
 	relationCell := padRight(relation, relationWidth)
-	plain := navigationMarker(e) + relationCell + "  " + target
+	indent := ""
+	if m.isLBOverview() {
+		indent = "  "
+	}
+	plain := indent + navigationMarker(e) + relationCell + "  " + target
 	if extra != "" {
 		plain += "  " + extra
 	}
@@ -575,7 +590,7 @@ func (m Model) renderRow(e entry, sel bool) string {
 	default:
 		marker = lipgloss.NewStyle().Foreground(statusColor(eff)).Render("●") + " "
 	}
-	seg := marker + m.st.panelLabel.Render(relationCell) + "  " + target
+	seg := indent + marker + m.st.panelLabel.Render(relationCell) + "  " + target
 	if extra != "" {
 		seg += "  " + m.st.attrs.Render(extra)
 	}
@@ -692,6 +707,9 @@ func navigationMarker(e entry) string {
 func (m Model) navigationRelationWidth() int {
 	w := 0
 	for _, e := range m.entries {
+		if !e.selectable() {
+			continue
+		}
 		if n := len([]rune(navigationRelation(e))); n > w {
 			w = n
 		}
@@ -718,7 +736,8 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", padding)
 }
 
-// navigationChevron places a consistent open affordance at the right edge.
+// navigationChevron keeps the open affordance next to the row content. A
+// terminal-wide gap makes heterogeneous resource links look like a table.
 func navigationChevron(s string, width int) string {
 	if width <= 0 {
 		return s + "  ›"
@@ -729,8 +748,8 @@ func navigationChevron(s string, width int) string {
 	if width == 2 {
 		return " ›"
 	}
-	s = clipRunes(s, width-2)
-	return s + strings.Repeat(" ", width-len([]rune(s))-1) + "›"
+	s = clipRunes(s, width-3)
+	return s + "  ›"
 }
 
 func navigationStyledChevron(s string, width int, chevronStyle lipgloss.Style) string {
@@ -743,8 +762,11 @@ func navigationStyledChevron(s string, width int, chevronStyle lipgloss.Style) s
 	if width == 2 {
 		return " " + chevronStyle.Render("›")
 	}
-	s = lipgloss.NewStyle().MaxWidth(width - 2).Render(s)
-	return s + strings.Repeat(" ", width-lipgloss.Width(s)-1) + chevronStyle.Render("›")
+	if width == 3 {
+		return "  " + chevronStyle.Render("›")
+	}
+	s = lipgloss.NewStyle().MaxWidth(width - 3).Render(s)
+	return s + "  " + chevronStyle.Render("›")
 }
 
 func (m Model) flashLine() string {

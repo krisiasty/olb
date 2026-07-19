@@ -443,6 +443,85 @@ func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
 	}
 }
 
+func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+
+	pools, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: pools})
+	amphorae, err := m.backend.ListAmphorae(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, amphoraeMsg{lbID: "lb-1", nodes: amphorae})
+
+	var headings []string
+	for _, e := range m.entries {
+		if e.kind == entGroup {
+			headings = append(headings, e.label)
+		}
+	}
+	wantHeadings := []string{"VIPS · 2", "LISTENERS · 1", "POOLS · 2", "AMPHORAE · 2"}
+	if strings.Join(headings, ",") != strings.Join(wantHeadings, ",") {
+		t.Fatalf("related-object headings = %v, want %v", headings, wantHeadings)
+	}
+	if got := selectableEntryCount(m.entries); got != 7 {
+		t.Fatalf("selectable related objects = %d, want 7", got)
+	}
+	if m.entries[m.cursor].kind == entGroup {
+		t.Fatal("initial cursor landed on a group heading")
+	}
+
+	first := m.cursor
+	m = upd(t, m, press("up"))
+	if m.cursor != first {
+		t.Fatalf("up from first object moved cursor to %d, want %d", m.cursor, first)
+	}
+	m = upd(t, m, press("down"))
+	if m.entries[m.cursor].node == nil || m.entries[m.cursor].node.Attrs["vip_kind"] != "additional" {
+		t.Fatalf("first down should select the additional VIP, got %+v", m.entries[m.cursor])
+	}
+	m = upd(t, m, press("down"))
+	if m.entries[m.cursor].node == nil || m.entries[m.cursor].node.Type != model.TypeListener {
+		t.Fatalf("second down should skip the listener heading, got %+v", m.entries[m.cursor])
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.entries[m.cursor].kind == entGroup || m.entries[m.cursor].node.Type != model.TypeAmphora {
+		t.Fatalf("end should select the final Amphora, got %+v", m.entries[m.cursor])
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.cursor != first {
+		t.Fatalf("home selected row %d, want first object at %d", m.cursor, first)
+	}
+
+	m.filter.SetValue("listener:http")
+	m.cursor = 0
+	m.applyFilters()
+	if len(m.entries) != 2 || m.entries[0].kind != entGroup || m.entries[0].label != "LISTENERS · 1" ||
+		m.entries[1].node == nil || m.entries[1].node.Type != model.TypeListener {
+		t.Fatalf("filtered related rows = %v, want listener heading and one listener", labels(m))
+	}
+	if m.cursor != 1 {
+		t.Fatalf("filtered cursor = %d, want selectable row 1", m.cursor)
+	}
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	if strings.Contains(plain, "VIPS ·") || strings.Contains(plain, "POOLS ·") || strings.Contains(plain, "AMPHORAE ·") {
+		t.Fatalf("empty filtered groups should be omitted:\n%s", plain)
+	}
+	if heading := lineContaining(plain, "LISTENERS · 1"); !strings.HasPrefix(heading, "── ") {
+		t.Fatalf("group heading should render as a panel-aligned divider: %q", heading)
+	}
+	if listener := navigationLineContaining(plain, "http"); !strings.HasPrefix(listener, "  ●") {
+		t.Fatalf("related object should be indented below its group: %q", listener)
+	}
+	if line := lineContaining(plain, "RELATED OBJECTS"); !strings.Contains(line, "1/7") {
+		t.Fatalf("filtered related-object count should exclude headings: %q", line)
+	}
+}
+
 func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // into LB

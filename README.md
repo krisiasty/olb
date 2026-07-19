@@ -94,7 +94,8 @@ status fields, and issue counts throughout the TUI.
 - **Load-balancer overview.** Opening an LB immediately shows a responsive
   details/stats dashboard above its selectable related objects. Details include
   the owning project name and ID, which disambiguates LBs opened from the global
-  scope, and show the primary VIP with its associated floating IP when one
+  scope, the flavor ID, creation/update timestamps, an optional non-empty
+  description, and the primary VIP with its associated floating IP when one
   exists. Additional VIPs are selectable related objects; because all VIPs
   share one Neutron port, floating IPs are matched to them by fixed address. Full
   LB config and traffic counters load independently; Amphora-backed LBs also

@@ -1057,6 +1057,13 @@ func (m *Model) ensureVisible() {
 	if m.top < 0 {
 		m.top = 0
 	}
+	maxTop := len(m.entries) - h
+	if maxTop < 0 {
+		maxTop = 0
+	}
+	if m.top > maxTop {
+		m.top = maxTop
+	}
 }
 
 // setFlash sets the transient status line and schedules its clearing.

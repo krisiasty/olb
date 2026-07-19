@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/compute/v2/servers"
@@ -236,6 +238,12 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Attrs["provider"] = lb.Provider
 		res.Attrs["vip_address"] = lb.VipAddress
 		res.Attrs["admin_state_up"] = boolStr(lb.AdminStateUp)
+		res.Attrs["flavor_id"] = lb.FlavorID
+		res.Attrs["created_at"] = formatAPITime(lb.CreatedAt)
+		res.Attrs["updated_at"] = formatAPITime(lb.UpdatedAt)
+		if description := strings.TrimSpace(lb.Description); description != "" {
+			res.Attrs["description"] = description
+		}
 		res.Raw = innerRaw(r.Body, "loadbalancer")
 
 	case model.TypeListener:
@@ -562,4 +570,11 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func formatAPITime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }

@@ -86,6 +86,9 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["provider"] = "amphora"
 		res.Attrs["vip_address"] = "203.0.113.9"
 		res.Attrs["admin_state_up"] = "true"
+		res.Attrs["flavor_id"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
+		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
 	case model.TypeListener:
 		res.IsListener = true
 		res.ListenerDefaultPoolID = "pool-1"
@@ -390,7 +393,7 @@ func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
 	fields := statFieldValues(m.lbStatFields())
 	for label, want := range map[string]string{
 		"Active connections": "1,234",
-		"Connections":        "10,000",
+		"Total connections":  "10,000",
 		"Request errors":     "2",
 		"Bytes in":           "1.5 KiB",
 		"Bytes out":          "1 MiB",
@@ -413,7 +416,7 @@ func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
 	fields = statFieldValues(m.lbStatFields())
 	for label, want := range map[string]string{
 		"Active connections": "1,300",
-		"Connections":        "10,015 (+3/s)",
+		"Total connections":  "10,015 (+3/s)",
 		"Request errors":     "7 (+5)",
 		"Bytes in":           "11.5 KiB (2 KiB/s)",
 		"Bytes out":          "6 MiB (1 MiB/s)",
@@ -435,7 +438,7 @@ func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
 		},
 	})
 	fields = statFieldValues(m.lbStatFields())
-	for _, label := range []string{"Connections", "Request errors", "Bytes in", "Bytes out"} {
+	for _, label := range []string{"Total connections", "Request errors", "Bytes in", "Bytes out"} {
 		if strings.Contains(fields[label], "(") {
 			t.Errorf("reset %s should not show a rate: %q", label, fields[label])
 		}
@@ -704,6 +707,9 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
 		res: osclient.DetailResult{Raw: map[string]any{"id": "lb-1"}, Attrs: map[string]string{
 			"provider": "amphora", "vip_address": "203.0.113.9", "admin_state_up": "true",
+			"flavor_id":  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"created_at": "2026-07-18T10:15:30Z", "updated_at": "2026-07-19T11:20:45Z",
+			"description": "production ingress",
 		}},
 	})
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
@@ -727,9 +733,35 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 		t.Fatalf("additional VIP row should identify the relation and its own floating IP: %q", additionalVIPRow)
 	}
 	fields := m.lbDetailFields()
-	admin := fields[len(fields)-1]
+	values := map[string]string{}
+	for _, field := range fields {
+		values[field.label] = field.value
+	}
+	for label, want := range map[string]string{
+		"Description": "production ingress",
+		"Flavor ID":   "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"Created":     "2026-07-18 10:15:30 UTC",
+		"Updated":     "2026-07-19 11:20:45 UTC",
+	} {
+		if got := values[label]; got != want {
+			t.Errorf("LB detail %s = %q, want %q", label, got, want)
+		}
+	}
+	var admin overviewField
+	for _, field := range fields {
+		if field.label == "Admin state" {
+			admin = field
+			break
+		}
+	}
 	if admin.label != "Admin state" || admin.value != "ENABLED" || !admin.status {
 		t.Fatalf("admin state should use status formatting, got %+v", admin)
+	}
+	delete(m.loc.node.Attrs, "description")
+	for _, field := range m.lbDetailFields() {
+		if field.label == "Description" {
+			t.Fatal("empty descriptions should be omitted from LB details")
+		}
 	}
 	if got := string(statusColor("ENABLED")); got != "42" {
 		t.Fatalf("ENABLED color = %q, want green (42)", got)
@@ -763,6 +795,25 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	// i / n copy the standing object's id / name (print mode, no stdout write).
 	m = upd(t, m, press("i"))
 	m = upd(t, m, press("n"))
+}
+
+func TestDisplayTimestampIsHumanReadableUTC(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "UTC", value: "2026-07-19T11:20:45Z", want: "2026-07-19 11:20:45 UTC"},
+		{name: "offset", value: "2026-07-19T13:20:45+02:00", want: "2026-07-19 11:20:45 UTC"},
+		{name: "empty", want: "—"},
+		{name: "unknown format", value: "recently", want: "recently"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayTimestamp(tc.value); got != tc.want {
+				t.Fatalf("displayTimestamp(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestHelpIncludesStatusColoredLegend(t *testing.T) {

@@ -341,17 +341,26 @@ func (m Model) lbDetailFields() []overviewField {
 		projectID = m.loc.tree.Meta.ProjectID
 		projectName = m.loc.tree.Meta.ProjectName
 	}
-	return []overviewField{
+	fields := []overviewField{
 		{label: "Name", value: name},
 		{label: "ID", value: n.ID},
 		{label: "Project name", value: displayValue(projectName)},
 		{label: "Project ID", value: displayValue(projectID)},
-		{label: "Primary VIP", value: displayValue(vip)},
-		{label: "Provider", value: displayValue(n.Attrs["provider"])},
-		{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
-		{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
-		{label: "Admin state", value: adminStateLabel(adminState), status: true},
 	}
+	if description := strings.TrimSpace(n.Attrs["description"]); description != "" {
+		fields = append(fields, overviewField{label: "Description", value: description})
+	}
+	fields = append(fields,
+		overviewField{label: "Primary VIP", value: displayValue(vip)},
+		overviewField{label: "Provider", value: displayValue(n.Attrs["provider"])},
+		overviewField{label: "Flavor ID", value: displayValue(n.Attrs["flavor_id"])},
+		overviewField{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		overviewField{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		overviewField{label: "Admin state", value: adminStateLabel(adminState), status: true},
+		overviewField{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+		overviewField{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+	)
+	return fields
 }
 
 func (m Model) loadingLabel() string {
@@ -416,7 +425,7 @@ func (m Model) lbStatFields() []overviewField {
 	}
 	return []overviewField{
 		{label: "Active connections", value: value("active_connections", false)},
-		{label: "Connections", value: withSignedRate("total_connections")},
+		{label: "Total connections", value: withSignedRate("total_connections")},
 		{label: "Request errors", value: withDelta("request_errors")},
 		{label: "Bytes in", value: withByteRate("bytes_in")},
 		{label: "Bytes out", value: withByteRate("bytes_out")},
@@ -490,6 +499,17 @@ func displayValue(value string) string {
 		return "—"
 	}
 	return value
+}
+
+func displayTimestamp(value string) string {
+	if value == "" {
+		return "—"
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
 func limitLines(lines []string, limit int) []string {

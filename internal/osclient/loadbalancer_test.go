@@ -2,10 +2,22 @@ package osclient
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
 )
+
+func TestFormatAPITimeUsesUTCAndOmitsZeroValue(t *testing.T) {
+	if got := formatAPITime(time.Time{}); got != "" {
+		t.Fatalf("zero API time = %q, want empty", got)
+	}
+
+	value := time.Date(2026, time.July, 19, 13, 20, 45, 987_000_000, time.FixedZone("CEST", 2*60*60))
+	if got, want := formatAPITime(value), "2026-07-19T11:20:45Z"; got != want {
+		t.Fatalf("formatted API time = %q, want %q", got, want)
+	}
+}
 
 func TestFilterLoadBalancersCanReturnToOriginalAllProjectsList(t *testing.T) {
 	all := []LB{

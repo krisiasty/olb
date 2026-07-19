@@ -102,8 +102,10 @@ reference jump.
   `HTTPS/8443 (TLS termination)`, always using the listener's actual protocol
   port, so duplicate listener names remain legible.
   Pool rows similarly include protocol, a readable balancing algorithm, and
-  member count, for example `HTTP · round robin · 4 members`; duplicate sibling
-  names gain a short ID suffix. Non-selectable headings divide related objects
+  member and listener-attachment counts, for example
+  `HTTP · round robin · 4 members · 2 listeners`; duplicate sibling names gain
+  a short ID suffix. A zero-listener count makes unattached pools explicit.
+  Non-selectable headings divide related objects
   into VIP, listener, pool, and Amphora groups; their visible counts update with
   the active text and status filters.
 - **Other detail is lazy.** Per-object `show` calls used for raw inspection and

@@ -460,6 +460,7 @@ func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
 				replacement.SetAttr("protocol", child.Attrs["protocol"])
 				replacement.SetAttr("lb_algorithm", child.Attrs["lb_algorithm"])
 				replacement.SetAttr("member_count", child.Attrs["member_count"])
+				replacement.SetAttr("listener_count", child.Attrs["listener_count"])
 			}
 		}
 	}
@@ -832,7 +833,14 @@ func (m *Model) applyPoolSummaries(lbID string, items map[string]osclient.PoolSu
 			memberCount = item.MemberCount
 		}
 		pool.SetAttr("member_count", fmt.Sprintf("%d", memberCount))
+		listenerIDs := map[string]struct{}{}
 		for _, listenerID := range item.ListenerIDs {
+			if listenerID != "" {
+				listenerIDs[listenerID] = struct{}{}
+			}
+		}
+		pool.SetAttr("listener_count", fmt.Sprintf("%d", len(listenerIDs)))
+		for listenerID := range listenerIDs {
 			if listener := tree.Node(listenerID); listener != nil {
 				listener.AddRef("pool", pool)
 			}

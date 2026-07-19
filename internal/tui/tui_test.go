@@ -1180,7 +1180,7 @@ func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
 	}
 }
 
-func TestPoolRowsShowProtocolAlgorithmAndMemberCount(t *testing.T) {
+func TestPoolRowsShowProtocolAlgorithmMemberAndListenerCounts(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	items, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
@@ -1189,17 +1189,24 @@ func TestPoolRowsShowProtocolAlgorithmAndMemberCount(t *testing.T) {
 	}
 	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: items})
 	view := ansiRE.ReplaceAllString(m.View(), "")
-	line := navigationLineContaining(view, "HTTP · round robin · 1 member")
+	line := navigationLineContaining(view, "HTTP · round robin · 1 member · 1 listener")
 	if line == "" || !strings.Contains(line, "web (pool-1)") {
 		t.Fatalf("pool row should combine name and diagnostic summary:\n%s", view)
 	}
-	duplicate := navigationLineContaining(view, "TCP · least connections · 4 members")
+	duplicate := navigationLineContaining(view, "TCP · least connections · 4 members · 0 listeners")
 	if duplicate == "" || !strings.Contains(duplicate, "web (pool-2)") {
 		t.Fatalf("duplicate pool names should include a short ID:\n%s", view)
 	}
 
-	if got := poolSummary("TCP", "LEAST_CONNECTIONS", "4"); got != "TCP · least connections · 4 members" {
+	if got := poolSummary("TCP", "LEAST_CONNECTIONS", "4", "2"); got != "TCP · least connections · 4 members · 2 listeners" {
 		t.Fatalf("poolSummary = %q", got)
+	}
+
+	shared := items["pool-1"]
+	shared.ListenerIDs = []string{"lsn-1", "lsn-2", "lsn-2"}
+	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: map[string]osclient.PoolSummary{"pool-1": shared}})
+	if got := m.loc.tree.Node("pool-1").Attrs["listener_count"]; got != "2" {
+		t.Fatalf("pool listener count = %q, want 2 distinct attachments", got)
 	}
 }
 

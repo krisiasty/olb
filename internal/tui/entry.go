@@ -329,7 +329,11 @@ func inlineAttrs(n *model.Node) string {
 	case model.TypeListener:
 		return listenerSummary(n)
 	case model.TypePool:
-		return poolSummary(n.Attrs["protocol"], n.Attrs["lb_algorithm"], n.Attrs["member_count"])
+		listenerCount := n.Attrs["listener_count"]
+		if listenerCount == "" {
+			listenerCount = fmt.Sprintf("%d", poolListenerAttachmentCount(n))
+		}
+		return poolSummary(n.Attrs["protocol"], n.Attrs["lb_algorithm"], n.Attrs["member_count"], listenerCount)
 	case model.TypeMember:
 		return joinAttrs(n, "address", "port")
 	case model.TypeHealthMonitor:
@@ -382,7 +386,17 @@ func listenerEndpoint(protocol, port string) string {
 	return endpoint
 }
 
-func poolSummary(protocol, algorithm, memberCount string) string {
+func poolListenerAttachmentCount(n *model.Node) int {
+	listenerIDs := map[string]struct{}{}
+	for _, ref := range n.BackRefs {
+		if ref.TargetType == model.TypeListener && ref.TargetID != "" {
+			listenerIDs[ref.TargetID] = struct{}{}
+		}
+	}
+	return len(listenerIDs)
+}
+
+func poolSummary(protocol, algorithm, memberCount, listenerCount string) string {
 	var parts []string
 	if protocol = strings.ToUpper(strings.TrimSpace(protocol)); protocol != "" {
 		parts = append(parts, protocol)
@@ -396,6 +410,13 @@ func poolSummary(protocol, algorithm, memberCount string) string {
 			label = "member"
 		}
 		parts = append(parts, memberCount+" "+label)
+	}
+	if listenerCount = strings.TrimSpace(listenerCount); listenerCount != "" {
+		label := "listeners"
+		if listenerCount == "1" {
+			label = "listener"
+		}
+		parts = append(parts, listenerCount+" "+label)
 	}
 	return strings.Join(parts, " · ")
 }

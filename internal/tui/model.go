@@ -98,6 +98,8 @@ type Model struct {
 	lbStatsLoading     map[string]bool
 	lbDetailErr        map[string]string
 	lbStatsErr         map[string]string
+	lbRelatedErr       map[string]string
+	lbFreshness        map[string]overviewFreshness
 	lbFIPLoading       map[string]bool
 	lbFIPLoaded        map[string]bool
 	lbAmphoraLoading   map[string]bool
@@ -153,6 +155,7 @@ type Model struct {
 	project     osclient.ProjectInfo
 	allProjects bool // listing across all accessible projects
 	quitting    bool
+	clock       func() time.Time
 }
 
 // New builds the root model. backend must be authenticated.
@@ -196,6 +199,8 @@ func New(backend Backend, cfg Config) Model {
 		lbStatsLoading:     map[string]bool{},
 		lbDetailErr:        map[string]string{},
 		lbStatsErr:         map[string]string{},
+		lbRelatedErr:       map[string]string{},
+		lbFreshness:        map[string]overviewFreshness{},
 		lbFIPLoading:       map[string]bool{},
 		lbFIPLoaded:        map[string]bool{},
 		lbAmphoraLoading:   map[string]bool{},
@@ -208,11 +213,12 @@ func New(backend Backend, cfg Config) Model {
 		autoIntervalIndex:  defaultAutoRefreshIntervalIndex,
 		autoGeneration:     1,
 		autoStatsLoading:   map[string]bool{},
+		clock:              time.Now,
 	}
 }
 
 // Init loads the initial load balancer list.
 func (m Model) Init() tea.Cmd {
 	m.hist.navigate(histEntry{id: model.LBListIdentity})
-	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), m.scheduleAutoRefresh())
+	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), m.scheduleAutoRefresh(), freshnessTickCmd())
 }

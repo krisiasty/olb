@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
@@ -225,7 +226,9 @@ func (m Model) lbOverviewLines(h int) []string {
 		if len(m.entries) != len(m.allEntries) {
 			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", len(m.entries), len(m.allEntries))
 		}
-		lines = append(lines, m.clip(m.st.title.Render(title)))
+		lbID := m.loc.node.ID
+		title = m.overviewPanelTitle(title, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated))
+		lines = append(lines, m.clip(title))
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
 	for len(lines) < h {
@@ -252,8 +255,9 @@ func (m Model) lbOverviewSummary(budget int) []string {
 	// A full refresh is already announced in the subtitle and keeps the last
 	// committed panel values visible. Per-panel loading labels would duplicate
 	// that status and make the retained values look unavailable.
-	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[m.loc.node.ID], m.lbDetailErr[m.loc.node.ID])
-	statsTitle := m.overviewPanelTitle("STATS", !m.refreshing && m.lbStatsLoading[m.loc.node.ID], m.lbStatsErr[m.loc.node.ID])
+	lbID := m.loc.node.ID
+	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[lbID], m.lbDetailErr[lbID], m.updatedAt(lbID, sectionDetails))
+	statsTitle := m.overviewPanelTitle("STATS", !m.refreshing && m.lbStatsLoading[lbID], m.lbStatsErr[lbID], m.updatedAt(lbID, sectionStats))
 
 	if m.width >= 90 {
 		limit := budget - 1
@@ -380,9 +384,14 @@ func (m Model) lbStatFields() []overviewField {
 	}
 }
 
-func (m Model) overviewPanelTitle(title string, loading bool, errText string) string {
+func (m Model) overviewPanelTitle(title string, loading bool, errText string, updatedAt time.Time) string {
 	state := ""
-	if loading {
+	if freshness := m.freshnessLabel(updatedAt); freshness != "" {
+		state = " · " + m.st.disabled.Render(freshness)
+		if errText != "" {
+			state += " · " + m.st.flashErr.Render("stale")
+		}
+	} else if loading {
 		state = " · " + m.st.disabled.Render("loading…")
 	} else if errText != "" {
 		state = " · " + m.st.flashErr.Render("unavailable")

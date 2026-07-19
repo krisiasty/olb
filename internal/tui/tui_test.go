@@ -100,7 +100,7 @@ func (f *fakeBackend) LBStats(context.Context, string) (map[string]any, error) {
 
 func (f *fakeBackend) ListListenerSummaries(context.Context, string) (map[string]osclient.ListenerSummary, error) {
 	return map[string]osclient.ListenerSummary{
-		"lsn-1": {ID: "lsn-1", Protocol: "TERMINATED_HTTPS", ProtocolPort: 443},
+		"lsn-1": {ID: "lsn-1", Protocol: "TERMINATED_HTTPS", ProtocolPort: 8443},
 	}, nil
 }
 
@@ -734,6 +734,116 @@ func TestLBOverviewPanelsFailIndependently(t *testing.T) {
 	}
 }
 
+func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
+		res: osclient.DetailResult{Attrs: map[string]string{"admin_state_up": "true"}},
+	})
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
+
+	now = now.Add(2 * time.Second)
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", automatic: true,
+		stats: map[string]any{"active_connections": 2},
+	})
+	now = now.Add(10 * time.Second)
+	m = upd(t, m, tea.WindowSizeMsg{Width: 60, Height: 30})
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for title, want := range map[string]string{
+		"DETAILS":         "updated 12s ago",
+		"STATS":           "updated 10s ago",
+		"RELATED OBJECTS": "updated 12s ago",
+	} {
+		if line := lineContaining(view, title); !strings.Contains(line, want) {
+			t.Errorf("%s freshness line = %q, want %q", title, line, want)
+		}
+	}
+
+	// The local freshness tick only redraws elapsed labels; it does not start a
+	// refresh or mutate any completion timestamp.
+	now = now.Add(time.Second)
+	next, cmd := m.Update(freshnessTickMsg{})
+	m = next.(Model)
+	if cmd == nil || m.loading || m.refreshing {
+		t.Fatal("freshness tick should reschedule only its local redraw timer")
+	}
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	for title, want := range map[string]string{
+		"DETAILS":         "updated 13s ago",
+		"STATS":           "updated 11s ago",
+		"RELATED OBJECTS": "updated 13s ago",
+	} {
+		if line := lineContaining(view, title); !strings.Contains(line, want) {
+			t.Errorf("aged %s freshness line = %q, want %q", title, line, want)
+		}
+	}
+
+	if listener, ok := m.selectLabel("listener:http"); ok {
+		m.cursor = listener
+	} else {
+		t.Fatal("test LB has no listener row")
+	}
+	m = updExec(t, m, press("enter"))
+	now = now.Add(2 * time.Second)
+	m = updExec(t, m, press("esc"))
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	if line := lineContaining(view, "DETAILS"); !strings.Contains(line, "updated 15s ago") {
+		t.Errorf("cached navigation reset details freshness: %q", line)
+	}
+	if line := lineContaining(view, "STATS"); !strings.Contains(line, "updated 13s ago") {
+		t.Errorf("cached navigation reset stats freshness: %q", line)
+	}
+}
+
+func TestFailedRefreshRetainsTimestampsAndMarksSectionsStale(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
+		res: osclient.DetailResult{Attrs: map[string]string{"admin_state_up": "true"}},
+	})
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
+
+	now = now.Add(12 * time.Second)
+	m.refreshing = true
+	m.refreshLBID = "lb-1"
+	m.refreshPoolsExpected = true
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview, refresh: true,
+		err: errors.New("detail refresh failed"),
+	})
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", refresh: true,
+		stats: map[string]any{"active_connections": 9},
+	})
+	m = upd(t, m, poolSummariesMsg{
+		lbID: "lb-1", refresh: true, err: errors.New("pool refresh failed"),
+	})
+	m = upd(t, m, tea.WindowSizeMsg{Width: 60, Height: 30})
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, title := range []string{"DETAILS", "RELATED OBJECTS"} {
+		line := lineContaining(view, title)
+		if !strings.Contains(line, "updated 12s ago") || !strings.Contains(line, "stale") || strings.Contains(line, "unavailable") {
+			t.Errorf("failed %s refresh should retain age and mark stale: %q", title, line)
+		}
+	}
+	statsLine := lineContaining(view, "STATS")
+	if !strings.Contains(statsLine, "updated now") || strings.Contains(statsLine, "stale") {
+		t.Errorf("successful stats refresh should have independent freshness: %q", statsLine)
+	}
+	if !strings.Contains(view, "Active connections") || !strings.Contains(view, "9") {
+		t.Fatalf("successful stats value was not committed with partial refresh:\n%s", view)
+	}
+}
+
 func TestHistoryBackForwardAndTruncation(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // LB
@@ -890,7 +1000,7 @@ func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
 	}
 	m = upd(t, m, listenerSummariesMsg{lbID: "lb-1", items: items})
 	view := ansiRE.ReplaceAllString(m.View(), "")
-	line := navigationLineContaining(view, "HTTPS/443 (TLS termination) · 1 pool")
+	line := navigationLineContaining(view, "HTTPS/8443 (TLS termination) · 1 pool")
 	if line == "" || !strings.Contains(line, "http") {
 		t.Fatalf("listener row should combine name, normalized endpoint, and pool count:\n%s", view)
 	}
@@ -902,7 +1012,7 @@ func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
 	}{
 		{protocol: "TCP", port: "443", want: "TCP/443"},
 		{protocol: "HTTP", port: "80", want: "HTTP/80"},
-		{protocol: "TERMINATED_HTTPS", port: "443", want: "HTTPS/443 (TLS termination)"},
+		{protocol: "TERMINATED_HTTPS", port: "8443", want: "HTTPS/8443 (TLS termination)"},
 	} {
 		if got := listenerEndpoint(tc.protocol, tc.port); got != tc.want {
 			t.Errorf("listenerEndpoint(%q, %q) = %q, want %q", tc.protocol, tc.port, got, tc.want)
@@ -911,7 +1021,7 @@ func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
 
 	listener := m.loc.tree.Node("lsn-1")
 	listener.AddRef("alternate pool", model.NewNode(model.TypePool, "pool-2", "alternate"))
-	if got := listenerSummary(listener); got != "HTTPS/443 (TLS termination) · 2 pools" {
+	if got := listenerSummary(listener); got != "HTTPS/8443 (TLS termination) · 2 pools" {
 		t.Fatalf("listenerSummary with two associated pools = %q", got)
 	}
 }

@@ -66,6 +66,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onAutoStatsTick(msg)
 	case autoFullTickMsg:
 		return m.onAutoFullTick(msg)
+	case freshnessTickMsg:
+		return m, freshnessTickCmd()
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
@@ -115,12 +117,19 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			return m, m.setFlash("this object was deleted since you last viewed it", true)
 		}
 		if wasRefresh {
+			refreshErr := msg.err.Error()
+			m.lbDetailErr[msg.lbID] = refreshErr
+			m.lbStatsErr[msg.lbID] = refreshErr
+			m.lbRelatedErr[msg.lbID] = refreshErr
 			return m, m.finishRefresh("refresh: " + msg.err.Error())
 		}
 		return m, m.setFlash("load tree: "+msg.err.Error(), true)
 	}
 	if wasRefresh {
 		m.preserveLBOverview(msg.lbID, msg.tree)
+	} else {
+		delete(m.lbRelatedErr, msg.lbID)
+		m.markFresh(msg.lbID, sectionRelated)
 	}
 	m.cache.Put(msg.lbID, msg.tree)
 	if ok && cur.id.OwningLBID == msg.lbID {
@@ -130,6 +139,8 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			if m.loc.node != nil && m.loc.node.Type == model.TypeLoadBalancer {
 				return m, m.reloadLBOverview()
 			}
+			delete(m.lbRelatedErr, msg.lbID)
+			m.markFresh(msg.lbID, sectionRelated)
 			return m, m.finishRefresh("")
 		}
 		return m, m.loadLBOverview()
@@ -166,6 +177,7 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
+		m.markFresh(msg.lbID, sectionDetails)
 		return m, nil
 	}
 	return m, m.openInspect(node, msg.intent)
@@ -222,6 +234,7 @@ func (m Model) onStats(msg statsMsg) (tea.Model, tea.Cmd) {
 	}
 	delete(m.lbStatsErr, msg.lbID)
 	m.lbStats[msg.lbID] = msg.stats
+	m.markFresh(msg.lbID, sectionStats)
 	return m, nil
 }
 
@@ -236,6 +249,9 @@ func (m Model) onLBFloatingIP(msg lbFloatingIPMsg) (tea.Model, tea.Cmd) {
 	delete(m.lbFIPLoading, msg.lbID)
 	m.lbFIPLoaded[msg.lbID] = true
 	m.applyLBFloatingIP(msg)
+	if msg.err == nil {
+		m.markFresh(msg.lbID, sectionRelated)
+	}
 	return m, nil
 }
 
@@ -251,6 +267,7 @@ func (m Model) onListenerSummaries(msg listenerSummariesMsg) (tea.Model, tea.Cmd
 	m.lbListenersLoaded[msg.lbID] = true
 	if msg.err == nil {
 		m.applyListenerSummaries(msg.lbID, msg.items)
+		m.markFresh(msg.lbID, sectionRelated)
 	}
 	return m, nil
 }
@@ -267,6 +284,7 @@ func (m Model) onPoolSummaries(msg poolSummariesMsg) (tea.Model, tea.Cmd) {
 	m.lbPoolsLoaded[msg.lbID] = true
 	if msg.err == nil {
 		m.applyPoolSummaries(msg.lbID, msg.items)
+		m.markFresh(msg.lbID, sectionRelated)
 	}
 	return m, nil
 }
@@ -446,7 +464,7 @@ func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
 }
 
 // commitLBRefresh atomically publishes the detail and stats responses. Failed
-// halves retain their old data and mark the corresponding panel unavailable.
+// sections retain their old data, completion timestamp, and a stale marker.
 func (m *Model) commitLBRefresh() tea.Cmd {
 	if m.refreshDetail == nil || m.refreshStats == nil ||
 		(m.refreshFIPExpected && m.refreshFIP == nil) ||
@@ -472,6 +490,7 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 	} else {
 		delete(m.lbDetailErr, lbID)
 		m.applyDetailResult(detail)
+		m.markFresh(lbID, sectionDetails)
 	}
 	if stats.err != nil {
 		m.lbStatsErr[lbID] = stats.err.Error()
@@ -479,22 +498,32 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 	} else {
 		delete(m.lbStatsErr, lbID)
 		m.lbStats[lbID] = stats.stats
+		m.markFresh(lbID, sectionStats)
 	}
+	var relatedFailures []string
 	if m.refreshFIPExpected {
 		m.lbFIPLoaded[lbID] = true
-		m.applyLBFloatingIP(*m.refreshFIP)
+		if m.refreshFIP.err == nil {
+			m.applyLBFloatingIP(*m.refreshFIP)
+		} else if isRefreshFailure(m.refreshFIP.err) {
+			relatedFailures = append(relatedFailures, "floating IP: "+m.refreshFIP.err.Error())
+		}
 	}
 	if m.refreshAmphoraeExpected {
 		m.lbAmphoraLoaded[lbID] = true
 		if m.refreshAmphorae.err == nil {
 			m.applyAmphorae(lbID, m.refreshAmphorae.nodes)
 			m.restoreRefreshSelection()
+		} else if isRefreshFailure(m.refreshAmphorae.err) {
+			relatedFailures = append(relatedFailures, "amphorae: "+m.refreshAmphorae.err.Error())
 		}
 	}
 	if m.refreshListenersExpected {
 		m.lbListenersLoaded[lbID] = true
 		if m.refreshListeners.err == nil {
 			m.applyListenerSummaries(lbID, m.refreshListeners.items)
+		} else if isRefreshFailure(m.refreshListeners.err) {
+			relatedFailures = append(relatedFailures, "listeners: "+m.refreshListeners.err.Error())
 		}
 	}
 	if m.refreshPoolsExpected {
@@ -502,7 +531,16 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 		if m.refreshPools.err == nil {
 			m.applyPoolSummaries(lbID, m.refreshPools.items)
 			m.restoreRefreshSelection()
+		} else if isRefreshFailure(m.refreshPools.err) {
+			relatedFailures = append(relatedFailures, "pools: "+m.refreshPools.err.Error())
 		}
+	}
+	if len(relatedFailures) == 0 {
+		delete(m.lbRelatedErr, lbID)
+		m.markFresh(lbID, sectionRelated)
+	} else {
+		m.lbRelatedErr[lbID] = strings.Join(relatedFailures, "; ")
+		failures = append(failures, "related objects: "+m.lbRelatedErr[lbID])
 	}
 	if len(failures) > 0 {
 		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
@@ -520,6 +558,10 @@ func (m *Model) finishRefresh(errText string) tea.Cmd {
 		return nil
 	}
 	return m.setFlash("refreshed", false)
+}
+
+func isRefreshFailure(err error) bool {
+	return err != nil && !errors.Is(err, osclient.ErrUnavailable) && !errors.Is(err, osclient.ErrAdminRequired)
 }
 
 func (m *Model) endRefresh() {
@@ -675,6 +717,7 @@ func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
 	m.lbAmphoraLoaded[msg.lbID] = true
 	if msg.err == nil {
 		m.applyAmphorae(msg.lbID, msg.nodes)
+		m.markFresh(msg.lbID, sectionRelated)
 	}
 	return m, nil
 }
@@ -823,6 +866,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbStatsLoading = map[string]bool{}
 	m.lbDetailErr = map[string]string{}
 	m.lbStatsErr = map[string]string{}
+	m.lbRelatedErr = map[string]string{}
+	m.lbFreshness = map[string]overviewFreshness{}
 	m.lbFIPLoading = map[string]bool{}
 	m.lbFIPLoaded = map[string]bool{}
 	m.lbAmphoraLoading = map[string]bool{}
@@ -878,6 +923,8 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	delete(m.lbStatsLoading, id.OwningLBID)
 	delete(m.lbDetailErr, id.OwningLBID)
 	delete(m.lbStatsErr, id.OwningLBID)
+	delete(m.lbRelatedErr, id.OwningLBID)
+	delete(m.lbFreshness, id.OwningLBID)
 	delete(m.lbFIPLoading, id.OwningLBID)
 	delete(m.lbFIPLoaded, id.OwningLBID)
 	delete(m.lbAmphoraLoading, id.OwningLBID)

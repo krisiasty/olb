@@ -99,7 +99,8 @@ reference jump.
   LB config and traffic counters load independently; Amphora-backed LBs also
   list each backing VM directly by ID and role. The results are cached with the
   status tree. Listener rows include normalized endpoints such as `TCP/443` or
-  `HTTPS/443 (TLS termination)`, so duplicate listener names remain legible.
+  `HTTPS/8443 (TLS termination)`, always using the listener's actual protocol
+  port, so duplicate listener names remain legible.
   Pool rows similarly include protocol, a readable balancing algorithm, and
   member count, for example `HTTP · round robin · 4 members`; duplicate sibling
   names gain a short ID suffix.
@@ -116,9 +117,12 @@ reference jump.
   ready, and prunes dead history entries. Automatic refresh is enabled by
   default: visible overview stats update every 5 seconds (adjustable with `+`
   and `-` through 1/2/5/10/30/60-second steps), while lists, details, and
-  related objects update every 30 seconds. `a` pauses or resumes all automatic
-  requests; overlays and active text filters pause them temporarily. Status
-  filters remain applied while refresh continues normally.
+  related objects update every 30 seconds. Each overview section shows its own
+  last-successful update age; a local one-second display tick advances those
+  labels without making API calls, and failed refreshes retain old values with
+  a `stale` marker. `a` pauses or resumes all automatic requests; overlays and
+  active text filters pause them temporarily. Status filters remain applied
+  while refresh continues normally.
 - **Graceful degradation.** Admin-only (amphorae) and cross-service (floating IP,
   Nova instance) surfaces degrade with a clear reason when scope or RBAC is
   missing, rather than erroring out or rendering a dead node. OVN-backed LBs have

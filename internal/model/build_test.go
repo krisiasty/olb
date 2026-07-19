@@ -94,7 +94,8 @@ func TestBuildGraphShape(t *testing.T) {
 		t.Fatalf("bad root: %+v", root)
 	}
 
-	// LB children: VIP, two canonical pools, two listeners, amphorae placeholder.
+	// LB children come only from the status graph. Amphora VMs are fetched by
+	// the overview and attached directly later; there is no aggregate placeholder.
 	counts := map[NodeType]int{}
 	for _, c := range root.Children {
 		counts[c.Type]++
@@ -108,8 +109,8 @@ func TestBuildGraphShape(t *testing.T) {
 	if counts[TypeListener] != 2 {
 		t.Errorf("want 2 listener children, got %d", counts[TypeListener])
 	}
-	if counts[TypeAmphora] != 1 {
-		t.Errorf("want amphorae placeholder for amphora provider, got %d", counts[TypeAmphora])
+	if counts[TypeAmphora] != 0 {
+		t.Errorf("status graph should not contain an amphora aggregate, got %d amphora nodes", counts[TypeAmphora])
 	}
 
 	// The HTTP pool has a health monitor child and two member children.
@@ -139,6 +140,34 @@ func TestBuildGraphShape(t *testing.T) {
 		if c.Type == TypeHealthMonitor {
 			t.Errorf("orphan pool should have no health monitor (empty {}), got %v", c)
 		}
+	}
+}
+
+func TestNestedListenerPoolsArePromotedToRoot(t *testing.T) {
+	var wrapped struct {
+		Statuses StatusTree `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(canonicalStatus), &wrapped); err != nil {
+		t.Fatal(err)
+	}
+	wrapped.Statuses.LoadBalancer.Pools = nil
+	tr := Build(&wrapped.Statuses, LBMeta{Provider: "amphora"})
+	pool := tr.Node("89a47f78-cf81-480b-ad74-bba4177eeb81")
+	if pool == nil || pool.Parent != tr.Root {
+		t.Fatalf("listener-nested pool was not promoted to an LB related object: %+v", pool)
+	}
+	listener := tr.Node("78febaf6-1e63-47c6-af5f-7b5e23fd7094")
+	if listener == nil {
+		t.Fatal("listener missing from graph")
+	}
+	var linked bool
+	for _, ref := range listener.Refs {
+		if ref.Target == pool {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Fatal("promoted pool lost its listener reference")
 	}
 }
 
@@ -194,6 +223,26 @@ func TestOVNHasNoAmphora(t *testing.T) {
 		if c.Type == TypeAmphora {
 			t.Errorf("OVN-backed LB must not have an amphora branch")
 		}
+	}
+}
+
+func TestReplaceChildrenOfTypeRemovesStaleIndexEntries(t *testing.T) {
+	tr := buildCanonical(t, "amphora")
+	old := NewNode(TypeAmphora, "amp-old", "amp-old")
+	old.OwningLBID = tr.Root.ID
+	tr.ReplaceChildrenOfType(tr.Root, TypeAmphora, []*Node{old})
+	if tr.Node(old.ID) != old {
+		t.Fatal("attached amphora was not indexed")
+	}
+
+	fresh := NewNode(TypeAmphora, "amp-fresh", "amp-fresh")
+	fresh.OwningLBID = tr.Root.ID
+	tr.ReplaceChildrenOfType(tr.Root, TypeAmphora, []*Node{fresh})
+	if tr.Node(old.ID) != nil {
+		t.Fatal("replaced amphora remained reachable through the tree index")
+	}
+	if tr.Node(fresh.ID) != fresh || fresh.Parent != tr.Root {
+		t.Fatal("replacement amphora was not attached and indexed")
 	}
 }
 

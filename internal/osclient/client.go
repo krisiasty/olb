@@ -8,14 +8,12 @@ func IsNotFound(err error) bool {
 	return gophercloud.ResponseCodeIs(err, 404)
 }
 
-// CurrentProject returns the project the current selection is scoped to.
+// CurrentProject returns the project currently selected as the list filter.
+// It does not describe (or alter) the immutable authentication scope.
 func (c *Clients) CurrentProject() ProjectInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sel != nil {
-		return c.sel.project
-	}
-	return ProjectInfo{}
+	return c.selected
 }
 
 // AllProjects reports whether the tool is listing across all accessible
@@ -26,7 +24,5 @@ func (c *Clients) AllProjects() bool {
 	return c.allMode
 }
 
-// SwitchCapability reports whether — and if not, why not — the current auth
-// method permits switching to another project (and, by extension, listing
-// across all of them).
+// SwitchCapability reports whether the project filter is available.
 func (c *Clients) SwitchCapability() SwitchCapability { return c.Switch }

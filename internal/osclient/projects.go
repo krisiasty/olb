@@ -4,23 +4,61 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
 )
 
-// SwitchErrorKind distinguishes the failure points the spec insists must not be
-// conflated: a user shown a project list who then can't switch needs a
-// different message than one who couldn't list projects at all.
+// SelectProject applies the command-line project selector as the same local
+// presentation filter used by the TUI. It never changes the token or service
+// clients created from --os-project-name / OS_PROJECT_NAME / clouds.yaml.
+func (c *Clients) SelectProject(ctx context.Context, selector string) error {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return nil
+	}
+	if current := c.CurrentProject(); current.ID == selector || current.Name == selector {
+		return c.SwitchProject(ctx, current)
+	}
+	available, err := c.ListProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("select initial project %q: %w", selector, err)
+	}
+	target, err := resolveProjectSelector(available, selector)
+	if err != nil {
+		return err
+	}
+	return c.SwitchProject(ctx, target)
+}
+
+func resolveProjectSelector(available []ProjectInfo, selector string) (ProjectInfo, error) {
+	for _, project := range available {
+		if project.ID == selector {
+			return project, nil
+		}
+	}
+	var matches []ProjectInfo
+	for _, project := range available {
+		if project.Name == selector {
+			matches = append(matches, project)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return ProjectInfo{}, fmt.Errorf("project %q is not accessible; use p in the TUI to see available projects", selector)
+	case 1:
+		return matches[0], nil
+	default:
+		return ProjectInfo{}, fmt.Errorf("project name %q is ambiguous; use its project ID instead", selector)
+	}
+}
+
+// SwitchErrorKind identifies project-selector failures.
 type SwitchErrorKind int
 
 const (
 	// EnumerationFailed: GET /v3/auth/projects errored (token/endpoint issue).
 	EnumerationFailed SwitchErrorKind = iota
-	// NoRoleOnProject: enumeration and switching both work, but the re-scope
-	// auth request was rejected for this specific project.
-	NoRoleOnProject
-	// CannotReScope: the auth method itself forbids re-scoping.
-	CannotReScope
 )
 
 // SwitchError carries a specific, actionable reason and suggestion.
@@ -46,7 +84,7 @@ func (e *SwitchError) Unwrap() error { return e.err }
 // (non-admin) users, which is why the selector uses it.
 func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	c.mu.Lock()
-	identity := c.sel.identity
+	identity := c.services.identity
 	c.mu.Unlock()
 	pages, err := projects.ListAvailable(identity).AllPages(ctx)
 	if err != nil {
@@ -77,57 +115,21 @@ func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	return out, nil
 }
 
-// SwitchProject re-authenticates with a token scoped to the chosen project and
-// rebuilds the service clients against it. A project-scoped token's scope is
-// immutable, so switching is a fresh authentication, not a mutation of the
-// current token; it therefore requires the retained credentials.
-func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
-	if !c.Switch.CanSwitch {
-		return &SwitchError{Kind: CannotReScope, Reason: c.Switch.Reason, Suggest: c.Switch.Suggest, Project: target.Name}
-	}
-
-	sc, err := c.buildScoped(ctx, target.ID)
-	if err != nil {
-		return &SwitchError{
-			Kind:    NoRoleOnProject,
-			Reason:  fmt.Sprintf("Your account doesn't have a role on project %q.", displayName(target)),
-			Suggest: "Ask an administrator to grant access, or pick a different project.",
-			Project: target.Name,
-			err:     err,
-		}
-	}
-	if sc.project.Name == "" {
-		sc.project.Name = target.Name
-	}
-
+// SwitchProject changes only the presentation filter. The original token and
+// service clients remain untouched, preserving admin/global authorization.
+func (c *Clients) SwitchProject(_ context.Context, target ProjectInfo) error {
 	c.mu.Lock()
-	c.sel = sc
+	c.selected = target
 	c.allMode = false
-	c.scoped = map[string]*serviceClients{sc.project.ID: sc}
-	c.lbProject = map[string]ProjectInfo{}
 	c.mu.Unlock()
 	return nil
 }
 
-// EnterAllProjects switches the tool into all-projects mode: subsequent listing
-// aggregates every load balancer the user can see (the admin global list plus a
-// per-project sweep of role-assigned projects), and drilling into one re-scopes
-// to its owning project on demand where needed.
-//
-// It does not require re-scoping capability: an admin's global list works from
-// the current scope alone, and the per-project sweep simply degrades (is
-// skipped) when credentials can't re-scope.
-func (c *Clients) EnterAllProjects(ctx context.Context) error {
+// EnterAllProjects removes the presentation filter while retaining the exact
+// authentication scope with which the program started.
+func (c *Clients) EnterAllProjects(_ context.Context) error {
 	c.mu.Lock()
 	c.allMode = true
-	c.lbProject = map[string]ProjectInfo{}
 	c.mu.Unlock()
 	return nil
-}
-
-func displayName(p ProjectInfo) string {
-	if p.Name != "" {
-		return p.Name
-	}
-	return p.ID
 }

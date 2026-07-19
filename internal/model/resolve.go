@@ -58,6 +58,31 @@ func (t *Tree) Attach(n *Node) {
 	}
 }
 
+// ReplaceChildrenOfType replaces one class of direct children and keeps the
+// tree index consistent. It is used for independently-listed boundary objects
+// such as the amphora VMs attached to an LB after the status graph is built.
+func (t *Tree) ReplaceChildrenOfType(parent *Node, kind NodeType, replacements []*Node) {
+	if t == nil || parent == nil {
+		return
+	}
+	kept := parent.Children[:0]
+	for _, child := range parent.Children {
+		if child.Type != kind {
+			kept = append(kept, child)
+			continue
+		}
+		if indexed := t.index[child.ID]; indexed == child {
+			delete(t.index, child.ID)
+		}
+	}
+	parent.Children = kept
+	for _, child := range replacements {
+		child.Parent = parent
+		parent.Children = append(parent.Children, child)
+		t.register(child)
+	}
+}
+
 // ResolveEdge fills in a previously-unresolved reference edge. A nil target
 // marks the edge missing (the boundary object does not exist, e.g. an internal
 // LB with no floating IP); a non-nil target wires the inverse back-reference.

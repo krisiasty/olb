@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -85,4 +86,105 @@ func TestLBTableNoProjectColumnSingleMode(t *testing.T) {
 	if strings.Contains(header, "PROJECT") {
 		t.Errorf("single-project mode should not show a PROJECT column: %q", header)
 	}
+}
+
+func TestResourceNavigationRows(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter")) // open first load balancer
+	amphorae, err := m.backend.ListAmphorae(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, amphoraeMsg{lbID: "lb-1", nodes: amphorae})
+	view := ansiRE.ReplaceAllString(m.View(), "")
+
+	tests := []struct {
+		relation string
+		target   string
+	}{
+		{relation: "VIP", target: "203.0.113.9"},
+		{relation: "Pool", target: "web"},
+		{relation: "Listener", target: "http"},
+		{relation: "Amphora", target: "11111111-1111-1111-1111-111111111111 (MASTER)"},
+	}
+	for _, tt := range tests {
+		line := navigationLineContaining(view, tt.target)
+		if line == "" {
+			t.Errorf("missing navigation target %q in view:\n%s", tt.target, view)
+			continue
+		}
+		if relationAt, targetAt := strings.Index(line, tt.relation), strings.Index(line, tt.target); relationAt < 0 || relationAt >= targetAt {
+			t.Errorf("row should place relation %q before target %q: %q", tt.relation, tt.target, line)
+		}
+		if !strings.HasSuffix(line, "›") {
+			t.Errorf("row should end with a navigation chevron: %q", line)
+		}
+		if width := len([]rune(line)); width != m.width {
+			t.Errorf("row width = %d, want %d: %q", width, m.width, line)
+		}
+	}
+
+	vipLine := navigationLineContaining(view, "203.0.113.9")
+	if strings.Contains(vipLine, "vip:") || strings.Count(vipLine, "203.0.113.9") != 1 {
+		t.Errorf("VIP row should not repeat its type or address: %q", vipLine)
+	}
+}
+
+func TestResourceNavigationRowsShowGraphDirection(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter")) // load balancer
+	i, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("missing listener")
+	}
+	m.cursor = i
+	m = updExec(t, m, press("enter")) // listener
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	refLine := lineContaining(view, "pool:web")
+	if !strings.Contains(refLine, "→") || !strings.Contains(refLine, "Pool") {
+		t.Errorf("outgoing resource link should show its direction and relationship: %q", refLine)
+	}
+
+	i, ok = m.selectLabel("pool:web")
+	if !ok {
+		t.Fatal("missing pool reference")
+	}
+	m.cursor = i
+	m = updExec(t, m, press("enter")) // pool
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	backRefLine := lineContaining(view, "←")
+	if !strings.Contains(backRefLine, "listener:http") || !strings.Contains(backRefLine, "Pool") {
+		t.Errorf("incoming resource link should show its direction and relationship: %q", backRefLine)
+	}
+}
+
+func TestResourceNavigationRowsHandleNarrowWidths(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	for width := 1; width <= 12; width++ {
+		m.width = width
+		view := m.View() // must not panic while clipping styled and selected rows
+		if view == "" {
+			t.Fatalf("width %d produced an empty view", width)
+		}
+	}
+}
+
+func lineContaining(view, needle string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
+func navigationLineContaining(view, needle string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) && strings.HasSuffix(line, "›") {
+			return line
+		}
+	}
+	return ""
 }

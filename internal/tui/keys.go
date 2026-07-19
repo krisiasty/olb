@@ -18,7 +18,6 @@ type keyMap struct {
 	LBList  key.Binding // ctrl+home
 	Picker  key.Binding // h
 
-	Detail  key.Binding // d
 	YAML    key.Binding // y
 	JSON    key.Binding // j
 	CopyID  key.Binding // i
@@ -28,11 +27,14 @@ type keyMap struct {
 	Filter key.Binding // /
 	Status key.Binding // s
 
-	Project key.Binding // p
-	Refresh key.Binding // r
-	Help    key.Binding // ?
-	Quit    key.Binding // q
-	Force   key.Binding // ctrl+c
+	Project      key.Binding // p
+	Refresh      key.Binding // r
+	AutoRefresh  key.Binding // a
+	IntervalUp   key.Binding // + / =
+	IntervalDown key.Binding // -
+	Help         key.Binding // ?
+	Quit         key.Binding // q
+	Force        key.Binding // ctrl+c
 
 	Accept key.Binding // enter inside overlays
 	Cancel key.Binding // esc inside overlays
@@ -53,7 +55,6 @@ func defaultKeys() keyMap {
 		LBList:  key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "LB list")),
 		Picker:  key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 
-		Detail:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "detail")),
 		YAML:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "YAML")),
 		JSON:    key.NewBinding(key.WithKeys("j"), key.WithHelp("j", "JSON")),
 		CopyID:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "copy id")),
@@ -63,11 +64,14 @@ func defaultKeys() keyMap {
 		Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Status: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
 
-		Project: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
-		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:    key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-		Force:   key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "force quit")),
+		Project:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
+		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
+		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),
+		IntervalDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "shorter interval")),
+		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:         key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		Force:        key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "force quit")),
 
 		Accept: key.NewBinding(key.WithKeys("enter")),
 		Cancel: key.NewBinding(key.WithKeys("esc")),

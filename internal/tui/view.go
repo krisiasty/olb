@@ -3,8 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -14,8 +14,8 @@ import (
 	"github.com/krisiasty/olb/internal/osclient"
 )
 
-// bodyHeight is the number of list rows available between the two-line header
-// and the two-line footer.
+// bodyHeight is the content area available between the two-line header and
+// two-line footer.
 func (m Model) bodyHeight() int {
 	h := m.height - 4
 	if h < 1 {
@@ -37,8 +37,6 @@ func (m Model) View() string {
 		return m.helpView()
 	case overlayRaw:
 		return m.rawView()
-	case overlayDetail:
-		return m.detailView()
 	case overlayProject:
 		return m.projectView()
 	case overlayPicker:
@@ -79,29 +77,31 @@ func (m Model) breadcrumbLine() string {
 }
 
 func (m Model) subtitleLine() string {
-	scope := "project: " + projectLabel(m.project)
+	scope := m.st.statusBar.Render("scope: project ") + m.st.title.Render(projectLabel(m.project))
 	if m.allProjects {
-		scope = "scope: all accessible projects"
+		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all accessible projects")
 	}
-	parts := []string{scope}
-	if len(m.entries) != len(m.allEntries) {
-		parts = append(parts, fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries)))
-	} else {
-		parts = append(parts, fmt.Sprintf("%d items", len(m.entries)))
+	parts := []string{scope, m.st.statusBar.Render(m.autoRefreshLabel())}
+	if !m.isLBOverview() {
+		if len(m.entries) != len(m.allEntries) {
+			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries))))
+		} else {
+			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d items", len(m.entries))))
+		}
 	}
 	if m.status != statusAll {
-		parts = append(parts, "status="+m.status.String())
+		parts = append(parts, m.st.statusBar.Render("status="+m.status.String()))
 	}
 	if v := m.filter.Value(); v != "" && !m.filtering {
-		parts = append(parts, "/"+v)
+		parts = append(parts, m.st.statusBar.Render("/"+v))
 	}
 	if !m.backend.SwitchCapability().CanSwitch {
-		parts = append(parts, "project-switch: disabled")
+		parts = append(parts, m.st.statusBar.Render("project-switch: disabled"))
 	}
 	if m.loading {
-		parts = append(parts, m.spinner.View()+" "+m.loadingWhat)
+		parts = append(parts, m.st.statusBar.Render(m.spinner.View()+" "+m.loadingLabel()))
 	}
-	return m.clip(m.st.statusBar.Render(strings.Join(parts, "  ·  ")))
+	return m.clip(strings.Join(parts, m.st.statusBar.Render("  ·  ")))
 }
 
 // visibleRows is the number of selectable rows the body can show. The
@@ -109,6 +109,9 @@ func (m Model) subtitleLine() string {
 // column header.
 func (m Model) visibleRows() int {
 	h := m.bodyHeight()
+	if m.isLBOverview() {
+		_, h = m.lbOverviewParts(h)
+	}
 	if m.loc.isList() && len(m.entries) > 0 {
 		h--
 	}
@@ -120,9 +123,14 @@ func (m Model) visibleRows() int {
 
 func (m Model) bodyLines() []string {
 	h := m.bodyHeight()
+	if m.isLBOverview() {
+		return m.lbOverviewLines(h)
+	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
+		case m.refreshing:
+			msg = m.spinner.View() + " refreshing…"
 		case m.loading:
 			msg = m.spinner.View() + " loading " + m.loadingWhat + "…"
 		case m.loc.dead:
@@ -139,8 +147,25 @@ func (m Model) bodyLines() []string {
 	if m.loc.isList() {
 		return m.lbTableLines(h)
 	}
+	return m.resourceLines(h, "— empty —")
+}
+
+func (m Model) resourceLines(h int, empty string) []string {
+	if h <= 0 {
+		return nil
+	}
+	if len(m.entries) == 0 {
+		if m.filter.Value() != "" || m.status != statusAll {
+			empty = "— no matches —"
+		}
+		lines := []string{"  " + m.st.disabled.Render(empty)}
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		return lines
+	}
 	lines := make([]string, 0, h)
-	end := m.top + m.visibleRows()
+	end := m.top + h
 	if end > len(m.entries) {
 		end = len(m.entries)
 	}
@@ -152,6 +177,263 @@ func (m Model) bodyLines() []string {
 	}
 	if len(lines) > h {
 		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) isLBOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeLoadBalancer
+}
+
+// lbOverviewParts computes the summary and related-list allocation. The
+// summary compacts first so navigation always retains at least a few rows.
+func (m Model) lbOverviewParts(h int) (summary []string, relatedHeight int) {
+	const fixedChrome = 3 // top gap, gap before related objects, related heading
+	if h <= fixedChrome {
+		return nil, 0
+	}
+	minRelated := 1
+	if len(m.entries) > 1 {
+		minRelated = len(m.entries)
+		if minRelated > 3 {
+			minRelated = 3
+		}
+	}
+	if minRelated > h-fixedChrome {
+		minRelated = h - fixedChrome
+	}
+	summary = m.lbOverviewSummary(h - fixedChrome - minRelated)
+	relatedHeight = h - len(summary) - fixedChrome
+	if relatedHeight < 0 {
+		relatedHeight = 0
+	}
+	return summary, relatedHeight
+}
+
+func (m Model) lbOverviewLines(h int) []string {
+	summary, relatedHeight := m.lbOverviewParts(h)
+	lines := make([]string, 0, h)
+	if len(lines) < h {
+		lines = append(lines, "") // permanent separation from project/status line
+	}
+	lines = append(lines, summary...)
+	if len(lines) < h {
+		lines = append(lines, "") // permanent separation before related objects
+	}
+	if len(lines) < h {
+		title := fmt.Sprintf("RELATED OBJECTS · %d", len(m.entries))
+		if len(m.entries) != len(m.allEntries) {
+			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", len(m.entries), len(m.allEntries))
+		}
+		lines = append(lines, m.clip(m.st.title.Render(title)))
+	}
+	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+type overviewField struct {
+	label  string
+	value  string
+	status bool
+}
+
+func (m Model) lbOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	details := m.lbDetailFields()
+	stats := m.lbStatFields()
+	// A full refresh is already announced in the subtitle and keeps the last
+	// committed panel values visible. Per-panel loading labels would duplicate
+	// that status and make the retained values look unavailable.
+	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[m.loc.node.ID], m.lbDetailErr[m.loc.node.ID])
+	statsTitle := m.overviewPanelTitle("STATS", !m.refreshing && m.lbStatsLoading[m.loc.node.ID], m.lbStatsErr[m.loc.node.ID])
+
+	if m.width >= 90 {
+		limit := budget - 1
+		if limit < 0 {
+			limit = 0
+		}
+		gap := 3
+		available := m.width - gap
+		leftWidth := available * 3 / 5
+		rightWidth := available - leftWidth
+		left := m.renderOverviewPanel(detailTitle, details, leftWidth, limit)
+		right := m.renderOverviewPanel(statsTitle, stats, rightWidth, limit)
+		joined := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
+		return limitLines(strings.Split(joined, "\n"), budget)
+	}
+
+	// Narrow terminals stack the panels. Divide the available field rows between
+	// them, prioritizing the first few identity and traffic values.
+	if budget == 1 {
+		return []string{m.clip(m.st.title.Render("DETAILS · STATS"))}
+	}
+	if budget == 2 {
+		return []string{m.clip(detailTitle), ""}
+	}
+	fieldBudget := budget - 3 // two headings and their permanent separating row
+	detailLimit := (fieldBudget + 1) / 2
+	statsLimit := fieldBudget - detailLimit
+	if detailLimit > len(details) {
+		statsLimit += detailLimit - len(details)
+		detailLimit = len(details)
+	}
+	if statsLimit > len(stats) {
+		detailLimit += statsLimit - len(stats)
+		statsLimit = len(stats)
+		if detailLimit > len(details) {
+			detailLimit = len(details)
+		}
+	}
+	left := strings.Split(m.renderOverviewPanel(detailTitle, details, m.width, detailLimit), "\n")
+	right := strings.Split(m.renderOverviewPanel(statsTitle, stats, m.width, statsLimit), "\n")
+	stacked := append(left, "")
+	stacked = append(stacked, right...)
+	return limitLines(stacked, budget)
+}
+
+func (m Model) lbDetailFields() []overviewField {
+	n := m.loc.node
+	name := n.Name
+	if name == "" {
+		name = shortID(n.ID)
+	}
+	vip := n.Attrs["vip_address"]
+	if vip == "" {
+		for _, child := range n.Children {
+			if child.Type == model.TypeVIP {
+				vip = child.Name
+				break
+			}
+		}
+	}
+	if floatingIP := m.lbFloatingIPs[n.ID]; vip != "" && floatingIP != "" {
+		vip += " (" + floatingIP + ")"
+	}
+	adminState := n.Attrs["admin_state_up"]
+	if adminState == "" && m.lbDetailLoading[n.ID] {
+		adminState = "…"
+	}
+	var projectID, projectName string
+	if m.loc.tree != nil {
+		projectID = m.loc.tree.Meta.ProjectID
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	return []overviewField{
+		{label: "Name", value: name},
+		{label: "ID", value: n.ID},
+		{label: "Project name", value: displayValue(projectName)},
+		{label: "Project ID", value: displayValue(projectID)},
+		{label: "VIP", value: displayValue(vip)},
+		{label: "Provider", value: displayValue(n.Attrs["provider"])},
+		{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		{label: "Admin state", value: adminStateLabel(adminState), status: true},
+	}
+}
+
+func (m Model) loadingLabel() string {
+	if m.refreshing {
+		return "refreshing…"
+	}
+	return m.loadingWhat
+}
+
+func adminStateLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "enabled":
+		return "ENABLED"
+	case "false", "disabled":
+		return "DISABLED"
+	default:
+		return displayValue(value)
+	}
+}
+
+func (m Model) lbStatFields() []overviewField {
+	n := m.loc.node
+	stats := m.lbStats[n.ID]
+	value := func(key string) string {
+		if stats == nil {
+			if m.lbStatsLoading[n.ID] {
+				return "…"
+			}
+			return "—"
+		}
+		v, ok := stats[key]
+		if !ok || v == nil {
+			return "—"
+		}
+		return fmt.Sprint(v)
+	}
+	return []overviewField{
+		{label: "Active connections", value: value("active_connections")},
+		{label: "Total connections", value: value("total_connections")},
+		{label: "Request errors", value: value("request_errors")},
+		{label: "Bytes in", value: value("bytes_in")},
+		{label: "Bytes out", value: value("bytes_out")},
+	}
+}
+
+func (m Model) overviewPanelTitle(title string, loading bool, errText string) string {
+	state := ""
+	if loading {
+		state = " · " + m.st.disabled.Render("loading…")
+	} else if errText != "" {
+		state = " · " + m.st.flashErr.Render("unavailable")
+	}
+	return m.st.title.Render(title) + state
+}
+
+func (m Model) renderOverviewPanel(title string, fields []overviewField, width, limit int) string {
+	if width < 1 {
+		width = 1
+	}
+	if limit > len(fields) {
+		limit = len(fields)
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	labelWidth := 0
+	for _, field := range fields[:limit] {
+		if w := lipgloss.Width(field.label); w > labelWidth {
+			labelWidth = w
+		}
+	}
+	if cap := width / 2; labelWidth > cap {
+		labelWidth = cap
+	}
+	lines := []string{lipgloss.NewStyle().MaxWidth(width).Render(title)}
+	for _, field := range fields[:limit] {
+		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
+		value := field.value
+		if field.status && value != "—" {
+			value = lipgloss.NewStyle().Foreground(statusColor(value)).Render(value)
+		}
+		line := label + "  " + value
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func displayValue(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return value
+}
+
+func limitLines(lines []string, limit int) []string {
+	if len(lines) > limit {
+		return lines[:limit]
 	}
 	return lines
 }
@@ -239,51 +521,206 @@ func (m Model) renderRow(e entry, sel bool) string {
 	if eff == "" {
 		eff = e.prov
 	}
-	notable := eff != "" && eff != "ONLINE" && eff != "ACTIVE"
+	healthy := eff == "ONLINE" || eff == "ACTIVE"
+	if e.node != nil && e.node.Type == model.TypeAmphora && eff == "ALLOCATED" {
+		healthy = true
+	}
+	notable := eff != "" && !healthy
+	relation := navigationRelation(e)
+	target := navigationTarget(e)
+	extra := strings.TrimSpace(e.extra)
+	if strings.EqualFold(extra, target) {
+		extra = ""
+	}
+
+	relationWidth := m.navigationRelationWidth()
+	relationCell := padRight(relation, relationWidth)
+	plain := navigationMarker(e) + relationCell + "  " + target
+	if extra != "" {
+		plain += "  " + extra
+	}
+	if notable {
+		plain += "  [" + eff + "]"
+	}
+	plain = navigationChevron(plain, m.width)
 
 	if sel {
-		var icon string
-		switch e.kind {
-		case entRef:
-			icon = "→ "
-		case entBackRef:
-			icon = "← "
-		default:
-			icon = "● "
-		}
-		plain := icon + e.label
-		if e.relationship != "" {
-			plain += " (" + e.relationship + ")"
-		}
-		if notable {
-			plain += " [" + eff + "]"
-		}
-		if e.extra != "" {
-			plain += "  " + e.extra
-		}
 		return m.st.selected.Width(m.width).Render(clipRunes(plain, m.width))
 	}
 
-	var icon string
+	var marker string
 	switch e.kind {
 	case entRef:
-		icon = m.st.refMarker.Render("→ ")
+		marker = m.st.refMarker.Render("→ ")
 	case entBackRef:
-		icon = m.st.backRefMarker.Render("← ")
+		marker = m.st.backRefMarker.Render("← ")
 	default:
-		icon = lipgloss.NewStyle().Foreground(statusColor(eff)).Render("●") + " "
+		marker = lipgloss.NewStyle().Foreground(statusColor(eff)).Render("●") + " "
 	}
-	seg := icon + e.label
-	if e.relationship != "" {
-		seg += m.st.relationship.Render(" (" + e.relationship + ")")
+	seg := marker + m.st.panelLabel.Render(relationCell) + "  " + target
+	if extra != "" {
+		seg += "  " + m.st.attrs.Render(extra)
 	}
 	if notable {
-		seg += " " + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
+		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
 	}
-	if e.extra != "" {
-		seg += "  " + m.st.attrs.Render(e.extra)
+	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+// navigationRelation returns the stable left-hand label for a resource link.
+// Containment rows use the target type; graph edges use the relationship name
+// while their marker communicates the edge direction.
+func navigationRelation(e entry) string {
+	switch e.kind {
+	case entRef, entBackRef:
+		if e.relationship != "" {
+			return upperFirst(e.relationship)
+		}
+		if e.edge != nil {
+			return nodeTypeLabel(e.edge.TargetType)
+		}
+	case entChild:
+		if e.node != nil {
+			return nodeTypeLabel(e.node.Type)
+		}
 	}
-	return m.clip(seg)
+	return "Resource"
+}
+
+// navigationTarget returns the identity or summary users are navigating to.
+// Child rows don't repeat their type prefix because it already occupies the
+// relationship column; reference targets retain it to disambiguate graph jumps.
+func navigationTarget(e entry) string {
+	if e.kind == entChild && e.node != nil {
+		target := e.node.Name
+		if target == "" {
+			target = shortID(e.node.ID)
+		}
+		if e.node.Type == model.TypeVIP {
+			if floatingIP := e.node.Attrs["floating_ip"]; floatingIP != "" {
+				target += " (" + floatingIP + ")"
+			}
+		}
+		if e.node.Type == model.TypePool && e.showID {
+			target += " (" + shortID(e.node.ID) + ")"
+		}
+		if e.node.Type == model.TypeAmphora {
+			if role := e.node.Attrs["role"]; role != "" {
+				target += " (" + role + ")"
+			}
+		}
+		return target
+	}
+	return e.label
+}
+
+func nodeTypeLabel(t model.NodeType) string {
+	switch t {
+	case model.TypeLoadBalancer:
+		return "Load balancer"
+	case model.TypeVIP:
+		return "VIP"
+	case model.TypeFloatingIP:
+		return "Floating IP"
+	case model.TypeListener:
+		return "Listener"
+	case model.TypePool:
+		return "Pool"
+	case model.TypeMember:
+		return "Member"
+	case model.TypeHealthMonitor:
+		return "Health monitor"
+	case model.TypeL7Policy:
+		return "L7 policy"
+	case model.TypeL7Rule:
+		return "L7 rule"
+	case model.TypeAmphora:
+		return "Amphora"
+	case model.TypeInstance:
+		return "Instance"
+	default:
+		return upperFirst(string(t))
+	}
+}
+
+func upperFirst(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return s
+	}
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
+func navigationMarker(e entry) string {
+	switch e.kind {
+	case entRef:
+		return "→ "
+	case entBackRef:
+		return "← "
+	default:
+		return "● "
+	}
+}
+
+// navigationRelationWidth aligns heterogeneous resource links without giving
+// them table semantics. The cap preserves useful target space in narrow views.
+func (m Model) navigationRelationWidth() int {
+	w := 0
+	for _, e := range m.entries {
+		if n := len([]rune(navigationRelation(e))); n > w {
+			w = n
+		}
+	}
+	if w < 12 {
+		w = 12
+	}
+	cap := m.width / 3
+	if cap < 1 {
+		cap = 1
+	}
+	if w > cap {
+		w = cap
+	}
+	return w
+}
+
+func padRight(s string, width int) string {
+	s = clipRunes(s, width)
+	padding := width - len([]rune(s))
+	if padding <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", padding)
+}
+
+// navigationChevron places a consistent open affordance at the right edge.
+func navigationChevron(s string, width int) string {
+	if width <= 0 {
+		return s + "  ›"
+	}
+	if width == 1 {
+		return "›"
+	}
+	if width == 2 {
+		return " ›"
+	}
+	s = clipRunes(s, width-2)
+	return s + strings.Repeat(" ", width-len([]rune(s))-1) + "›"
+}
+
+func navigationStyledChevron(s string, width int, chevronStyle lipgloss.Style) string {
+	if width <= 0 {
+		return s + "  " + chevronStyle.Render("›")
+	}
+	if width == 1 {
+		return chevronStyle.Render("›")
+	}
+	if width == 2 {
+		return " " + chevronStyle.Render("›")
+	}
+	s = lipgloss.NewStyle().MaxWidth(width - 2).Render(s)
+	return s + strings.Repeat(" ", width-lipgloss.Width(s)-1) + chevronStyle.Render("›")
 }
 
 func (m Model) flashLine() string {
@@ -301,7 +738,7 @@ func (m Model) hintLine() string {
 	if m.filtering {
 		return m.clip(m.filter.View())
 	}
-	hint := "enter open · ←/esc back · → fwd · d detail · y/j raw · i/n/o copy · / filter · s status · p project · r refresh · h history · ? help · q quit"
+	hint := "enter open · ←/esc back · → fwd · y/j raw · i/n/o copy · / filter · s status · p project · r refresh · a auto · +/- interval · h history · ? help · q quit"
 	return m.clip(m.st.help.Render(hint))
 }
 
@@ -347,66 +784,6 @@ func (m Model) rawView() string {
 	}
 	footer := m.st.help.Render("esc/q close · o copy · ↑/↓ scroll")
 	return m.st.overlayTitle.Render(m.clip(title)) + "\n" + m.vp.View() + "\n" + m.clip(footer)
-}
-
-func (m *Model) refreshDetailOverlay() {
-	m.vp.Width = m.width
-	m.vp.Height = m.height - 2
-	m.vp.SetContent(m.detailContent())
-}
-
-func (m Model) detailView() string {
-	obj := "object"
-	if m.loc.node != nil {
-		obj = m.loc.node.Label()
-	}
-	title := m.st.overlayTitle.Render("detail — " + obj)
-	footer := m.st.help.Render("esc/q close · ↑/↓ scroll")
-	return title + "\n" + m.vp.View() + "\n" + m.clip(footer)
-}
-
-func (m Model) detailContent() string {
-	n := m.loc.node
-	if n == nil {
-		return "no object"
-	}
-	var b strings.Builder
-	writeKV(&b, "type", string(n.Type))
-	writeKV(&b, "id", n.ID)
-	if n.Name != "" {
-		writeKV(&b, "name", n.Name)
-	}
-	if n.ProvisioningStatus != "" {
-		writeKV(&b, "provisioning_status", n.ProvisioningStatus)
-	}
-	if n.OperatingStatus != "" {
-		writeKV(&b, "operating_status", n.OperatingStatus)
-	}
-	keys := make([]string, 0, len(n.Attrs))
-	for k := range n.Attrs {
-		if strings.HasPrefix(k, "_") {
-			continue // internal markers (e.g. _lazy)
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		writeKV(&b, k, n.Attrs[k])
-	}
-	if !n.DetailLoaded && n.Type != model.TypeVIP {
-		b.WriteString("\n" + m.st.disabled.Render("loading full configuration…"))
-	}
-	if n.Type == model.TypeLoadBalancer {
-		b.WriteString("\nstats:\n")
-		if s, ok := m.lbStats[n.ID]; ok {
-			for _, k := range []string{"active_connections", "total_connections", "bytes_in", "bytes_out", "request_errors"} {
-				writeKV(&b, "  "+k, fmt.Sprint(s[k]))
-			}
-		} else {
-			b.WriteString("  " + m.st.disabled.Render("loading…") + "\n")
-		}
-	}
-	return b.String()
 }
 
 func (m Model) projectView() string {
@@ -571,13 +948,6 @@ func clipRunes(s string, w int) string {
 	return string(r[:w-1]) + "…"
 }
 
-func writeKV(b *strings.Builder, k, v string) {
-	if v == "" {
-		return
-	}
-	fmt.Fprintf(b, "%-22s %s\n", k+":", v)
-}
-
 func marshalRaw(v any, format string) string {
 	if v == nil {
 		return "(no raw object)"
@@ -612,7 +982,6 @@ Navigate
   h                history picker overlay
 
 Inspect
-  d                toggle detail panel (lazy-loaded full config; LB adds stats)
   y                show raw API object as YAML
   j                show raw API object as JSON
   i                copy object id to clipboard (OSC 52)
@@ -626,6 +995,9 @@ Search
 Global
   p                project switcher
   r                refresh — re-fetch current tree, prune dead history
+  a                toggle automatic refresh (enabled by default)
+  + / -            lengthen / shorten the stats refresh interval
+  =                same as + (no Shift required)
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
 
@@ -634,8 +1006,11 @@ Notes
   • esc clears an active filter first, otherwise it is back.
   • → reference edges are shared/cross-cutting; ← back-references answer
     "who points at me?".  ↦ in the breadcrumb marks a reference jump.
-  • Reference targets and cross-service edges (floating IP, Nova instance,
-    amphorae) resolve lazily on landing and degrade gracefully when a scope
-    or admin RBAC is missing.
+  • Reference targets and cross-service edges (floating IP, Nova instance)
+    resolve lazily on landing. Amphora VMs load in the LB overview. These
+    surfaces degrade gracefully when a scope or admin RBAC is missing.
+  • Auto-refresh updates visible LB stats at 1/2/5/10/30/60-second intervals
+    (5 seconds by default) and refreshes lists/details/related objects every
+    30 seconds. It pauses while overlays or text filters are active.
 `, "\n")
 }

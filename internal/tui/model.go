@@ -21,7 +21,6 @@ const (
 	overlayNone overlayKind = iota
 	overlayHelp
 	overlayRaw     // y / j raw object view
-	overlayDetail  // d detail panel
 	overlayProject // p project switcher
 	overlayPicker  // h history picker
 )
@@ -42,8 +41,8 @@ type Config struct {
 	// PrintMode routes copy actions to an on-screen value the user can select,
 	// instead of emitting OSC 52 — the escape hatch for terminals without it.
 	PrintMode bool
-	// AllProjects starts the tool in all-projects mode (the backend must already
-	// have been switched into it).
+	// AllProjects starts the tool with no project presentation filter (the
+	// backend must already have been put into that view mode).
 	AllProjects bool
 	// CacheSize bounds the LRU of status trees; CacheTTL bounds staleness.
 	CacheSize int
@@ -65,7 +64,7 @@ type Model struct {
 
 	spinner spinner.Model
 	filter  textinput.Model // shared for list filter and overlay search
-	vp      viewport.Model  // raw / detail / help scroll region
+	vp      viewport.Model  // raw / help scroll region
 
 	cache *cache.TreeCache
 
@@ -88,10 +87,34 @@ type Model struct {
 
 	// Overlay state.
 	overlay    overlayKind
-	rawContent string                    // last y/j content for the current node (drives o)
-	rawFormat  string                    // "yaml" | "json" | ""
-	rawTitle   string                    // overlay title override (print mode)
-	lbStats    map[string]map[string]any // LB stats cache for the detail panel
+	rawContent string // last y/j content for the current node (drives o)
+	rawFormat  string // "yaml" | "json" | ""
+	rawTitle   string // overlay title override (print mode)
+
+	// Load-balancer overview state. Full configuration and stats load
+	// independently when an LB is opened; both are cached alongside the tree.
+	lbStats            map[string]map[string]any
+	lbDetailLoading    map[string]bool
+	lbStatsLoading     map[string]bool
+	lbDetailErr        map[string]string
+	lbStatsErr         map[string]string
+	lbFloatingIPs      map[string]string
+	lbFIPLoading       map[string]bool
+	lbFIPLoaded        map[string]bool
+	lbAmphoraLoading   map[string]bool
+	lbAmphoraLoaded    map[string]bool
+	lbListenersLoading map[string]bool
+	lbListenersLoaded  map[string]bool
+	lbPoolsLoading     map[string]bool
+	lbPoolsLoaded      map[string]bool
+
+	// Automatic refresh uses a fast, user-selectable cadence for stats and a
+	// slower fixed cadence for the full list/status graph. Generations make old
+	// Bubble Tea timer messages harmless after toggling or changing intervals.
+	autoRefreshEnabled bool
+	autoIntervalIndex  int
+	autoGeneration     uint64
+	autoStatsLoading   map[string]bool
 
 	// Overlay search (project switcher / history picker), kept separate from the
 	// list filter so opening an overlay doesn't clobber an active list filter.
@@ -106,6 +129,27 @@ type Model struct {
 	flash       string
 	flashErr    bool
 	flashToken  int
+
+	// An explicit refresh keeps the currently-rendered data in place. For an LB
+	// overview, detail, stats, floating IP, listener/pool summaries, and amphora
+	// VMs are staged and committed together so no field or row jumps ahead.
+	refreshing               bool
+	refreshLBID              string
+	refreshDetail            *detailMsg
+	refreshStats             *statsMsg
+	refreshFIP               *lbFloatingIPMsg
+	refreshFIPExpected       bool
+	refreshAmphorae          *amphoraeMsg
+	refreshAmphoraeExpected  bool
+	refreshListeners         *listenerSummariesMsg
+	refreshListenersExpected bool
+	refreshPools             *poolSummariesMsg
+	refreshPoolsExpected     bool
+	refreshAt                model.Identity
+	refreshSelection         entrySelection
+	refreshSelectionOK       bool
+	refreshCursor            int
+	refreshAutomatic         bool
 
 	project     osclient.ProjectInfo
 	allProjects bool // listing across all accessible projects
@@ -136,24 +180,41 @@ func New(backend Backend, cfg Config) Model {
 	se.CharLimit = 128
 
 	return Model{
-		backend:     backend,
-		keys:        defaultKeys(),
-		st:          newStyles(),
-		cfg:         cfg,
-		spinner:     sp,
-		filter:      fi,
-		search:      se,
-		vp:          viewport.New(0, 0),
-		cache:       cache.New(cfg.CacheSize, cfg.CacheTTL),
-		hist:        newHistory(cfg.HistoryCap),
-		project:     backend.CurrentProject(),
-		allProjects: cfg.AllProjects,
-		lbStats:     map[string]map[string]any{},
+		backend:            backend,
+		keys:               defaultKeys(),
+		st:                 newStyles(),
+		cfg:                cfg,
+		spinner:            sp,
+		filter:             fi,
+		search:             se,
+		vp:                 viewport.New(0, 0),
+		cache:              cache.New(cfg.CacheSize, cfg.CacheTTL),
+		hist:               newHistory(cfg.HistoryCap),
+		project:            backend.CurrentProject(),
+		allProjects:        cfg.AllProjects,
+		lbStats:            map[string]map[string]any{},
+		lbDetailLoading:    map[string]bool{},
+		lbStatsLoading:     map[string]bool{},
+		lbDetailErr:        map[string]string{},
+		lbStatsErr:         map[string]string{},
+		lbFloatingIPs:      map[string]string{},
+		lbFIPLoading:       map[string]bool{},
+		lbFIPLoaded:        map[string]bool{},
+		lbAmphoraLoading:   map[string]bool{},
+		lbAmphoraLoaded:    map[string]bool{},
+		lbListenersLoading: map[string]bool{},
+		lbListenersLoaded:  map[string]bool{},
+		lbPoolsLoading:     map[string]bool{},
+		lbPoolsLoaded:      map[string]bool{},
+		autoRefreshEnabled: true,
+		autoIntervalIndex:  defaultAutoRefreshIntervalIndex,
+		autoGeneration:     1,
+		autoStatsLoading:   map[string]bool{},
 	}
 }
 
 // Init loads the initial load balancer list.
 func (m Model) Init() tea.Cmd {
 	m.hist.navigate(histEntry{id: model.LBListIdentity})
-	return tea.Batch(m.spinner.Tick, m.loadLBsCmd())
+	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), m.scheduleAutoRefresh())
 }

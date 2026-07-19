@@ -109,44 +109,22 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 		// policies). We can record the association now; which one is the default
 		// is refined by a lazy listener show.
 		for j := range sl.Pools {
-			pid := sl.Pools[j].ID
-			if pn := t.Node(pid); pn != nil {
+			sp := &sl.Pools[j]
+			pn := t.Node(sp.ID)
+			if pn == nil {
+				// Some Octavia deployments expose pools only beneath listeners,
+				// without repeating them in loadbalancer.pools. Promote the first
+				// occurrence to a canonical root child so it remains discoverable.
+				pn = buildPool(t, sp, lb.ID)
+				root.addChild(pn)
+			}
+			if pn != nil {
 				ln.AddRef("pool", pn)
 			}
 		}
 	}
 
-	// Amphorae are the HAProxy VMs backing an Amphora-provider LB. There are no
-	// amphora objects for OVN-backed LBs, so the branch is only added otherwise.
-	// The listing itself is admin-only; a placeholder is shown and resolved (or
-	// gracefully degraded) on landing rather than fetched eagerly.
-	if !meta.IsOVN() {
-		amp := NewNode(TypeAmphora, "amphorae:"+lb.ID, "amphorae")
-		amp.OwningLBID = lb.ID
-		amp.SetAttr(LazyKey, LazyAmphorae)
-		root.addChild(amp)
-		t.register(amp)
-	}
-
 	return t
-}
-
-// Lazy-child markers: some nodes stand in for a collection loaded on landing.
-const (
-	// LazyKey is the attribute key marking a node whose children load lazily.
-	LazyKey = "_lazy"
-	// LazyAmphorae marks the amphorae placeholder (admin-only listing).
-	LazyAmphorae = "amphorae"
-)
-
-// IsLazy reports whether n defers loading its children until landing, and which
-// kind of collection it stands for.
-func (n *Node) IsLazy() (string, bool) {
-	if n.Attrs == nil {
-		return "", false
-	}
-	v, ok := n.Attrs[LazyKey]
-	return v, ok
 }
 
 func buildPool(t *Tree, sp *StatusPool, lbID string) *Node {
@@ -159,6 +137,7 @@ func buildPool(t *Tree, sp *StatusPool, lbID string) *Node {
 	p.OwningLBID = lbID
 	p.ProvisioningStatus = sp.ProvisioningStatus
 	p.OperatingStatus = sp.OperatingStatus
+	p.SetAttr("member_count", fmt.Sprintf("%d", len(sp.Members)))
 	p.Raw = sp
 	t.register(p)
 

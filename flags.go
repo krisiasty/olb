@@ -29,7 +29,7 @@ func registerAuthFlags(fs *flag.FlagSet) *osclient.Options {
 	o := &osclient.Options{}
 	fs.StringVar(&o.Cloud, "os-cloud", "", "clouds.yaml entry to use (or $OS_CLOUD)")
 	fs.StringVar(&o.Region, "os-region-name", "", "region to use (or $OS_REGION_NAME)")
-	fs.StringVar(&o.Project, "project", "", "initial project to scope to (name); alias for --os-project-name")
+	fs.StringVar(&o.Project, "project", "", "initial project filter (name or ID; does not change authentication scope)")
 
 	fs.StringVar(&o.AuthURL, "os-auth-url", "", "Keystone auth URL (or $OS_AUTH_URL)")
 	fs.StringVar(&o.Username, "os-username", "", "username (or $OS_USERNAME)")

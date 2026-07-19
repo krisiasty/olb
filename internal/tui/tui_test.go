@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -45,7 +47,17 @@ func newTree() *model.Tree {
 		Statuses model.StatusTree `json:"statuses"`
 	}
 	_ = json.Unmarshal([]byte(sampleStatus), &top)
-	return model.Build(&top.Statuses, model.LBMeta{VipAddress: "203.0.113.9", VipPortID: "port-9", Provider: "amphora"})
+	return model.Build(&top.Statuses, model.LBMeta{
+		VipAddress: "203.0.113.9", VipPortID: "port-9", Provider: "amphora",
+		ProjectID: "p1", ProjectName: "alpha",
+	})
+}
+
+func newFloatingIP(address string) *model.Node {
+	n := model.NewNode(model.TypeFloatingIP, "fip-1", address)
+	n.SetAttr("floating_ip", address)
+	n.DetailLoaded = true
+	return n
 }
 
 func (f *fakeBackend) ListLoadBalancers(context.Context) ([]osclient.LB, error) {
@@ -66,6 +78,10 @@ func (f *fakeBackend) GetTree(_ context.Context, lbID string, _ *model.LBMeta) (
 func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.DetailResult, error) {
 	res := osclient.DetailResult{Raw: map[string]any{"id": n.ID, "name": n.Name}, Attrs: map[string]string{"probed": "yes"}}
 	switch n.Type {
+	case model.TypeLoadBalancer:
+		res.Attrs["provider"] = "amphora"
+		res.Attrs["vip_address"] = "203.0.113.9"
+		res.Attrs["admin_state_up"] = "true"
 	case model.TypeListener:
 		res.IsListener = true
 		res.ListenerDefaultPoolID = "pool-1"
@@ -81,6 +97,26 @@ func (f *fakeBackend) LBStats(context.Context, string) (map[string]any, error) {
 	return map[string]any{"active_connections": 3, "total_connections": 100, "bytes_in": 9, "bytes_out": 8, "request_errors": 1}, nil
 }
 
+func (f *fakeBackend) ListListenerSummaries(context.Context, string) (map[string]osclient.ListenerSummary, error) {
+	return map[string]osclient.ListenerSummary{
+		"lsn-1": {ID: "lsn-1", Protocol: "TERMINATED_HTTPS", ProtocolPort: 443},
+	}, nil
+}
+
+func (f *fakeBackend) ListPoolSummaries(context.Context, string) (map[string]osclient.PoolSummary, error) {
+	return map[string]osclient.PoolSummary{
+		"pool-1": {
+			ID: "pool-1", Name: "web", Protocol: "HTTP", LBMethod: "ROUND_ROBIN",
+			MemberCount: 1, ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED",
+			ListenerIDs: []string{"lsn-1"},
+		},
+		"pool-2": {
+			ID: "pool-2", Name: "web", Protocol: "TCP", LBMethod: "LEAST_CONNECTIONS",
+			MemberCount: 4, ProvisioningStatus: "ACTIVE", OperatingStatus: "ONLINE",
+		},
+	}, nil
+}
+
 func (f *fakeBackend) ResolveFloatingIP(context.Context, string, string) (*model.Node, error) {
 	return nil, nil // internal LB: no floating IP
 }
@@ -94,11 +130,20 @@ func (f *fakeBackend) ResolveInstance(_ context.Context, lbID, addr string) (*mo
 }
 
 func (f *fakeBackend) ListAmphorae(_ context.Context, lbID string) ([]*model.Node, error) {
-	a := model.NewNode(model.TypeAmphora, "amp-1", "amp-1")
-	a.OwningLBID = lbID
-	a.DetailLoaded = true
-	a.Raw = map[string]any{"id": "amp-1"}
-	return []*model.Node{a}, nil
+	makeAmphora := func(id, role string) *model.Node {
+		a := model.NewNode(model.TypeAmphora, id, id)
+		a.OwningLBID = lbID
+		a.ProvisioningStatus = "ALLOCATED"
+		a.SetAttr("role", role)
+		a.SetAttr("status", "ALLOCATED")
+		a.DetailLoaded = true
+		a.Raw = map[string]any{"id": id, "role": role, "status": "ALLOCATED"}
+		return a
+	}
+	return []*model.Node{
+		makeAmphora("11111111-1111-1111-1111-111111111111", "MASTER"),
+		makeAmphora("22222222-2222-2222-2222-222222222222", "BACKUP"),
+	}, nil
 }
 
 func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, error) {
@@ -202,11 +247,145 @@ func TestListAndDrillDown(t *testing.T) {
 	if m.loc.node == nil || m.loc.node.Type != model.TypeLoadBalancer {
 		t.Fatalf("expected to stand on the LB, loc=%+v", m.loc)
 	}
-	// LB children include a VIP, pools, listeners, and the amphorae placeholder.
-	for _, want := range []string{"vip:", "pool:web", "listener:http", "amphorae"} {
+	// LB status children include a VIP, pools, and listeners. Amphora VMs arrive
+	// independently from the background overview request.
+	for _, want := range []string{"vip:", "pool:web", "listener:http"} {
 		if _, ok := m.selectLabel(want); !ok {
 			t.Errorf("LB view missing %q; entries=%v", want, labels(m))
 		}
+	}
+}
+
+func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	if !m.autoRefreshEnabled || m.autoRefreshInterval() != 5*time.Second {
+		t.Fatalf("auto-refresh defaults = enabled:%v interval:%s", m.autoRefreshEnabled, m.autoRefreshInterval())
+	}
+	if view := ansiRE.ReplaceAllString(m.View(), ""); !strings.Contains(view, "refresh: auto (5s)") {
+		t.Fatalf("subtitle does not show the auto-refresh interval:\n%s", view)
+	}
+
+	m = upd(t, m, press("+"))
+	if m.autoRefreshInterval() != 10*time.Second {
+		t.Fatalf("+ interval = %s, want 10s", m.autoRefreshInterval())
+	}
+	m = upd(t, m, press("-"))
+	if m.autoRefreshInterval() != 5*time.Second {
+		t.Fatalf("- interval = %s, want 5s", m.autoRefreshInterval())
+	}
+	m = upd(t, m, press("="))
+	if m.autoRefreshInterval() != 10*time.Second {
+		t.Fatalf("= interval = %s, want 10s", m.autoRefreshInterval())
+	}
+	m = upd(t, m, press("-"))
+
+	staleGeneration := m.autoGeneration
+	m = upd(t, m, press("a"))
+	if m.autoRefreshEnabled || m.autoRefreshLabel() != "refresh: manual" {
+		t.Fatalf("a did not disable auto-refresh: enabled=%v label=%q", m.autoRefreshEnabled, m.autoRefreshLabel())
+	}
+	next, cmd := m.Update(autoFullTickMsg{generation: staleGeneration})
+	m = next.(Model)
+	if cmd != nil || m.refreshing {
+		t.Fatal("a stale timer started or rescheduled refresh after auto-refresh was disabled")
+	}
+
+	m = upd(t, m, press("a"))
+	if !m.autoRefreshEnabled || m.autoRefreshInterval() != 5*time.Second {
+		t.Fatal("a did not resume auto-refresh at the selected interval")
+	}
+}
+
+func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
+
+	next, cmd := m.Update(autoStatsTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || !m.autoStatsLoading["lb-1"] {
+		t.Fatal("stats timer did not start a lightweight overview stats refresh")
+	}
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", automatic: true,
+		stats: map[string]any{"active_connections": 7},
+	})
+	if m.autoStatsLoading["lb-1"] || m.lbStats["lb-1"]["active_connections"] != 7 {
+		t.Fatalf("automatic stats response was not applied: loading=%v stats=%v", m.autoStatsLoading["lb-1"], m.lbStats["lb-1"])
+	}
+
+	m.filter.SetValue("listener")
+	next, cmd = m.Update(autoStatsTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || m.autoStatsLoading["lb-1"] {
+		t.Fatal("active list filter should pause requests while continuing the timer")
+	}
+	if label := m.autoRefreshLabel(); label != "refresh: auto (5s, paused)" {
+		t.Fatalf("paused auto-refresh label = %q", label)
+	}
+
+	m.filter.SetValue("")
+	m.status = statusError
+	next, cmd = m.Update(autoStatsTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || !m.autoStatsLoading["lb-1"] {
+		t.Fatal("status filtering should not pause automatic stats refresh")
+	}
+	if label := m.autoRefreshLabel(); label != "refresh: auto (5s)" {
+		t.Fatalf("status filter incorrectly paused auto-refresh: %q", label)
+	}
+}
+
+func TestAutomaticFullRefreshAvoidsOverlapAndCompletesSilently(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m.autoStatsLoading["lb-1"] = true
+	next, cmd := m.Update(autoFullTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || m.refreshing {
+		t.Fatal("full timer should reschedule without overlapping an in-flight stats request")
+	}
+
+	delete(m.autoStatsLoading, "lb-1")
+	next, cmd = m.Update(autoFullTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || !m.refreshing || !m.refreshAutomatic {
+		t.Fatal("full timer did not start an automatic list refresh")
+	}
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	if m.refreshing || m.refreshAutomatic {
+		t.Fatal("automatic list refresh did not finish")
+	}
+	if m.flash == "refreshed" {
+		t.Fatal("successful automatic refresh should not show the manual completion flash")
+	}
+}
+
+func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
+	root := model.NewNode(model.TypeLoadBalancer, "lb-1", "lb")
+	root.Children = []*model.Node{
+		model.NewNode(model.TypePool, "pool-z", "Zulu"),
+		model.NewNode(model.TypeAmphora, "amphora-b", ""),
+		model.NewNode(model.TypeListener, "listener-b", "beta"),
+		model.NewNode(model.TypePool, "pool-a", "alpha"),
+		model.NewNode(model.TypeVIP, "vip-b", "10.0.0.2"),
+		model.NewNode(model.TypeListener, "listener-a2", "Alpha"),
+		model.NewNode(model.TypeAmphora, "amphora-a", ""),
+		model.NewNode(model.TypeListener, "listener-a1", "Alpha"),
+	}
+
+	entries := nodeEntries(root)
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		got = append(got, string(entry.node.Type)+":"+entry.node.ID)
+	}
+	want := []string{
+		"vip:vip-b",
+		"listener:listener-a1", "listener:listener-a2", "listener:listener-b",
+		"pool:pool-a", "pool:pool-z",
+		"amphora:amphora-a", "amphora:amphora-b",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("related object order = %v, want %v", got, want)
 	}
 }
 
@@ -252,13 +431,54 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // into LB (loc.node = LB)
 
-	// d -> detail overlay (fetches detail + stats).
-	m = updExec(t, m, press("d"))
-	if m.overlay != overlayDetail {
-		t.Fatalf("d should open the detail overlay, got %v", m.overlay)
+	// The LB view embeds independently-loaded details and stats above the
+	// selectable related-object list.
+	view := m.View()
+	for _, section := range []string{"DETAILS", "STATS", "RELATED OBJECTS"} {
+		if !strings.Contains(view, section) {
+			t.Errorf("LB overview missing %q:\n%s", section, view)
+		}
 	}
+	if !m.lbDetailLoading["lb-1"] || !m.lbStatsLoading["lb-1"] {
+		t.Fatal("opening an LB should start detail and stats requests")
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
+		res: osclient.DetailResult{Raw: map[string]any{"id": "lb-1"}, Attrs: map[string]string{
+			"provider": "amphora", "vip_address": "203.0.113.9", "admin_state_up": "true",
+		}},
+	})
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
-	m = upd(t, m, press("esc"))
+	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", vipID: "port-9", node: newFloatingIP("198.51.100.7")})
+	view = m.View()
+	for _, value := range []string{"Admin state", "ENABLED", "203.0.113.9 (198.51.100.7)", "Active connections", "1"} {
+		if !strings.Contains(view, value) {
+			t.Errorf("loaded LB overview missing %q:\n%s", value, view)
+		}
+	}
+	plainView := ansiRE.ReplaceAllString(view, "")
+	vipRow := navigationLineContaining(plainView, "203.0.113.9")
+	if !strings.Contains(vipRow, "203.0.113.9 (198.51.100.7)") || strings.Count(vipRow, "203.0.113.9") != 1 {
+		t.Fatalf("related VIP row should use fixed-and-floating form without repetition: %q", vipRow)
+	}
+	fields := m.lbDetailFields()
+	admin := fields[len(fields)-1]
+	if admin.label != "Admin state" || admin.value != "ENABLED" || !admin.status {
+		t.Fatalf("admin state should use status formatting, got %+v", admin)
+	}
+	if got := string(statusColor("ENABLED")); got != "42" {
+		t.Fatalf("ENABLED color = %q, want green (42)", got)
+	}
+	if got := string(statusColor("DISABLED")); got != "244" {
+		t.Fatalf("DISABLED color = %q, want grey (244)", got)
+	}
+	if m.overlay != overlayNone {
+		t.Fatalf("inline overview should not open an overlay, got %v", m.overlay)
+	}
+	m = upd(t, m, press("d"))
+	if m.overlay != overlayNone {
+		t.Fatalf("d should no longer open a detail overlay, got %v", m.overlay)
+	}
 
 	// y -> raw YAML overlay; then o copies (print mode shows it).
 	m = updExec(t, m, press("y"))
@@ -278,6 +498,213 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	// i / n copy the standing object's id / name (print mode, no stdout write).
 	m = upd(t, m, press("i"))
 	m = upd(t, m, press("n"))
+}
+
+func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
+		res: osclient.DetailResult{Attrs: map[string]string{"admin_state_up": "true"}},
+	})
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
+	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", vipID: "port-9", node: newFloatingIP("198.51.100.7")})
+	selected, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("test LB has no listener row")
+	}
+	m.cursor = selected
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("refresh should request a new status graph")
+	}
+	view := m.View()
+	for _, want := range []string{"refreshing…", "ENABLED", "203.0.113.9 (198.51.100.7)", "Active connections", "1"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("refresh should retain %q while loading:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "loading…") {
+		t.Errorf("full refresh should not repeat its state in the panel headings:\n%s", view)
+	}
+	if strings.Contains(view, " tree") {
+		t.Errorf("refresh status should not expose the internal tree request:\n%s", view)
+	}
+	if m.flash == "refreshed" {
+		t.Fatal("refresh must not report completion before the responses arrive")
+	}
+
+	// The graph response starts forced detail and stats requests, but the old
+	// overview stays visible until both of those responses are ready.
+	fresh := newTree()
+	for left, right := 0, len(fresh.Root.Children)-1; left < right; left, right = left+1, right-1 {
+		fresh.Root.Children[left], fresh.Root.Children[right] = fresh.Root.Children[right], fresh.Root.Children[left]
+	}
+	next, cmd = m.Update(treeMsg{lbID: "lb-1", tree: fresh})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("graph refresh should start detail and stats requests")
+	}
+	selectedID, _, _ := m.entries[m.cursor].identity()
+	if selectedID.ID != "lsn-1" {
+		t.Fatalf("refresh selected %q, want retained listener lsn-1", selectedID.ID)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview, refresh: true,
+		res: osclient.DetailResult{Attrs: map[string]string{"admin_state_up": "false"}},
+	})
+	view = m.View()
+	for _, want := range []string{"refreshing…", "ENABLED", "203.0.113.9 (198.51.100.7)", "Active connections", "1"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("a partial refresh should retain %q:\n%s", want, view)
+		}
+	}
+	partialVIPRow := navigationLineContaining(ansiRE.ReplaceAllString(view, ""), "203.0.113.9")
+	if !strings.Contains(partialVIPRow, "203.0.113.9 (198.51.100.7)") {
+		t.Fatalf("related VIP row lost its floating IP during refresh: %q", partialVIPRow)
+	}
+
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", refresh: true,
+		stats: map[string]any{"active_connections": 9},
+	})
+	if !m.refreshing {
+		t.Fatal("refresh should wait for the floating-IP lookup")
+	}
+	m = upd(t, m, lbFloatingIPMsg{
+		lbID: "lb-1", vipID: "port-9", refresh: true,
+		node: newFloatingIP("198.51.100.8"),
+	})
+	if !m.refreshing {
+		t.Fatal("refresh should wait for the amphora VM listing")
+	}
+	amphorae, err := m.backend.ListAmphorae(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, amphoraeMsg{lbID: "lb-1", nodes: amphorae, refresh: true})
+	if !m.refreshing {
+		t.Fatal("refresh should wait for listener endpoint details")
+	}
+	listeners, err := m.backend.ListListenerSummaries(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: "lb-1", items: listeners, refresh: true})
+	if !m.refreshing {
+		t.Fatal("refresh should wait for pool summaries")
+	}
+	pools, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: pools, refresh: true})
+	view = m.View()
+	for _, want := range []string{"DISABLED", "203.0.113.9 (198.51.100.8)", "Active connections", "9"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("completed refresh missing %q:\n%s", want, view)
+		}
+	}
+	if m.refreshing || m.loading {
+		t.Fatal("refresh should finish only after detail and stats are committed")
+	}
+	if m.flash != "refreshed" {
+		t.Fatalf("completion flash = %q, want refreshed", m.flash)
+	}
+}
+
+func TestLBOverviewResponsiveLayout(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+
+	wide := ansiRE.ReplaceAllString(m.View(), "")
+	wideLines := strings.Split(wide, "\n")
+	if wideLines[2] != "" {
+		t.Fatalf("LB overview should have a blank line below project status: %q", wideLines[2])
+	}
+	if strings.Contains(wideLines[1], "items") {
+		t.Fatalf("LB overview subtitle should not repeat the related-object count: %q", wideLines[1])
+	}
+	if !strings.Contains(m.View(), m.st.title.Render(projectLabel(m.project))) {
+		t.Fatalf("project name should use emphasized styling: %q", wideLines[1])
+	}
+	if !strings.Contains(wideLines[1], "scope: project alpha") {
+		t.Fatalf("single-project subtitle should use consistent scope wording: %q", wideLines[1])
+	}
+	lastField := -1
+	for _, field := range []string{"Name", "ID", "Project name", "Project ID", "VIP", "Provider", "Operating"} {
+		at := strings.Index(wide, field)
+		if at <= lastField {
+			t.Fatalf("detail field %q is missing or out of order:\n%s", field, wide)
+		}
+		lastField = at
+	}
+	for _, owner := range []string{"Project name  alpha", "Project ID    p1"} {
+		if !strings.Contains(wide, owner) {
+			t.Fatalf("LB details should identify owner %q:\n%s", owner, wide)
+		}
+	}
+	wideHeading := lineContaining(wide, "DETAILS")
+	if !strings.Contains(wideHeading, "STATS") {
+		t.Fatalf("wide overview should place details and stats side-by-side: %q", wideHeading)
+	}
+	wideRelatedAt := -1
+	for i, line := range wideLines {
+		if strings.Contains(line, "RELATED OBJECTS") {
+			wideRelatedAt = i
+			break
+		}
+	}
+	if wideRelatedAt <= 0 || wideLines[wideRelatedAt-1] != "" {
+		t.Fatalf("related objects should have permanent leading space:\n%s", wide)
+	}
+
+	m = upd(t, m, tea.WindowSizeMsg{Width: 60, Height: 18})
+	narrow := ansiRE.ReplaceAllString(m.View(), "")
+	lines := strings.Split(narrow, "\n")
+	detailsAt, statsAt, relatedAt := -1, -1, -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "DETAILS"):
+			detailsAt = i
+		case strings.Contains(line, "STATS"):
+			statsAt = i
+		case strings.Contains(line, "RELATED OBJECTS"):
+			relatedAt = i
+		}
+	}
+	if detailsAt < 0 || statsAt <= detailsAt || relatedAt <= statsAt {
+		t.Fatalf("narrow overview should stack details, stats, then related objects; indexes %d/%d/%d:\n%s", detailsAt, statsAt, relatedAt, narrow)
+	}
+	if lines[detailsAt-1] != "" || lines[statsAt-1] != "" || lines[relatedAt-1] != "" {
+		t.Fatalf("stacked overview sections should retain blank separators:\n%s", narrow)
+	}
+	if got := len(lines); got != m.height {
+		t.Fatalf("responsive overview rendered %d lines, want terminal height %d", got, m.height)
+	}
+	if navigationLineContaining(narrow, "http") == "" {
+		t.Fatalf("narrow overview should retain selectable related-object rows:\n%s", narrow)
+	}
+}
+
+func TestLBOverviewPanelsFailIndependently(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, detailMsg{nodeID: "lb-1", lbID: "lb-1", intent: intentOverview, err: errors.New("detail denied")})
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 7}})
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	if !strings.Contains(lineContaining(view, "DETAILS"), "unavailable") {
+		t.Fatalf("detail failure should be isolated in its panel:\n%s", view)
+	}
+	if !strings.Contains(view, "Active connections") || !strings.Contains(view, "7") {
+		t.Fatalf("stats should still render after detail failure:\n%s", view)
+	}
+	if navigationLineContaining(view, "http") == "" {
+		t.Fatalf("related objects should remain navigable after detail failure:\n%s", view)
+	}
 }
 
 func TestHistoryBackForwardAndTruncation(t *testing.T) {
@@ -387,17 +814,101 @@ func TestFollowUnresolvedInstanceEdge(t *testing.T) {
 	}
 }
 
-func TestAmphoraLazyLoad(t *testing.T) {
+func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // LB
-	i, ok := m.selectLabel("amphorae")
+	if !m.lbAmphoraLoading["lb-1"] {
+		t.Fatal("amphora-provider overview should start a background VM listing")
+	}
+	nodes, err := m.backend.ListAmphorae(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, amphoraeMsg{lbID: "lb-1", nodes: nodes})
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, row := range []string{
+		"11111111-1111-1111-1111-111111111111 (MASTER)",
+		"22222222-2222-2222-2222-222222222222 (BACKUP)",
+	} {
+		if navigationLineContaining(view, row) == "" {
+			t.Fatalf("LB overview missing direct amphora row %q:\n%s", row, view)
+		}
+	}
+	if strings.Contains(view, "Amphorae") || strings.Contains(view, "instances") {
+		t.Fatalf("LB overview should not retain an amphora aggregate row:\n%s", view)
+	}
+	if strings.Contains(view, "[ALLOCATED]") {
+		t.Fatalf("normal Amphora allocation state should not be called out:\n%s", view)
+	}
+	if got := string(statusColor("ALLOCATED")); got != "42" {
+		t.Fatalf("ALLOCATED color = %q, want green (42)", got)
+	}
+	i, ok := m.selectLabel("11111111-1111-1111-1111-111111111111")
 	if !ok {
-		t.Fatal("amphora provider LB should show an amphorae placeholder")
+		t.Fatal("direct amphora row is not selectable")
 	}
 	m.cursor = i
-	m = updExec(t, m, press("enter")) // loads amphorae, then navigates in
-	if m.loc.node == nil || m.loc.node.Type != model.TypeAmphora {
-		t.Fatalf("expected to land on the amphorae node, got %+v", m.loc.node)
+	m = updExec(t, m, press("enter"))
+	if m.loc.node == nil || m.loc.node.Type != model.TypeAmphora || m.loc.node.ID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected to land directly on the amphora VM, got %+v", m.loc.node)
+	}
+}
+
+func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	items, err := m.backend.ListListenerSummaries(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: "lb-1", items: items})
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	line := navigationLineContaining(view, "HTTPS/443 (TLS termination) · 1 pool")
+	if line == "" || !strings.Contains(line, "http") {
+		t.Fatalf("listener row should combine name, normalized endpoint, and pool count:\n%s", view)
+	}
+
+	for _, tc := range []struct {
+		protocol string
+		port     string
+		want     string
+	}{
+		{protocol: "TCP", port: "443", want: "TCP/443"},
+		{protocol: "HTTP", port: "80", want: "HTTP/80"},
+		{protocol: "TERMINATED_HTTPS", port: "443", want: "HTTPS/443 (TLS termination)"},
+	} {
+		if got := listenerEndpoint(tc.protocol, tc.port); got != tc.want {
+			t.Errorf("listenerEndpoint(%q, %q) = %q, want %q", tc.protocol, tc.port, got, tc.want)
+		}
+	}
+
+	listener := m.loc.tree.Node("lsn-1")
+	listener.AddRef("alternate pool", model.NewNode(model.TypePool, "pool-2", "alternate"))
+	if got := listenerSummary(listener); got != "HTTPS/443 (TLS termination) · 2 pools" {
+		t.Fatalf("listenerSummary with two associated pools = %q", got)
+	}
+}
+
+func TestPoolRowsShowProtocolAlgorithmAndMemberCount(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	items, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: items})
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	line := navigationLineContaining(view, "HTTP · round robin · 1 member")
+	if line == "" || !strings.Contains(line, "web (pool-1)") {
+		t.Fatalf("pool row should combine name and diagnostic summary:\n%s", view)
+	}
+	duplicate := navigationLineContaining(view, "TCP · least connections · 4 members")
+	if duplicate == "" || !strings.Contains(duplicate, "web (pool-2)") {
+		t.Fatalf("duplicate pool names should include a short ID:\n%s", view)
+	}
+
+	if got := poolSummary("TCP", "LEAST_CONNECTIONS", "4"); got != "TCP · least connections · 4 members" {
+		t.Fatalf("poolSummary = %q", got)
 	}
 }
 
@@ -433,6 +944,20 @@ func TestAllProjectsMode(t *testing.T) {
 	if !strings.Contains(m.View(), "all accessible projects") {
 		t.Errorf("subtitle should indicate all-projects scope")
 	}
+
+	// The global scope does not identify the selected LB's owner, so the inline
+	// details must carry both the friendly project name and authoritative ID.
+	m = updExec(t, m, press("enter"))
+	overview := ansiRE.ReplaceAllString(m.View(), "")
+	for _, owner := range []string{"Project name  alpha", "Project ID    p1"} {
+		if !strings.Contains(overview, owner) {
+			t.Fatalf("all-projects LB overview missing owner %q:\n%s", owner, overview)
+		}
+	}
+	if !strings.Contains(strings.Split(overview, "\n")[1], "scope: all accessible projects") {
+		t.Fatalf("LB overview should retain the global scope subtitle:\n%s", overview)
+	}
+	m = upd(t, m, press("esc"))
 
 	// Selecting a concrete project exits all-projects mode.
 	m = updExec(t, m, press("p"))

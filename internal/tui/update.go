@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -42,6 +43,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onDetail(msg)
 	case statsMsg:
 		return m.onStats(msg)
+	case lbFloatingIPMsg:
+		return m.onLBFloatingIP(msg)
+	case listenerSummariesMsg:
+		return m.onListenerSummaries(msg)
+	case poolSummariesMsg:
+		return m.onPoolSummaries(msg)
 	case refResolveMsg:
 		return m.onRefResolve(msg)
 	case amphoraeMsg:
@@ -55,6 +62,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash, m.flashErr = "", false
 		}
 		return m, nil
+	case autoStatsTickMsg:
+		return m.onAutoStatsTick(msg)
+	case autoFullTickMsg:
+		return m.onAutoFullTick(msg)
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
@@ -65,20 +76,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- message handlers -----------------------------------------------------
 
 func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
+	wasRefresh := m.refreshing && m.refreshLBID == ""
 	m.loading = false
 	if msg.err != nil {
+		if wasRefresh {
+			return m, m.finishRefresh("refresh load balancers: " + msg.err.Error())
+		}
 		return m, m.setFlash("list load balancers: "+msg.err.Error(), true)
 	}
 	m.lbs = msg.lbs
 	m.lbsLoaded = true
 	if cur, ok := m.hist.current(); ok && cur.id.IsLBList() {
 		m.setLBLocation()
+		m.restoreRefreshSelection()
+	}
+	if wasRefresh {
+		return m, m.finishRefresh("")
 	}
 	return m, nil
 }
 
 func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
+	wasRefresh := m.refreshing && m.refreshLBID == msg.lbID
+	if !wasRefresh {
+		m.loading = false
+	}
 	cur, ok := m.hist.current()
 	if msg.err != nil {
 		if osclient.IsNotFound(msg.err) && ok && cur.id.OwningLBID == msg.lbID {
@@ -87,25 +109,72 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			m.loc = location{id: cur.id, dead: true}
 			m.allEntries = nil
 			m.applyFilters()
+			if wasRefresh {
+				m.endRefresh()
+			}
 			return m, m.setFlash("this object was deleted since you last viewed it", true)
 		}
+		if wasRefresh {
+			return m, m.finishRefresh("refresh: " + msg.err.Error())
+		}
 		return m, m.setFlash("load tree: "+msg.err.Error(), true)
+	}
+	if wasRefresh {
+		m.preserveLBOverview(msg.lbID, msg.tree)
 	}
 	m.cache.Put(msg.lbID, msg.tree)
 	if ok && cur.id.OwningLBID == msg.lbID {
 		m.buildNodeLocation(cur.id, msg.tree)
+		m.restoreRefreshSelection()
+		if wasRefresh {
+			if m.loc.node != nil && m.loc.node.Type == model.TypeLoadBalancer {
+				return m, m.reloadLBOverview()
+			}
+			return m, m.finishRefresh("")
+		}
+		return m, m.loadLBOverview()
+	}
+	if wasRefresh {
+		return m, m.finishRefresh("")
 	}
 	return m, nil
 }
 
 func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshDetail = &msg
+			return m, m.commitLBRefresh()
+		}
+		return m, nil
+	}
+	if msg.intent == intentOverview {
+		delete(m.lbDetailLoading, msg.lbID)
+	} else {
+		m.loading = false
+	}
 	if msg.err != nil {
+		if msg.intent == intentOverview {
+			m.lbDetailErr[msg.lbID] = msg.err.Error()
+			return m, nil
+		}
 		return m, m.setFlash("load detail: "+msg.err.Error(), true)
 	}
-	node := m.treeNode(msg.nodeID)
+	delete(m.lbDetailErr, msg.lbID)
+	node := m.applyDetailResult(msg)
 	if node == nil {
 		return m, nil
+	}
+	if msg.intent == intentOverview {
+		return m, nil
+	}
+	return m, m.openInspect(node, msg.intent)
+}
+
+func (m *Model) applyDetailResult(msg detailMsg) *model.Node {
+	tree, node := m.detailTarget(msg.lbID, msg.nodeID)
+	if node == nil {
+		return nil
 	}
 	// Apply the fetched detail on the UI goroutine.
 	node.Raw = msg.res.Raw
@@ -113,12 +182,12 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 	for k, v := range msg.res.Attrs {
 		node.SetAttr(k, v)
 	}
-	if m.loc.tree != nil {
+	if tree != nil {
 		if msg.res.IsListener {
-			m.loc.tree.ResolveListenerDefaultPool(node.ID, msg.res.ListenerDefaultPoolID)
+			tree.ResolveListenerDefaultPool(node.ID, msg.res.ListenerDefaultPoolID)
 		}
 		if msg.res.IsL7Policy {
-			m.loc.tree.ResolveL7PolicyRedirect(node.ID, msg.res.L7Action, msg.res.L7RedirectPoolID)
+			tree.ResolveL7PolicyRedirect(node.ID, msg.res.L7Action, msg.res.L7RedirectPoolID)
 		}
 	}
 	node.RefsResolved = true
@@ -127,18 +196,405 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		m.allEntries = nodeEntries(node)
 		m.applyFilters()
 	}
-	return m, m.openInspect(node, msg.intent)
+	return node
 }
 
 func (m Model) onStats(msg statsMsg) (tea.Model, tea.Cmd) {
-	if msg.err != nil {
-		return m, nil // stats are a nicety; failure is silent
+	if msg.automatic {
+		delete(m.autoStatsLoading, msg.lbID)
+		// A full refresh owns the visible value once it has begun; its staged
+		// stats response will be committed with the rest of the overview.
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			return m, nil
+		}
 	}
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshStats = &msg
+			return m, m.commitLBRefresh()
+		}
+		return m, nil
+	}
+	delete(m.lbStatsLoading, msg.lbID)
+	if msg.err != nil {
+		m.lbStatsErr[msg.lbID] = msg.err.Error()
+		return m, nil
+	}
+	delete(m.lbStatsErr, msg.lbID)
 	m.lbStats[msg.lbID] = msg.stats
-	if m.overlay == overlayDetail && m.loc.node != nil && m.loc.node.ID == msg.lbID {
-		m.refreshDetailOverlay()
+	return m, nil
+}
+
+func (m Model) onLBFloatingIP(msg lbFloatingIPMsg) (tea.Model, tea.Cmd) {
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshFIP = &msg
+			return m, m.commitLBRefresh()
+		}
+		return m, nil
+	}
+	delete(m.lbFIPLoading, msg.lbID)
+	m.lbFIPLoaded[msg.lbID] = true
+	m.applyLBFloatingIP(msg)
+	return m, nil
+}
+
+func (m Model) onListenerSummaries(msg listenerSummariesMsg) (tea.Model, tea.Cmd) {
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshListeners = &msg
+			return m, m.commitLBRefresh()
+		}
+		return m, nil
+	}
+	delete(m.lbListenersLoading, msg.lbID)
+	m.lbListenersLoaded[msg.lbID] = true
+	if msg.err == nil {
+		m.applyListenerSummaries(msg.lbID, msg.items)
 	}
 	return m, nil
+}
+
+func (m Model) onPoolSummaries(msg poolSummariesMsg) (tea.Model, tea.Cmd) {
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshPools = &msg
+			return m, m.commitLBRefresh()
+		}
+		return m, nil
+	}
+	delete(m.lbPoolsLoading, msg.lbID)
+	m.lbPoolsLoaded[msg.lbID] = true
+	if msg.err == nil {
+		m.applyPoolSummaries(msg.lbID, msg.items)
+	}
+	return m, nil
+}
+
+// detailTarget locates the tree and node targeted by an async detail response
+// even if the user navigated elsewhere while the request was in flight.
+func (m Model) detailTarget(lbID, nodeID string) (*model.Tree, *model.Node) {
+	if m.loc.tree != nil && (lbID == "" || m.loc.tree.Root.ID == lbID) {
+		if n := m.loc.tree.Node(nodeID); n != nil {
+			return m.loc.tree, n
+		}
+	}
+	if entry, ok := m.cache.Peek(lbID); ok && entry.Tree != nil {
+		return entry.Tree, entry.Tree.Node(nodeID)
+	}
+	return nil, nil
+}
+
+// loadLBOverview starts the two independent requests backing the inline LB
+// overview. Re-entering a cached LB does not refetch data already present.
+func (m *Model) loadLBOverview() tea.Cmd {
+	return m.startLBOverview(false)
+}
+
+// reloadLBOverview forces both requests for an explicit refresh while leaving
+// the previously-rendered values in place until both responses have arrived.
+func (m *Model) reloadLBOverview() tea.Cmd {
+	return m.startLBOverview(true)
+}
+
+func (m *Model) startLBOverview(refresh bool) tea.Cmd {
+	n := m.loc.node
+	if n == nil || n.Type != model.TypeLoadBalancer {
+		return nil
+	}
+	if refresh {
+		m.refreshDetail = nil
+		m.refreshStats = nil
+		m.refreshFIP = nil
+		m.refreshAmphorae = nil
+		m.refreshListeners = nil
+		m.refreshPools = nil
+		m.lbDetailLoading[n.ID] = true
+		m.lbStatsLoading[n.ID] = true
+		cmds := []tea.Cmd{m.refreshDetailCmd(n), m.refreshStatsCmd(n.ID)}
+		vipID, portID := lbVIPLookup(n)
+		m.refreshFIPExpected = portID != ""
+		if m.refreshFIPExpected {
+			m.lbFIPLoading[n.ID] = true
+			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, vipID, portID, true))
+		}
+		m.refreshAmphoraeExpected = m.loc.tree != nil && !m.loc.tree.Meta.IsOVN()
+		if m.refreshAmphoraeExpected {
+			m.lbAmphoraLoading[n.ID] = true
+			cmds = append(cmds, m.loadAmphoraeCmd(n.ID, true))
+		}
+		m.refreshListenersExpected = true
+		m.lbListenersLoading[n.ID] = true
+		cmds = append(cmds, m.listenerSummariesCmd(n.ID, true))
+		m.refreshPoolsExpected = true
+		m.lbPoolsLoading[n.ID] = true
+		cmds = append(cmds, m.poolSummariesCmd(n.ID, true))
+		return tea.Batch(cmds...)
+	}
+	var cmds []tea.Cmd
+	if !n.DetailLoaded && !m.lbDetailLoading[n.ID] {
+		m.lbDetailLoading[n.ID] = true
+		delete(m.lbDetailErr, n.ID)
+		cmds = append(cmds, m.fetchDetailCmd(n, intentOverview))
+	}
+	if _, loaded := m.lbStats[n.ID]; !loaded && !m.lbStatsLoading[n.ID] {
+		m.lbStatsLoading[n.ID] = true
+		delete(m.lbStatsErr, n.ID)
+		cmds = append(cmds, m.lbStatsCmd(n.ID))
+	}
+	if !m.lbFIPLoaded[n.ID] && !m.lbFIPLoading[n.ID] {
+		if vipID, portID := lbVIPLookup(n); portID != "" {
+			m.lbFIPLoading[n.ID] = true
+			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, vipID, portID, false))
+		}
+	}
+	if m.loc.tree != nil && !m.loc.tree.Meta.IsOVN() && !m.lbAmphoraLoaded[n.ID] && !m.lbAmphoraLoading[n.ID] {
+		m.lbAmphoraLoading[n.ID] = true
+		cmds = append(cmds, m.loadAmphoraeCmd(n.ID, false))
+	}
+	if !m.lbListenersLoaded[n.ID] && !m.lbListenersLoading[n.ID] {
+		m.lbListenersLoading[n.ID] = true
+		cmds = append(cmds, m.listenerSummariesCmd(n.ID, false))
+	}
+	if !m.lbPoolsLoaded[n.ID] && !m.lbPoolsLoading[n.ID] {
+		m.lbPoolsLoading[n.ID] = true
+		cmds = append(cmds, m.poolSummariesCmd(n.ID, false))
+	}
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return tea.Batch(cmds...)
+	}
+}
+
+func lbVIPLookup(lb *model.Node) (vipID, portID string) {
+	for _, child := range lb.Children {
+		if child.Type == model.TypeVIP {
+			return child.ID, child.Attrs["port_id"]
+		}
+	}
+	return "", ""
+}
+
+// preserveLBOverview carries full-detail values into a newly-fetched status
+// tree. The new detail response is applied only when the matching stats response
+// is also ready, so these values bridge the refresh without flickering.
+func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
+	if fresh == nil || fresh.Root == nil {
+		return
+	}
+	var old *model.Node
+	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
+		old = m.loc.tree.Root
+	} else if entry, ok := m.cache.Peek(lbID); ok && entry.Tree != nil {
+		old = entry.Tree.Root
+	}
+	if old == nil {
+		return
+	}
+	for key, value := range old.Attrs {
+		if _, exists := fresh.Root.Attrs[key]; !exists {
+			fresh.Root.SetAttr(key, value)
+		}
+	}
+	for _, child := range old.Children {
+		if replacement := fresh.Node(child.ID); replacement != nil {
+			switch child.Type {
+			case model.TypeVIP:
+				replacement.SetAttr("floating_ip", child.Attrs["floating_ip"])
+			case model.TypeListener:
+				replacement.SetAttr("protocol", child.Attrs["protocol"])
+				replacement.SetAttr("port", child.Attrs["port"])
+			case model.TypePool:
+				replacement.SetAttr("protocol", child.Attrs["protocol"])
+				replacement.SetAttr("lb_algorithm", child.Attrs["lb_algorithm"])
+				replacement.SetAttr("member_count", child.Attrs["member_count"])
+			}
+		}
+	}
+	if old.DetailLoaded {
+		fresh.Root.DetailLoaded = true
+		fresh.Root.Raw = old.Raw
+	}
+	// Direct amphora rows are not part of Octavia's status tree. Carry the
+	// last-known instances into the replacement graph until their background
+	// listing completes, just like the cached detail/stats values above.
+	for _, child := range old.Children {
+		if child.Type != model.TypeAmphora {
+			continue
+		}
+		child.Parent = fresh.Root
+		fresh.Root.Children = append(fresh.Root.Children, child)
+		fresh.Attach(child)
+	}
+}
+
+// commitLBRefresh atomically publishes the detail and stats responses. Failed
+// halves retain their old data and mark the corresponding panel unavailable.
+func (m *Model) commitLBRefresh() tea.Cmd {
+	if m.refreshDetail == nil || m.refreshStats == nil ||
+		(m.refreshFIPExpected && m.refreshFIP == nil) ||
+		(m.refreshAmphoraeExpected && m.refreshAmphorae == nil) ||
+		(m.refreshListenersExpected && m.refreshListeners == nil) ||
+		(m.refreshPoolsExpected && m.refreshPools == nil) {
+		return nil
+	}
+	lbID := m.refreshLBID
+	detail := *m.refreshDetail
+	stats := *m.refreshStats
+	delete(m.lbDetailLoading, lbID)
+	delete(m.lbStatsLoading, lbID)
+	delete(m.lbFIPLoading, lbID)
+	delete(m.lbAmphoraLoading, lbID)
+	delete(m.lbListenersLoading, lbID)
+	delete(m.lbPoolsLoading, lbID)
+
+	var failures []string
+	if detail.err != nil {
+		m.lbDetailErr[lbID] = detail.err.Error()
+		failures = append(failures, "details: "+detail.err.Error())
+	} else {
+		delete(m.lbDetailErr, lbID)
+		m.applyDetailResult(detail)
+	}
+	if stats.err != nil {
+		m.lbStatsErr[lbID] = stats.err.Error()
+		failures = append(failures, "stats: "+stats.err.Error())
+	} else {
+		delete(m.lbStatsErr, lbID)
+		m.lbStats[lbID] = stats.stats
+	}
+	if m.refreshFIPExpected {
+		m.lbFIPLoaded[lbID] = true
+		m.applyLBFloatingIP(*m.refreshFIP)
+	}
+	if m.refreshAmphoraeExpected {
+		m.lbAmphoraLoaded[lbID] = true
+		if m.refreshAmphorae.err == nil {
+			m.applyAmphorae(lbID, m.refreshAmphorae.nodes)
+			m.restoreRefreshSelection()
+		}
+	}
+	if m.refreshListenersExpected {
+		m.lbListenersLoaded[lbID] = true
+		if m.refreshListeners.err == nil {
+			m.applyListenerSummaries(lbID, m.refreshListeners.items)
+		}
+	}
+	if m.refreshPoolsExpected {
+		m.lbPoolsLoaded[lbID] = true
+		if m.refreshPools.err == nil {
+			m.applyPoolSummaries(lbID, m.refreshPools.items)
+			m.restoreRefreshSelection()
+		}
+	}
+	if len(failures) > 0 {
+		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
+	}
+	return m.finishRefresh("")
+}
+
+func (m *Model) finishRefresh(errText string) tea.Cmd {
+	automatic := m.refreshAutomatic
+	m.endRefresh()
+	if errText != "" {
+		return m.setFlash(errText, true)
+	}
+	if automatic {
+		return nil
+	}
+	return m.setFlash("refreshed", false)
+}
+
+func (m *Model) endRefresh() {
+	m.loading = false
+	m.loadingWhat = ""
+	m.refreshing = false
+	m.refreshLBID = ""
+	m.refreshDetail = nil
+	m.refreshStats = nil
+	m.refreshFIP = nil
+	m.refreshFIPExpected = false
+	m.refreshAmphorae = nil
+	m.refreshAmphoraeExpected = false
+	m.refreshListeners = nil
+	m.refreshListenersExpected = false
+	m.refreshPools = nil
+	m.refreshPoolsExpected = false
+	m.refreshAt = model.Identity{}
+	m.refreshSelection = entrySelection{}
+	m.refreshSelectionOK = false
+	m.refreshCursor = 0
+	m.refreshAutomatic = false
+}
+
+func (m *Model) applyLBFloatingIP(msg lbFloatingIPMsg) {
+	if msg.err != nil {
+		return
+	}
+	tree, vip := m.detailTarget(msg.lbID, msg.vipID)
+	if vip == nil || tree == nil {
+		return
+	}
+	if msg.node == nil {
+		delete(m.lbFloatingIPs, msg.lbID)
+		delete(vip.Attrs, "floating_ip")
+		vip.ResolveEdge("floating IP", nil)
+	} else {
+		msg.node.OwningLBID = msg.lbID
+		tree.Attach(msg.node)
+		vip.ResolveEdge("floating IP", msg.node)
+		address := msg.node.Attrs["floating_ip"]
+		if address == "" {
+			address = msg.node.Name
+		}
+		m.lbFloatingIPs[msg.lbID] = address
+		vip.SetAttr("floating_ip", address)
+	}
+	if m.loc.node == vip {
+		m.allEntries = nodeEntries(vip)
+		m.applyFilters()
+	}
+}
+
+func (m *Model) captureRefreshSelection() {
+	m.refreshAt = m.loc.id
+	m.refreshCursor = m.cursor
+	m.refreshSelectionOK = m.cursor >= 0 && m.cursor < len(m.entries)
+	if m.refreshSelectionOK {
+		m.refreshSelection = m.entries[m.cursor].selection()
+	}
+}
+
+func (m *Model) restoreRefreshSelection() {
+	if !m.loc.id.Equal(m.refreshAt) {
+		return
+	}
+	selected := -1
+	if m.refreshSelectionOK {
+		for i := range m.entries {
+			if m.entries[i].selection().equal(m.refreshSelection) {
+				selected = i
+				break
+			}
+		}
+	}
+	if selected < 0 && len(m.entries) > 0 {
+		selected = m.refreshCursor
+		if selected >= len(m.entries) {
+			selected = len(m.entries) - 1
+		}
+		if selected < 0 {
+			selected = 0
+		}
+	}
+	if selected >= 0 {
+		m.cursor = selected
+		m.ensureVisible()
+	}
 }
 
 func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
@@ -161,6 +617,11 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 		// floating IP) — mark the edge missing so it stops inviting a lookup.
 		if src != nil {
 			src.ResolveEdge(msg.label, nil)
+			if msg.label == "floating IP" {
+				delete(m.lbFloatingIPs, src.OwningLBID)
+				delete(src.Attrs, "floating_ip")
+				m.lbFIPLoaded[src.OwningLBID] = true
+			}
 			if m.loc.node == src {
 				m.allEntries = nodeEntries(src)
 				m.applyFilters()
@@ -170,6 +631,15 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 	}
 	if src != nil {
 		msg.node.OwningLBID = src.OwningLBID
+		if msg.label == "floating IP" {
+			address := msg.node.Attrs["floating_ip"]
+			if address == "" {
+				address = msg.node.Name
+			}
+			m.lbFloatingIPs[src.OwningLBID] = address
+			src.SetAttr("floating_ip", address)
+			m.lbFIPLoaded[src.OwningLBID] = true
+		}
 	}
 	m.loc.tree.Attach(msg.node)
 	if src != nil {
@@ -181,30 +651,121 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
-	if msg.err != nil {
-		if errors.Is(msg.err, osclient.ErrAdminRequired) {
-			return m, m.setFlash("amphora enumeration requires admin RBAC — unavailable with tenant scope", false)
+	if msg.refresh {
+		if m.refreshing && m.refreshLBID == msg.lbID {
+			m.refreshAmphorae = &msg
+			return m, m.commitLBRefresh()
 		}
-		return m, m.setFlash("list amphorae: "+msg.err.Error(), true)
-	}
-	if m.loc.tree == nil {
 		return m, nil
 	}
-	placeholder := m.loc.tree.Node(msg.placeholderID)
-	if placeholder == nil {
-		return m, nil
+	delete(m.lbAmphoraLoading, msg.lbID)
+	m.lbAmphoraLoaded[msg.lbID] = true
+	if msg.err == nil {
+		m.applyAmphorae(msg.lbID, msg.nodes)
 	}
-	if len(placeholder.Children) == 0 {
-		for _, a := range msg.nodes {
-			a.Parent = placeholder
-			placeholder.Children = append(placeholder.Children, a)
-			m.loc.tree.Attach(a)
+	return m, nil
+}
+
+func (m *Model) applyAmphorae(lbID string, nodes []*model.Node) {
+	var tree *model.Tree
+	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
+		tree = m.loc.tree
+	} else if entry, ok := m.cache.Peek(lbID); ok {
+		tree = entry.Tree
+	}
+	if tree == nil || tree.Root == nil {
+		return
+	}
+	for _, amphora := range nodes {
+		amphora.OwningLBID = lbID
+	}
+	tree.ReplaceChildrenOfType(tree.Root, model.TypeAmphora, nodes)
+	if m.loc.node == tree.Root {
+		m.allEntries = nodeEntries(tree.Root)
+		m.applyFilters()
+	}
+}
+
+func (m *Model) applyListenerSummaries(lbID string, items map[string]osclient.ListenerSummary) {
+	var tree *model.Tree
+	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
+		tree = m.loc.tree
+	} else if entry, ok := m.cache.Peek(lbID); ok {
+		tree = entry.Tree
+	}
+	if tree == nil || tree.Root == nil {
+		return
+	}
+	for _, listener := range tree.Root.Children {
+		if listener.Type != model.TypeListener {
+			continue
+		}
+		item, ok := items[listener.ID]
+		if !ok {
+			delete(listener.Attrs, "protocol")
+			delete(listener.Attrs, "port")
+			continue
+		}
+		listener.SetAttr("protocol", item.Protocol)
+		if item.ProtocolPort > 0 {
+			listener.SetAttr("port", fmt.Sprintf("%d", item.ProtocolPort))
+		} else {
+			delete(listener.Attrs, "port")
 		}
 	}
-	m.hist.navigate(histEntry{id: placeholder.Identity()})
-	m.clearFilter()
-	return m, m.render()
+	if m.loc.node == tree.Root {
+		m.allEntries = nodeEntries(tree.Root)
+		m.applyFilters()
+	}
+}
+
+func (m *Model) applyPoolSummaries(lbID string, items map[string]osclient.PoolSummary) {
+	var tree *model.Tree
+	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
+		tree = m.loc.tree
+	} else if entry, ok := m.cache.Peek(lbID); ok {
+		tree = entry.Tree
+	}
+	if tree == nil || tree.Root == nil {
+		return
+	}
+	for _, item := range items {
+		pool := tree.Node(item.ID)
+		if pool == nil {
+			pool = model.NewNode(model.TypePool, item.ID, item.Name)
+			pool.OwningLBID = lbID
+			pool.Parent = tree.Root
+			tree.Root.Children = append(tree.Root.Children, pool)
+			tree.Attach(pool)
+		} else if item.Name != "" {
+			pool.Name = item.Name
+		}
+		pool.ProvisioningStatus = item.ProvisioningStatus
+		pool.OperatingStatus = item.OperatingStatus
+		pool.SetAttr("protocol", item.Protocol)
+		pool.SetAttr("lb_algorithm", item.LBMethod)
+		memberCount := 0
+		for _, child := range pool.Children {
+			if child.Type == model.TypeMember {
+				memberCount++
+			}
+		}
+		// Some list responses omit member bodies; use whichever source carries
+		// the larger count rather than replacing status-tree data with zero.
+		if item.MemberCount > memberCount {
+			memberCount = item.MemberCount
+		}
+		pool.SetAttr("member_count", fmt.Sprintf("%d", memberCount))
+		for _, listenerID := range item.ListenerIDs {
+			if listener := tree.Node(listenerID); listener != nil {
+				listener.AddRef("pool", pool)
+			}
+		}
+	}
+	if m.loc.node == tree.Root {
+		m.allEntries = nodeEntries(tree.Root)
+		m.applyFilters()
+	}
 }
 
 func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
@@ -223,14 +784,42 @@ func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
+	m.refreshing = false
+	m.refreshLBID = ""
+	m.refreshDetail = nil
+	m.refreshStats = nil
+	m.refreshFIP = nil
+	m.refreshFIPExpected = false
+	m.refreshAmphorae = nil
+	m.refreshAmphoraeExpected = false
+	m.refreshListeners = nil
+	m.refreshListenersExpected = false
+	m.refreshPools = nil
+	m.refreshPoolsExpected = false
+	m.refreshAutomatic = false
 	if msg.err != nil {
 		return m, m.setFlash(msg.err.Error(), true)
 	}
-	// A new scope means a different object set: drop caches and history.
+	// A new project filter means a different visible object set: drop caches and
+	// history, without implying that the backend authentication scope changed.
 	m.project = msg.project
 	m.allProjects = msg.all
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
 	m.lbStats = map[string]map[string]any{}
+	m.lbDetailLoading = map[string]bool{}
+	m.lbStatsLoading = map[string]bool{}
+	m.lbDetailErr = map[string]string{}
+	m.lbStatsErr = map[string]string{}
+	m.lbFloatingIPs = map[string]string{}
+	m.lbFIPLoading = map[string]bool{}
+	m.lbFIPLoaded = map[string]bool{}
+	m.lbAmphoraLoading = map[string]bool{}
+	m.lbAmphoraLoaded = map[string]bool{}
+	m.lbListenersLoading = map[string]bool{}
+	m.lbListenersLoaded = map[string]bool{}
+	m.lbPoolsLoading = map[string]bool{}
+	m.lbPoolsLoaded = map[string]bool{}
+	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
 	m.hist = newHistory(m.cfg.HistoryCap)
 	m.hist.navigate(histEntry{id: model.LBListIdentity})
@@ -270,8 +859,22 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	entry, fresh := m.cache.Get(id.OwningLBID)
 	if entry.Tree != nil && fresh {
 		m.buildNodeLocation(id, entry.Tree)
-		return nil
+		return m.loadLBOverview()
 	}
+	delete(m.lbStats, id.OwningLBID)
+	delete(m.lbDetailLoading, id.OwningLBID)
+	delete(m.lbStatsLoading, id.OwningLBID)
+	delete(m.lbDetailErr, id.OwningLBID)
+	delete(m.lbStatsErr, id.OwningLBID)
+	delete(m.lbFloatingIPs, id.OwningLBID)
+	delete(m.lbFIPLoading, id.OwningLBID)
+	delete(m.lbFIPLoaded, id.OwningLBID)
+	delete(m.lbAmphoraLoading, id.OwningLBID)
+	delete(m.lbAmphoraLoaded, id.OwningLBID)
+	delete(m.lbListenersLoading, id.OwningLBID)
+	delete(m.lbListenersLoaded, id.OwningLBID)
+	delete(m.lbPoolsLoading, id.OwningLBID)
+	delete(m.lbPoolsLoaded, id.OwningLBID)
 	m.loading, m.loadingWhat = true, "tree"
 	return m.getTreeCmd(id.OwningLBID, id, false)
 }
@@ -337,14 +940,6 @@ func (m *Model) ensureVisible() {
 	if m.top < 0 {
 		m.top = 0
 	}
-}
-
-// treeNode finds a node by ID in the current location's tree.
-func (m *Model) treeNode(id string) *model.Node {
-	if m.loc.tree == nil {
-		return nil
-	}
-	return m.loc.tree.Node(id)
 }
 
 // setFlash sets the transient status line and schedules its clearing.

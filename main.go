@@ -54,12 +54,19 @@ func run(args []string) error {
 		return nil
 	}
 
-	clients, err := osclient.Authenticate(context.Background(), *opts)
+	ctx := context.Background()
+	clients, err := osclient.Authenticate(ctx, *opts)
 	if err != nil {
 		return err
 	}
 	if *allProjects {
-		_ = clients.EnterAllProjects(context.Background())
+		if err := clients.EnterAllProjects(ctx); err != nil {
+			return err
+		}
+	} else if opts.Project != "" {
+		if err := clients.SelectProject(ctx, opts.Project); err != nil {
+			return err
+		}
 	}
 
 	return tui.Run(clients, tui.Config{

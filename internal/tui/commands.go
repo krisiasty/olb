@@ -33,20 +33,22 @@ type treeMsg struct {
 	background bool           // stale-refresh: don't disturb the view on error
 }
 
-// detailIntent is what to do once a node's detail has loaded.
+// detailIntent is what to do once a node's full configuration has loaded.
 type detailIntent int
 
 const (
-	intentDetail detailIntent = iota
+	intentOverview detailIntent = iota
 	intentYAML
 	intentJSON
 )
 
 type detailMsg struct {
-	nodeID string
-	res    osclient.DetailResult
-	intent detailIntent
-	err    error
+	nodeID  string
+	lbID    string
+	res     osclient.DetailResult
+	intent  detailIntent
+	refresh bool
+	err     error
 }
 
 type refResolveMsg struct {
@@ -57,10 +59,10 @@ type refResolveMsg struct {
 }
 
 type amphoraeMsg struct {
-	placeholderID string
-	lbID          string
-	nodes         []*model.Node
-	err           error
+	lbID    string
+	nodes   []*model.Node
+	refresh bool
+	err     error
 }
 
 type projectsMsg struct {
@@ -75,9 +77,33 @@ type switchedMsg struct {
 }
 
 type statsMsg struct {
-	lbID  string
-	stats map[string]any
-	err   error
+	lbID      string
+	stats     map[string]any
+	refresh   bool
+	automatic bool
+	err       error
+}
+
+type lbFloatingIPMsg struct {
+	lbID    string
+	vipID   string
+	node    *model.Node
+	refresh bool
+	err     error
+}
+
+type listenerSummariesMsg struct {
+	lbID    string
+	items   map[string]osclient.ListenerSummary
+	refresh bool
+	err     error
+}
+
+type poolSummariesMsg struct {
+	lbID    string
+	items   map[string]osclient.PoolSummary
+	refresh bool
+	err     error
 }
 
 type flashClearMsg struct{ token int }
@@ -113,13 +139,22 @@ func (m Model) getTreeCmd(lbID string, forID model.Identity, background bool) te
 }
 
 func (m Model) fetchDetailCmd(n *model.Node, intent detailIntent) tea.Cmd {
+	return m.detailCmd(n, intent, false)
+}
+
+func (m Model) refreshDetailCmd(n *model.Node) tea.Cmd {
+	return m.detailCmd(n, intentOverview, true)
+}
+
+func (m Model) detailCmd(n *model.Node, intent detailIntent, refresh bool) tea.Cmd {
 	b := m.backend
 	id := n.ID
+	lbID := n.OwningLBID
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		res, err := b.FetchDetail(ctx, n)
-		return detailMsg{nodeID: id, res: res, intent: intent, err: err}
+		return detailMsg{nodeID: id, lbID: lbID, res: res, intent: intent, refresh: refresh, err: err}
 	}
 }
 
@@ -135,6 +170,16 @@ func (m Model) resolveFloatingIPCmd(source *model.Node, portID string) tea.Cmd {
 	}
 }
 
+func (m Model) lbFloatingIPCmd(lbID, vipID, portID string, refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		node, err := b.ResolveFloatingIP(ctx, lbID, portID)
+		return lbFloatingIPMsg{lbID: lbID, vipID: vipID, node: node, refresh: refresh, err: err}
+	}
+}
+
 func (m Model) resolveInstanceCmd(source *model.Node, address string) tea.Cmd {
 	b := m.backend
 	sid := source.ID
@@ -147,14 +192,13 @@ func (m Model) resolveInstanceCmd(source *model.Node, address string) tea.Cmd {
 	}
 }
 
-func (m Model) loadAmphoraeCmd(placeholder *model.Node, lbID string) tea.Cmd {
+func (m Model) loadAmphoraeCmd(lbID string, refresh bool) tea.Cmd {
 	b := m.backend
-	pid := placeholder.ID
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		nodes, err := b.ListAmphorae(ctx, lbID)
-		return amphoraeMsg{placeholderID: pid, lbID: lbID, nodes: nodes, err: err}
+		return amphoraeMsg{lbID: lbID, nodes: nodes, refresh: refresh, err: err}
 	}
 }
 
@@ -189,12 +233,44 @@ func (m Model) enterAllProjectsCmd() tea.Cmd {
 }
 
 func (m Model) lbStatsCmd(lbID string) tea.Cmd {
+	return m.statsCmd(lbID, false, false)
+}
+
+func (m Model) autoStatsCmd(lbID string) tea.Cmd {
+	return m.statsCmd(lbID, false, true)
+}
+
+func (m Model) listenerSummariesCmd(lbID string, refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		items, err := b.ListListenerSummaries(ctx, lbID)
+		return listenerSummariesMsg{lbID: lbID, items: items, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) poolSummariesCmd(lbID string, refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		items, err := b.ListPoolSummaries(ctx, lbID)
+		return poolSummariesMsg{lbID: lbID, items: items, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) refreshStatsCmd(lbID string) tea.Cmd {
+	return m.statsCmd(lbID, true, false)
+}
+
+func (m Model) statsCmd(lbID string, refresh, automatic bool) tea.Cmd {
 	b := m.backend
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		stats, err := b.LBStats(ctx, lbID)
-		return statsMsg{lbID: lbID, stats: stats, err: err}
+		return statsMsg{lbID: lbID, stats: stats, refresh: refresh, automatic: automatic, err: err}
 	}
 }
 

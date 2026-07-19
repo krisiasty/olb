@@ -15,6 +15,8 @@ type Backend interface {
 	GetTree(ctx context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error)
 	FetchDetail(ctx context.Context, n *model.Node) (osclient.DetailResult, error)
 	LBStats(ctx context.Context, lbID string) (map[string]any, error)
+	ListListenerSummaries(ctx context.Context, lbID string) (map[string]osclient.ListenerSummary, error)
+	ListPoolSummaries(ctx context.Context, lbID string) (map[string]osclient.PoolSummary, error)
 	ResolveFloatingIP(ctx context.Context, lbID, portID string) (*model.Node, error)
 	ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error)
 	ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error)

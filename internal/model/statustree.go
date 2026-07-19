@@ -99,13 +99,16 @@ type StatusL7Rule struct {
 }
 
 // LBMeta carries the few LB-level facts that live outside the status tree but
-// are already known from the load-balancer list (or a cheap get): the VIP and
-// the provider driver. The provider decides whether the amphora branch applies.
+// are already known from the load-balancer list (or a cheap get): the VIP,
+// provider driver, and owning project. The provider decides whether the
+// amphora branch applies. ProjectName can be empty when Keystone cannot supply
+// a friendly name; ProjectID remains authoritative.
 type LBMeta struct {
-	VipAddress string
-	VipPortID  string
-	Provider   string
-	ProjectID  string
+	VipAddress  string
+	VipPortID   string
+	Provider    string
+	ProjectID   string
+	ProjectName string
 }
 
 // IsOVN reports whether the LB is backed by the OVN provider driver, for which

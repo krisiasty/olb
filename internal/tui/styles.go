@@ -68,15 +68,15 @@ func newStyles() styles {
 // for the list's provisioning column.
 func statusColor(status string) lipgloss.Color {
 	switch status {
-	case "ONLINE", "ACTIVE":
+	case "ONLINE", "ACTIVE", "ENABLED", "ALLOCATED", "READY":
 		return lipgloss.Color("42") // green
-	case "DEGRADED", "DRAINING":
+	case "DEGRADED", "DRAINING", "BOOTING":
 		return lipgloss.Color("214") // amber
-	case "ERROR":
+	case "ERROR", "FAILOVER_STOPPED":
 		return lipgloss.Color("196") // red
 	case "PENDING_CREATE", "PENDING_UPDATE", "PENDING_DELETE":
 		return lipgloss.Color("214")
-	case "OFFLINE", "NO_MONITOR", "DELETED":
+	case "OFFLINE", "NO_MONITOR", "DELETED", "DISABLED":
 		return lipgloss.Color("244") // grey
 	default:
 		return lipgloss.Color("252")

@@ -31,9 +31,32 @@ type LB struct {
 	OperatingStatus    string
 }
 
+// ListenerSummary carries the protocol endpoint facts absent from Octavia's
+// status-tree response but needed to distinguish same-named listener rows.
+type ListenerSummary struct {
+	ID           string
+	Protocol     string
+	ProtocolPort int
+}
+
+// PoolSummary carries the compact configuration facts used in LB related rows.
+type PoolSummary struct {
+	ID                 string
+	Name               string
+	Protocol           string
+	LBMethod           string
+	MemberCount        int
+	ListenerIDs        []string
+	ProvisioningStatus string
+	OperatingStatus    string
+}
+
 // Meta returns the LB-level facts the graph builder needs.
 func (l LB) Meta() model.LBMeta {
-	return model.LBMeta{VipAddress: l.VipAddress, VipPortID: l.VipPortID, Provider: l.Provider, ProjectID: l.ProjectID}
+	return model.LBMeta{
+		VipAddress: l.VipAddress, VipPortID: l.VipPortID, Provider: l.Provider,
+		ProjectID: l.ProjectID, ProjectName: l.ProjectName,
+	}
 }
 
 // ErrUnavailable marks a feature that cannot be served because a required
@@ -43,104 +66,62 @@ var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
 var ErrAdminRequired = errors.New("requires admin")
 
-// ListLoadBalancers returns the load balancers to show in the list view: the
-// current project's in single-project mode, or the union across every accessible
-// project in all-projects mode.
-//
-// The single-project list is filtered explicitly by project_id rather than
-// relying on the token scope alone: an admin token would otherwise list load
-// balancers across all projects (Octavia's admin get_all is global), so
-// switching projects would appear to change nothing. Filtering makes the view
-// honestly project-scoped for admins and non-admins alike.
+// ListLoadBalancers always lists through the program's original authenticated
+// clients. A concrete project selection is applied locally to that result;
+// selecting a project never requests a narrower token or changes API clients.
 func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	c.mu.Lock()
 	allMode := c.allMode
-	sel := c.sel
+	selected := c.selected
+	services := c.services
 	c.mu.Unlock()
-	if allMode {
-		return c.listAllProjects(ctx)
-	}
-	return listWith(ctx, sel, sel.project)
-}
 
-// listAllProjects aggregates every load balancer the user can see, from two
-// complementary sources unioned (deduplicated by LB ID):
-//
-//  1. A single unfiltered list from the current scope. For an ADMIN this is
-//     Octavia's global get_all — every project's load balancers, exactly what
-//     `openstack loadbalancer list` returns — reachable even for projects the
-//     admin holds no role in. For a non-admin, Octavia scopes it to the current
-//     project.
-//  2. A per-project list for each project the user holds a role on
-//     (GET /v3/auth/projects), re-scoping to each. This is what gives a
-//     non-admin cross-project visibility, and it records an lbID→project map so
-//     a later drill-in can re-scope to read the object.
-//
-// The two sources cover the two ways "all projects the user can access" is
-// defined for admins (global visibility) and non-admins (role assignments).
-// Projects that can't be scoped to or listed are skipped, not fatal.
-func (c *Clients) listAllProjects(ctx context.Context) ([]LB, error) {
-	seen := map[string]bool{}
-	var all []LB
-	add := func(lbs []LB) {
-		for _, lb := range lbs {
-			if !seen[lb.ID] {
-				seen[lb.ID] = true
-				all = append(all, lb)
-			}
-		}
+	// An empty ProjectInfo deliberately produces Octavia's unfiltered view. For
+	// an admin this is the cluster-wide get_all result; for a tenant it is still
+	// constrained by the original token's policy and scope.
+	lbs, err := listWith(ctx, services, ProjectInfo{})
+	if err != nil {
+		return nil, err
+	}
+	if !allMode {
+		return filterLoadBalancers(lbs, selected), nil
 	}
 
-	// 1. Global/unfiltered list from the current scope (admin get_all).
-	c.mu.Lock()
-	sel := c.sel
-	c.mu.Unlock()
-	if global, err := listWith(ctx, sel, ProjectInfo{}); err == nil {
-		add(global)
-	}
-
-	// 2. Per-project lists for every accessible project.
-	lbProject := map[string]ProjectInfo{}
+	// Project enumeration is only for friendly names. Failure does not discard
+	// the authoritative Octavia list; rows fall back to their project IDs.
 	nameByID := map[string]string{}
 	if projs, err := c.ListProjects(ctx); err == nil {
 		for _, p := range projs {
 			nameByID[p.ID] = p.Name
 		}
-		for _, p := range projs {
-			sc, err := c.scopedClients(ctx, p)
-			if err != nil {
-				continue
-			}
-			lbs, err := listWith(ctx, sc, p)
-			if err != nil {
-				continue
-			}
-			for _, lb := range lbs {
-				lbProject[lb.ID] = p // re-scope target for drill-in
-			}
-			add(lbs)
-		}
-	} else if len(all) == 0 {
-		// Nothing from the global list and enumeration failed: surface the error.
-		return nil, err
 	}
-
-	// Fill in project names for globally-listed LBs where we know them.
-	for i := range all {
-		if all[i].ProjectName == "" {
-			if n := nameByID[all[i].ProjectID]; n != "" {
-				all[i].ProjectName = n
+	for i := range lbs {
+		if lbs[i].ProjectName == "" {
+			if n := nameByID[lbs[i].ProjectID]; n != "" {
+				lbs[i].ProjectName = n
 			}
 		}
 	}
-
-	c.mu.Lock()
-	c.lbProject = lbProject
-	c.mu.Unlock()
-	return all, nil
+	return lbs, nil
 }
 
-// listWith lists the load balancers in one project using its scoped clients.
+func filterLoadBalancers(lbs []LB, project ProjectInfo) []LB {
+	if project.ID == "" {
+		return lbs
+	}
+	filtered := make([]LB, 0, len(lbs))
+	for _, lb := range lbs {
+		if lb.ProjectID != project.ID {
+			continue
+		}
+		lb.ProjectName = project.Name
+		filtered = append(filtered, lb)
+	}
+	return filtered
+}
+
+// listWith issues an Octavia list using the supplied (original) clients. proj
+// controls only the optional server-side project_id query parameter.
 func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, error) {
 	opts := loadbalancers.ListOpts{ProjectID: proj.ID}
 	pages, err := loadbalancers.List(sc.lb, opts).AllPages(ctx)
@@ -343,8 +324,8 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 	return res, nil
 }
 
-// LBStats returns the byte/connection counters for a load balancer — a good
-// leaf-level detail panel (distinct from status show).
+// LBStats returns the byte/connection counters shown in the load-balancer
+// overview (distinct from status show).
 func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, error) {
 	sc, err := c.clientsForLB(ctx, lbID)
 	if err != nil {
@@ -361,6 +342,62 @@ func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, err
 		"bytes_out":          s.BytesOut,
 		"request_errors":     s.RequestErrors,
 	}, nil
+}
+
+// ListListenerSummaries fetches every listener for one load balancer in a
+// single filtered request. The status tree contains listener identities and
+// health, but omits protocol and protocol_port.
+func (c *Clients) ListListenerSummaries(ctx context.Context, lbID string) (map[string]ListenerSummary, error) {
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	pages, err := listeners.List(sc.lb, listeners.ListOpts{LoadbalancerID: lbID}).AllPages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items, err := listeners.ExtractListeners(pages)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]ListenerSummary, len(items))
+	for _, listener := range items {
+		out[listener.ID] = ListenerSummary{
+			ID: listener.ID, Protocol: listener.Protocol, ProtocolPort: listener.ProtocolPort,
+		}
+	}
+	return out, nil
+}
+
+// ListPoolSummaries fetches every pool for one load balancer in a single
+// filtered request. Besides enriching status-tree pools, this is an
+// authoritative fallback for deployments that omit loadbalancer.pools.
+func (c *Clients) ListPoolSummaries(ctx context.Context, lbID string) (map[string]PoolSummary, error) {
+	sc, err := c.clientsForLB(ctx, lbID)
+	if err != nil {
+		return nil, err
+	}
+	pages, err := pools.List(sc.lb, pools.ListOpts{LoadbalancerID: lbID}).AllPages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items, err := pools.ExtractPools(pages)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]PoolSummary, len(items))
+	for _, pool := range items {
+		listenerIDs := make([]string, 0, len(pool.Listeners))
+		for _, listener := range pool.Listeners {
+			listenerIDs = append(listenerIDs, listener.ID)
+		}
+		out[pool.ID] = PoolSummary{
+			ID: pool.ID, Name: pool.Name, Protocol: pool.Protocol, LBMethod: pool.LBMethod,
+			MemberCount: len(pool.Members), ProvisioningStatus: pool.ProvisioningStatus,
+			OperatingStatus: pool.OperatingStatus, ListenerIDs: listenerIDs,
+		}
+	}
+	return out, nil
 }
 
 // ResolveFloatingIP looks up the floating IP mapped to the VIP's Neutron port,
@@ -455,7 +492,7 @@ func (c *Clients) ListAmphorae(ctx context.Context, lbID string) ([]*model.Node,
 	}
 	out := make([]*model.Node, 0, len(as))
 	for _, a := range as {
-		n := model.NewNode(model.TypeAmphora, a.ID, shortName(a.ID))
+		n := model.NewNode(model.TypeAmphora, a.ID, a.ID)
 		n.OwningLBID = lbID
 		n.ProvisioningStatus = a.Status
 		n.SetAttr("role", a.Role)
@@ -505,11 +542,4 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
-}
-
-func shortName(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }

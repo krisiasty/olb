@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/krisiasty/olb/internal/model"
@@ -31,6 +33,45 @@ type entry struct {
 	oper         string
 	prov         string
 	extra        string // list-only trailing facts (provider, vip)
+	showID       bool   // disambiguate duplicate sibling names
+}
+
+// entrySelection is the durable part of a selectable row. It deliberately
+// excludes its position and graph pointers so a refresh can find the same
+// object even when the returned rows have been reordered.
+type entrySelection struct {
+	kind         entryKind
+	identity     model.Identity
+	relationship string
+	targetType   model.NodeType
+	targetID     string
+}
+
+func (e entry) selection() entrySelection {
+	id, _, _ := e.identity()
+	s := entrySelection{kind: e.kind, identity: id, relationship: e.relationship}
+	if e.edge != nil {
+		s.targetType = e.edge.TargetType
+		s.targetID = e.edge.TargetID
+		if e.edge.Target != nil {
+			target := e.edge.Target.Identity()
+			if s.targetType == "" {
+				s.targetType = target.Type
+			}
+			if s.targetID == "" {
+				s.targetID = target.ID
+			}
+		}
+	}
+	return s
+}
+
+func (s entrySelection) equal(other entrySelection) bool {
+	return s.kind == other.kind &&
+		s.identity.Equal(other.identity) &&
+		s.relationship == other.relationship &&
+		s.targetType == other.targetType &&
+		s.targetID == other.targetID
 }
 
 func (e entry) filterText() string {
@@ -84,11 +125,39 @@ func lbEntries(lbs []osclient.LB, showProject bool) []entry {
 // then its outgoing reference edges, then the back-references answering
 // "who points at me?".
 func nodeEntries(n *model.Node) []entry {
+	children := n.Children
+	if n.Type == model.TypeLoadBalancer {
+		children = append([]*model.Node(nil), n.Children...)
+		sort.SliceStable(children, func(i, j int) bool {
+			left, right := children[i], children[j]
+			leftRank, rightRank := relatedObjectRank(left.Type), relatedObjectRank(right.Type)
+			if leftRank != rightRank {
+				return leftRank < rightRank
+			}
+			if left.Type != right.Type {
+				return left.Type < right.Type
+			}
+			leftName := strings.ToLower(strings.TrimSpace(left.Name))
+			rightName := strings.ToLower(strings.TrimSpace(right.Name))
+			if leftName != rightName {
+				return leftName < rightName
+			}
+			return left.ID < right.ID
+		})
+	}
+
+	poolNameCounts := map[string]int{}
+	for _, child := range children {
+		if child.Type == model.TypePool && child.Name != "" {
+			poolNameCounts[strings.ToLower(child.Name)]++
+		}
+	}
 	var es []entry
-	for _, c := range n.Children {
+	for _, c := range children {
 		es = append(es, entry{
 			kind: entChild, node: c, label: c.Label(),
 			oper: c.OperatingStatus, prov: c.ProvisioningStatus, extra: inlineAttrs(c),
+			showID: c.Type == model.TypePool && poolNameCounts[strings.ToLower(c.Name)] > 1,
 		})
 	}
 	for _, ref := range n.Refs {
@@ -98,6 +167,21 @@ func nodeEntries(n *model.Node) []entry {
 		es = append(es, refEntry(entBackRef, br))
 	}
 	return es
+}
+
+func relatedObjectRank(t model.NodeType) int {
+	switch t {
+	case model.TypeVIP:
+		return 0
+	case model.TypeListener:
+		return 1
+	case model.TypePool:
+		return 2
+	case model.TypeAmphora:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func refEntry(kind entryKind, edge *model.Edge) entry {
@@ -129,9 +213,9 @@ func lbLabel(lb osclient.LB) string {
 func inlineAttrs(n *model.Node) string {
 	switch n.Type {
 	case model.TypeListener:
-		return joinAttrs(n, "protocol", "port")
+		return listenerSummary(n)
 	case model.TypePool:
-		return joinAttrs(n, "lb_algorithm")
+		return poolSummary(n.Attrs["protocol"], n.Attrs["lb_algorithm"], n.Attrs["member_count"])
 	case model.TypeMember:
 		return joinAttrs(n, "address", "port")
 	case model.TypeHealthMonitor:
@@ -140,10 +224,80 @@ func inlineAttrs(n *model.Node) string {
 		return joinAttrs(n, "action")
 	case model.TypeL7Rule:
 		return joinAttrs(n, "type")
-	case model.TypeVIP:
-		return joinAttrs(n, "address")
 	default:
 		return ""
+	}
+}
+
+func listenerSummary(n *model.Node) string {
+	parts := []string{}
+	if endpoint := listenerEndpoint(n.Attrs["protocol"], n.Attrs["port"]); endpoint != "" {
+		parts = append(parts, endpoint)
+	}
+
+	poolIDs := map[string]struct{}{}
+	for _, ref := range n.Refs {
+		if ref.TargetType == model.TypePool && ref.TargetID != "" {
+			poolIDs[ref.TargetID] = struct{}{}
+		}
+	}
+	label := "pools"
+	if len(poolIDs) == 1 {
+		label = "pool"
+	}
+	parts = append(parts, fmt.Sprintf("%d %s", len(poolIDs), label))
+	return strings.Join(parts, " · ")
+}
+
+func listenerEndpoint(protocol, port string) string {
+	protocol = strings.ToUpper(strings.TrimSpace(protocol))
+	port = strings.TrimSpace(port)
+	terminatedTLS := protocol == "TERMINATED_HTTPS"
+	if terminatedTLS {
+		protocol = "HTTPS"
+	}
+	endpoint := protocol
+	if endpoint != "" && port != "" {
+		endpoint += "/" + port
+	} else if endpoint == "" {
+		endpoint = port
+	}
+	if terminatedTLS {
+		endpoint += " (TLS termination)"
+	}
+	return endpoint
+}
+
+func poolSummary(protocol, algorithm, memberCount string) string {
+	var parts []string
+	if protocol = strings.ToUpper(strings.TrimSpace(protocol)); protocol != "" {
+		parts = append(parts, protocol)
+	}
+	if algorithm = poolAlgorithmLabel(algorithm); algorithm != "" {
+		parts = append(parts, algorithm)
+	}
+	if memberCount = strings.TrimSpace(memberCount); memberCount != "" {
+		label := "members"
+		if memberCount == "1" {
+			label = "member"
+		}
+		parts = append(parts, memberCount+" "+label)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func poolAlgorithmLabel(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "ROUND_ROBIN":
+		return "round robin"
+	case "LEAST_CONNECTIONS":
+		return "least connections"
+	case "SOURCE_IP":
+		return "source IP"
+	case "SOURCE_IP_PORT":
+		return "source IP+port"
+	default:
+		return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "_", " "))
 	}
 }
 

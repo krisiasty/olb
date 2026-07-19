@@ -29,7 +29,7 @@ With no arguments, `olb` lists the load balancers in your current project:
 ```sh
 olb                        # uses OS_* env / clouds.yaml
 olb --os-cloud mycloud     # pick a clouds.yaml entry
-olb --project other-proj   # scope to a different project up front
+olb --project other-proj   # select an initial project filter (name or ID)
 olb --print                # copy actions show the value instead of OSC 52
 olb --licenses             # print embedded third-party notices
 olb --version
@@ -42,27 +42,26 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 `OS_CLOUD`), and CLI flags (`--os-auth-url`, `--os-username`, …). Precedence is
 **CLI flags > environment > clouds.yaml**.
 
+`--project` selects the initial TUI project filter without changing the
+authentication scope. Use `--os-project-name` or `--os-project-id` when the
+authentication request itself must be scoped to a particular project.
+
 ### Project switching
 
-Press `p` to switch projects without leaving the tool. Because a project-scoped
-token's scope is immutable, switching **re-authenticates** with the chosen scope,
-so it needs retained credentials. The selector's availability is detected up
-front and shown disabled with a specific reason when it can't work (bare
-`OS_TOKEN`, or an application credential bound to one project).
+Press `p` to filter the load-balancer view by project without leaving the tool.
+The selection is deliberately **not** an authentication operation: `olb` keeps
+the token and service clients created at startup and locally filters the
+load-balancers visible through that original authorization context. This means
+an admin does not lose cluster-wide visibility after viewing one project, and
+the selector also works with bare tokens and application credentials.
 
 The switcher's first entry, **⟨ all accessible projects ⟩** (or start with
-`--all-projects`), aggregates every load balancer you can see into one list
-(each row tagged with its project), from two sources unioned:
-
-- an **unfiltered list** from your current scope — for an **admin** this is
-  Octavia's global list (the whole cluster, exactly what `openstack
-  loadbalancer list` returns, including projects you hold no role in);
-- a **per-project sweep** of the projects you hold a role on
-  (`GET /v3/auth/projects`), which gives a non-admin cross-project visibility.
-
-Drilling into a load balancer re-scopes to its owning project on demand where
-needed. The default (single-project) view stays scoped to the selected project
-so switching is meaningful; use all-projects mode for the cluster-wide view.
+`--all-projects`), shows the original unfiltered Octavia result, with each row
+tagged by project where a name is known. For an admin this is Octavia's global
+list (the whole cluster, including projects on which the admin has no explicit
+role). For a tenant, it remains constrained by the original token's policy and
+scope. Drilling into a load balancer likewise continues to use the original
+service clients.
 
 ### Keybindings
 
@@ -74,12 +73,11 @@ so switching is meaningful; use all-projects mode for the cluster-wide view.
 | | `→` | Forward (history) |
 | | `ctrl+home` | Return to the load balancer list |
 | | `h` | History picker overlay |
-| Inspect | `d` | Detail panel (lazy full config; LB adds traffic stats) |
-| | `y` / `j` | Raw API object as YAML / JSON |
+| Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` / `o` | Copy id / name / displayed raw object |
 | Search | `/` | Filter current list (substring) |
 | | `s` | Cycle status filter — all / error / degraded |
-| Global | `p` `r` `?` `q` | Project · refresh · help · quit (back out, then exit) |
+| Global | `p` `r` `a` `+`/`-` `?` `q` | Project · refresh · auto-refresh toggle/interval · help · quit (back out, then exit) |
 | | `ctrl+c` | Force quit |
 
 `enter` is the only descent key; the arrows are reserved for history. `esc`
@@ -92,17 +90,33 @@ reference jump.
 - **Structure in one call.** `loadbalancer status show` returns the whole nested
   tree with `provisioning_status`/`operating_status` on every node; the in-memory
   graph is built from it, avoiding an N+1 fan-out of list calls.
-- **Detail is lazy.** Per-object `show` (algorithms, weights, thresholds, and the
-  `default_pool_id` / `redirect_pool_id` that back the reference edges) loads on
-  landing and is cached with its tree.
+- **Load-balancer overview.** Opening an LB immediately shows a responsive
+  details/stats dashboard above its selectable related objects. Details include
+  the owning project name and ID, which disambiguates LBs opened from the global
+  scope, and append an associated floating IP to the VIP when one exists. Full
+  LB config and traffic counters load independently; Amphora-backed LBs also
+  list each backing VM directly by ID and role. The results are cached with the
+  status tree. Listener rows include normalized endpoints such as `TCP/443` or
+  `HTTPS/443 (TLS termination)`, so duplicate listener names remain legible.
+  Pool rows similarly include protocol, a readable balancing algorithm, and
+  member count, for example `HTTP · round robin · 4 members`; duplicate sibling
+  names gain a short ID suffix.
+- **Other detail is lazy.** Per-object `show` calls used for raw inspection and
+  precise reference resolution are fetched only when needed.
 - **A graph, not a tree.** Nodes carry typed **containment** and **reference**
   edges, both traversable in either direction, so shared pools and boundary
   crossings (VIP → floating IP, member → Nova instance) are first-class and the
   backward "who points at me?" query works.
 - **Caching & freshness.** An LRU of `status show` trees, each with a short TTL,
   bounds staleness; history entries are re-resolved against live/cached state on
-  every revisit (a back-press can cost a round trip); `r` force-refreshes and
-  prunes dead history entries.
+  every revisit (a back-press can cost a round trip); `r` force-refreshes while
+  retaining the last-known view and selected object until the new responses are
+  ready, and prunes dead history entries. Automatic refresh is enabled by
+  default: visible overview stats update every 5 seconds (adjustable with `+`
+  and `-` through 1/2/5/10/30/60-second steps), while lists, details, and
+  related objects update every 30 seconds. `a` pauses or resumes all automatic
+  requests; overlays and active text filters pause them temporarily. Status
+  filters remain applied while refresh continues normally.
 - **Graceful degradation.** Admin-only (amphorae) and cross-service (floating IP,
   Nova instance) surfaces degrade with a clear reason when scope or RBAC is
   missing, rather than erroring out or rendering a dead node. OVN-backed LBs have

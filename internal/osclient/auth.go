@@ -1,7 +1,7 @@
 // Package osclient wires OpenStack authentication and the Octavia / Neutron /
 // Nova / Keystone service clients, and exposes the data operations the TUI
 // needs (list load balancers, fetch a status tree, load per-object detail,
-// list accessible projects, re-scope to another project).
+// and list accessible projects).
 //
 // Auth sources follow python-openstackclient conventions so existing
 // credentials work unchanged: OS_* environment variables, clouds.yaml (selected
@@ -28,7 +28,7 @@ import (
 type Options struct {
 	Cloud   string // --os-cloud / OS_CLOUD
 	Region  string // --os-region-name / OS_REGION_NAME
-	Project string // --project: initial project scope (name), an alias for OS_PROJECT_NAME
+	Project string // --project: initial presentation filter (name or ID)
 
 	AuthURL           string
 	Username          string
@@ -64,9 +64,6 @@ func (o Options) applyToEnv() {
 	set("OS_APPLICATION_CREDENTIAL_NAME", o.ApplicationCredentialName)
 	set("OS_APPLICATION_CREDENTIAL_SECRET", o.ApplicationCredentialSecret)
 	set("OS_REGION_NAME", o.Region)
-	// --project is the user-facing initial-scope selector; it wins over
-	// --os-project-name when both are given.
-	set("OS_PROJECT_NAME", o.Project)
 }
 
 // ProjectInfo identifies a project scope.
@@ -76,17 +73,18 @@ type ProjectInfo struct {
 	DomainID string
 }
 
-// SwitchCapability describes whether the current auth method permits switching
-// to another project, and — when it does not — a specific reason and suggestion.
-// Determined up front, right after auth, so the selector can be shown disabled
-// with the reason inline rather than hard-failing mid-flow.
+// SwitchCapability describes whether the project filter can be shown. Project
+// selection never changes the authenticated token; failures to enumerate the
+// available projects are instead reported when the selector is opened.
 type SwitchCapability struct {
 	CanSwitch bool
 	Reason    string
 	Suggest   string
 }
 
-// serviceClients is a set of OpenStack service clients scoped to one project.
+// serviceClients is the set of OpenStack service clients created from the
+// program's original authentication scope. It remains immutable for the life
+// of the program; TUI project selection is a data filter, not re-authentication.
 type serviceClients struct {
 	provider *gophercloud.ProviderClient
 	lb       *gophercloud.ServiceClient // Octavia (required)
@@ -96,26 +94,17 @@ type serviceClients struct {
 	project  ProjectInfo
 }
 
-// Clients holds the current project selection plus, for all-projects mode, a
-// cache of per-project scoped clients. A project-scoped token's scope is
-// immutable, so a non-admin can only read a load balancer while scoped to its
-// owning project; all-projects mode therefore keeps one scoped client set per
-// accessible project and picks the right one per operation.
+// Clients holds the original authenticated service clients plus the current
+// presentation filter. The authenticated scope is deliberately immutable: an
+// admin must not lose cluster-wide visibility after selecting a project.
 type Clients struct {
 	Region string
 	Switch SwitchCapability
 
-	// baseAuth retains the resolved credentials (sans a fixed scope) so a
-	// project switch can request a new scoped token. Holding the password in
-	// memory is inherent to re-scoping and is the documented trade-off.
-	baseAuth gophercloud.AuthOptions
-	endpoint gophercloud.EndpointOpts
-
-	mu        sync.Mutex
-	sel       *serviceClients            // current single-project selection
-	scoped    map[string]*serviceClients // projectID -> scoped clients (cache)
-	allMode   bool                       // list across all accessible projects
-	lbProject map[string]ProjectInfo     // lbID -> owning project (all-projects mode)
+	mu       sync.Mutex
+	services *serviceClients
+	selected ProjectInfo // project whose rows are shown when allMode is false
+	allMode  bool
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,
@@ -142,35 +131,23 @@ func Authenticate(ctx context.Context, o Options) (*Clients, error) {
 	ao.AllowReauth = true
 
 	c := &Clients{
-		Region:    region,
-		Switch:    detectSwitchCapability(ao),
-		baseAuth:  *ao,
-		endpoint:  gophercloud.EndpointOpts{Region: region, Availability: gophercloud.AvailabilityPublic},
-		scoped:    map[string]*serviceClients{},
-		lbProject: map[string]ProjectInfo{},
+		Region: region,
+		Switch: SwitchCapability{CanSwitch: true},
 	}
 
-	// Initial login: use the credentials' own scope (empty projectID).
-	sc, err := c.buildScoped(ctx, "")
+	// Authenticate exactly once with the credentials' original scope.
+	sc, err := buildServiceClients(ctx, *ao, gophercloud.EndpointOpts{
+		Region: region, Availability: gophercloud.AvailabilityPublic,
+	})
 	if err != nil {
 		return nil, err
 	}
-	c.sel = sc
-	if sc.project.ID != "" {
-		c.scoped[sc.project.ID] = sc
-	}
+	c.services = sc
+	c.selected = sc.project
 	return c, nil
 }
 
-// buildScoped authenticates and builds the service clients scoped to projectID.
-// An empty projectID uses the base credentials' own scope (the initial login);
-// a non-empty projectID re-scopes with the retained credentials.
-func (c *Clients) buildScoped(ctx context.Context, projectID string) (*serviceClients, error) {
-	ao := c.baseAuth
-	if projectID != "" {
-		ao.TokenID = "" // re-scope with credentials, never the old scoped token
-		ao.Scope = &gophercloud.AuthScope{ProjectID: projectID}
-	}
+func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts) (*serviceClients, error) {
 	ao.AllowReauth = true
 
 	provider, err := openstack.AuthenticatedClient(ctx, ao)
@@ -178,62 +155,28 @@ func (c *Clients) buildScoped(ctx context.Context, projectID string) (*serviceCl
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}
 	sc := &serviceClients{provider: provider}
-	if sc.lb, err = openstack.NewLoadBalancerV2(provider, c.endpoint); err != nil {
+	if sc.lb, err = openstack.NewLoadBalancerV2(provider, endpoint); err != nil {
 		return nil, fmt.Errorf("no Octavia (load-balancer) endpoint in the service catalog: %w", err)
 	}
-	if sc.identity, err = openstack.NewIdentityV3(provider, c.endpoint); err != nil {
+	if sc.identity, err = openstack.NewIdentityV3(provider, endpoint); err != nil {
 		return nil, fmt.Errorf("no Keystone (identity) endpoint in the service catalog: %w", err)
 	}
 	// Neutron and Nova are optional: their absence degrades the floating-IP and
 	// member-instance edges gracefully rather than being fatal.
-	sc.network, _ = openstack.NewNetworkV2(provider, c.endpoint)
-	sc.compute, _ = openstack.NewComputeV2(provider, c.endpoint)
+	sc.network, _ = openstack.NewNetworkV2(provider, endpoint)
+	sc.compute, _ = openstack.NewComputeV2(provider, endpoint)
 
 	sc.project = currentProject(provider)
-	if sc.project.ID == "" && projectID != "" {
-		sc.project = ProjectInfo{ID: projectID}
-	}
 	return sc, nil
 }
 
-// scopedClients returns cached-or-built service clients scoped to proj.
-func (c *Clients) scopedClients(ctx context.Context, proj ProjectInfo) (*serviceClients, error) {
+// clientsForLB always returns the original service clients. Project selection
+// must never reduce (or otherwise mutate) the authorization used for drill-in.
+func (c *Clients) clientsForLB(_ context.Context, _ string) (*serviceClients, error) {
 	c.mu.Lock()
-	if sc, ok := c.scoped[proj.ID]; ok {
-		c.mu.Unlock()
-		return sc, nil
-	}
-	sel := c.sel
+	services := c.services
 	c.mu.Unlock()
-	if proj.ID == "" || (sel != nil && proj.ID == sel.project.ID) {
-		return sel, nil
-	}
-	sc, err := c.buildScoped(ctx, proj.ID)
-	if err != nil {
-		return nil, err
-	}
-	if sc.project.Name == "" {
-		sc.project.Name = proj.Name
-	}
-	c.mu.Lock()
-	c.scoped[proj.ID] = sc
-	c.mu.Unlock()
-	return sc, nil
-}
-
-// clientsForLB returns the service clients scoped to the project owning lbID.
-// In single-project mode that is always the current selection; in all-projects
-// mode it (re-)scopes to the LB's project so a non-admin can read it.
-func (c *Clients) clientsForLB(ctx context.Context, lbID string) (*serviceClients, error) {
-	c.mu.Lock()
-	allMode := c.allMode
-	proj, ok := c.lbProject[lbID]
-	sel := c.sel
-	c.mu.Unlock()
-	if !allMode || !ok || (sel != nil && proj.ID == sel.project.ID) {
-		return sel, nil
-	}
-	return c.scopedClients(ctx, proj)
+	return services, nil
 }
 
 // currentProject extracts the scoped project from the authentication result.
@@ -251,24 +194,4 @@ func currentProject(provider *gophercloud.ProviderClient) ProjectInfo {
 		return ProjectInfo{}
 	}
 	return ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.Domain.ID}
-}
-
-// detectSwitchCapability decides, from the resolved auth options, whether the
-// project selector can re-scope. The auth method is known at this point, so the
-// decision is made before the user attempts a switch.
-func detectSwitchCapability(ao *gophercloud.AuthOptions) SwitchCapability {
-	switch {
-	case ao.ApplicationCredentialID != "" || ao.ApplicationCredentialName != "":
-		return SwitchCapability{
-			Reason:  "Application credentials are locked to the project they were created for.",
-			Suggest: "To switch, use user credentials, or create separate app creds per project and select them via --os-cloud.",
-		}
-	case ao.Username == "" && ao.UserID == "" && ao.TokenID != "":
-		return SwitchCapability{
-			Reason:  "Authenticated with a pre-issued token, which can't be re-scoped to another project.",
-			Suggest: "To switch projects, authenticate with credentials (clouds.yaml or OS_USERNAME/OS_PASSWORD) or an application credential with access to multiple projects.",
-		}
-	default:
-		return SwitchCapability{CanSwitch: true}
-	}
 }

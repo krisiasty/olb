@@ -85,9 +85,6 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Picker):
 		return m.openPicker()
 
-	case key.Matches(msg, m.keys.Detail):
-		cmd := m.inspect(intentDetail)
-		return m, cmd
 	case key.Matches(msg, m.keys.YAML):
 		cmd := m.inspect(intentYAML)
 		return m, cmd
@@ -119,6 +116,12 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openProject()
 	case key.Matches(msg, m.keys.Refresh):
 		return m.refresh()
+	case key.Matches(msg, m.keys.AutoRefresh):
+		return m.toggleAutoRefresh()
+	case key.Matches(msg, m.keys.IntervalUp):
+		return m.changeAutoRefreshInterval(1)
+	case key.Matches(msg, m.keys.IntervalDown):
+		return m.changeAutoRefreshInterval(-1)
 	case key.Matches(msg, m.keys.Help):
 		m.overlay = overlayHelp
 		m.setupHelpViewport()
@@ -165,19 +168,32 @@ func (m Model) quitOrBack() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) refresh() (tea.Model, tea.Cmd) {
+	next, cmd := m.beginRefresh(false)
+	return next, cmd
+}
+
+func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
+	if m.refreshing {
+		return m, nil
+	}
 	m.hist.pruneDead()
+	m.refreshing = true
+	m.refreshAutomatic = automatic
+	m.loading, m.loadingWhat = true, "refreshing…"
+	m.captureRefreshSelection()
 	if m.loc.isList() {
-		m.lbsLoaded = false
-		m.loading, m.loadingWhat = true, "load balancers"
+		m.refreshLBID = ""
 		return m, m.loadLBsCmd()
 	}
 	lbID := m.loc.id.OwningLBID
-	if lbID != "" {
-		m.cache.Invalidate(lbID)
-		delete(m.lbStats, lbID)
+	if lbID == "" {
+		m.endRefresh()
+		return m, nil
 	}
-	cmd := m.render()
-	return m, tea.Batch(cmd, m.setFlash("refreshed", false))
+	m.refreshLBID = lbID
+	m.refreshDetail = nil
+	m.refreshStats = nil
+	return m, m.getTreeCmd(lbID, m.loc.id, false)
 }
 
 func (m *Model) moveCursor(delta int) {
@@ -205,11 +221,6 @@ func (m *Model) openSelected() tea.Cmd {
 
 	if e.kind == entRef && e.edge != nil && e.edge.Unresolved {
 		return m.followUnresolved(e)
-	}
-	if e.kind == entChild && e.node != nil {
-		if kind, ok := e.node.IsLazy(); ok {
-			return m.openLazy(e.node, kind)
-		}
 	}
 	if (e.kind == entRef || e.kind == entBackRef) && e.edge != nil && e.edge.Missing {
 		return m.setFlash(e.relationship+" is unavailable", false)
@@ -240,19 +251,6 @@ func (m *Model) followUnresolved(e entry) tea.Cmd {
 	return nil
 }
 
-func (m *Model) openLazy(node *model.Node, kind string) tea.Cmd {
-	if kind == model.LazyAmphorae {
-		if len(node.Children) > 0 {
-			m.hist.navigate(histEntry{id: node.Identity()})
-			m.clearFilter()
-			return m.render()
-		}
-		m.loading, m.loadingWhat = true, "amphorae"
-		return m.loadAmphoraeCmd(node, node.OwningLBID)
-	}
-	return nil
-}
-
 // --- inspect & copy -------------------------------------------------------
 
 func (m *Model) inspect(intent detailIntent) tea.Cmd {
@@ -263,12 +261,14 @@ func (m *Model) inspect(intent detailIntent) tea.Cmd {
 	if node.DetailLoaded {
 		return m.openInspect(node, intent)
 	}
+	if node.Type == model.TypeLoadBalancer && m.lbDetailLoading[node.ID] {
+		return m.setFlash("full configuration is still loading", false)
+	}
 	m.loading, m.loadingWhat = true, "detail"
 	return m.fetchDetailCmd(node, intent)
 }
 
-// openInspect opens the raw (y/j) or detail (d) overlay for an already-loaded
-// node.
+// openInspect opens the raw YAML/JSON overlay for an already-loaded node.
 func (m *Model) openInspect(node *model.Node, intent detailIntent) tea.Cmd {
 	switch intent {
 	case intentYAML:
@@ -279,14 +279,6 @@ func (m *Model) openInspect(node *model.Node, intent detailIntent) tea.Cmd {
 		m.rawContent, m.rawFormat = marshalRaw(node.Raw, "json"), "json"
 		m.overlay = overlayRaw
 		m.setupRawViewport()
-	case intentDetail:
-		m.overlay = overlayDetail
-		m.refreshDetailOverlay()
-		if node.Type == model.TypeLoadBalancer {
-			if _, ok := m.lbStats[node.ID]; !ok {
-				return m.lbStatsCmd(node.ID)
-			}
-		}
 	}
 	return nil
 }
@@ -365,12 +357,12 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
 
-	case overlayRaw, overlayDetail:
+	case overlayRaw:
 		switch {
 		case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit):
 			m.overlay = overlayNone
 			return m, nil
-		case m.overlay == overlayRaw && key.Matches(msg, m.keys.CopyRaw):
+		case key.Matches(msg, m.keys.CopyRaw):
 			cmd := m.copyRaw()
 			return m, cmd
 		}

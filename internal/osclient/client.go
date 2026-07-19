@@ -24,5 +24,10 @@ func (c *Clients) AllProjects() bool {
 	return c.allMode
 }
 
-// SwitchCapability reports whether the project filter is available.
-func (c *Clients) SwitchCapability() SwitchCapability { return c.Switch }
+// SwitchCapability reports whether project switching and the admin-only global
+// view are available.
+func (c *Clients) SwitchCapability() SwitchCapability {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Switch
+}

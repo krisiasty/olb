@@ -1164,7 +1164,7 @@ func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
 		return m, m.setFlash(msg.err.Error(), true)
 	}
 	m.projects = msg.projects
-	m.projCursor = 0
+	m.projCursor = m.firstProjectCursor()
 	m.overlay = overlayProject
 	m.search.SetValue("")
 	m.search.Focus()

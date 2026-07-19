@@ -137,6 +137,17 @@ func TestAPILoggerLabelsBarbicanService(t *testing.T) {
 	}
 }
 
+func TestEndpointLabelsOctaviaAdministrativePath(t *testing.T) {
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"https://load-balancer.example/v2.0/octavia/amphorae?loadbalancer_id=123e4567-e89b-12d3-a456-426614174000", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := Endpoint(request), "GET octavia /v2.0/octavia/amphorae?loadbalancer_id"; got != want {
+		t.Fatalf("administrative Octavia endpoint = %q, want %q", got, want)
+	}
+}
+
 func TestAPILoggerSuppressesAuthenticationBodiesAndClassifiesTimeouts(t *testing.T) {
 	path := t.TempDir() + "/api.jsonl"
 	logger, err := OpenAPILogger(path, APILogOptions{IncludeBodies: true})

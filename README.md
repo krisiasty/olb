@@ -83,15 +83,16 @@ creates matching Octavia, Neutron, Nova, and Barbican clients. This lets a
 regular user enter every project in which they have an assignment. Each switch
 requests a fresh scoped token rather than reusing a previous project session.
 
-The switcher's first entry, **⟨ all accessible projects ⟩** (or start with
-`--all-projects`), restores the exact startup authentication and shows its
-unfiltered Octavia result, with each row tagged by project where a name is
-known. For an admin this preserves Octavia's global list (including projects on
-which the admin has no explicit role). For a project-scoped regular user this
-view remains limited to the startup token's scope; select another project to
-obtain and use its scoped token. Changing scope clears all five workspace
-histories and returns to the load-balancer list because their previous objects
-may not exist in the newly active scope.
+The switcher's first entry, **⟨ all accessible projects ⟩**, is the admin-only
+global view (also available at startup through `--all-projects`). The selector
+checks the startup token against Keystone's administrative project listing. If
+that permission is absent, the row is disabled and annotated **requires admin
+permissions**; regular users select an individual accessible project instead.
+For an administrator the entry restores the exact startup authentication and
+its unfiltered Octavia result, preserving objects from projects on which the
+administrator has no explicit assignment. Changing scope clears all five
+workspace histories and returns to the load-balancer list because their
+previous objects may not exist in the newly active scope.
 
 ### Keybindings
 

@@ -495,13 +495,17 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	fp := m.filteredProjects()
 	// Row 0 is the synthetic "all projects" option; rows 1..N are the projects.
 	total := len(fp) + 1
+	minimum := 0
+	if !m.allProjectsSelectable() && len(fp) > 0 {
+		minimum = 1
+	}
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
 		m.overlay = overlayNone
 		m.search.Blur()
 		return m, nil
 	case key.Matches(msg, m.keys.Up):
-		if m.projCursor > 0 {
+		if m.projCursor > minimum {
 			m.projCursor--
 		}
 		return m, nil
@@ -511,9 +515,12 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Accept):
-		m.overlay = overlayNone
-		m.search.Blur()
 		if m.projCursor == 0 {
+			if !m.allProjectsSelectable() {
+				return m, nil
+			}
+			m.overlay = overlayNone
+			m.search.Blur()
 			m.loading, m.loadingWhat = true, "all projects"
 			return m, m.enterAllProjectsCmd()
 		}
@@ -521,12 +528,14 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if idx < 0 || idx >= len(fp) {
 			return m, nil
 		}
+		m.overlay = overlayNone
+		m.search.Blur()
 		m.loading, m.loadingWhat = true, "switching project"
 		return m, m.switchProjectCmd(fp[idx])
 	}
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(msg)
-	m.projCursor = 0
+	m.projCursor = m.firstProjectCursor()
 	return m, cmd
 }
 

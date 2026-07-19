@@ -1554,6 +1554,34 @@ func TestProjectSwitcherEnabled(t *testing.T) {
 	m = upd(t, m, press("esc"))
 }
 
+func TestProjectSwitcherDisablesAllProjectsWithoutAdmin(t *testing.T) {
+	capability := osclient.SwitchCapability{
+		CanSwitch: true, AllProjectsChecked: true,
+		AllProjectsReason: "requires admin permissions",
+	}
+	m := start(t, capability)
+	m = updExec(t, m, press("p"))
+	if m.projCursor != 1 {
+		t.Fatalf("project cursor = %d, want first accessible project", m.projCursor)
+	}
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	if !strings.Contains(plain, "⟨ all accessible projects ⟩  (requires admin permissions)") {
+		t.Fatalf("disabled all-projects annotation missing:\n%s", plain)
+	}
+	m = upd(t, m, press("up"))
+	if m.projCursor != 1 {
+		t.Fatalf("cursor moved onto disabled all-projects row: %d", m.projCursor)
+	}
+
+	// Even if stale state puts the cursor on the disabled row, Enter is inert.
+	m.projCursor = 0
+	next, cmd := m.Update(press("enter"))
+	m = next.(Model)
+	if cmd != nil || m.overlay != overlayProject || m.allProjects {
+		t.Fatal("disabled all-projects row was selectable")
+	}
+}
+
 func TestFollowUnresolvedInstanceEdge(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // LB

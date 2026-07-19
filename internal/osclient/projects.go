@@ -9,6 +9,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
+	"github.com/gophercloud/gophercloud/v2/pagination"
 )
 
 // projNamesTTL bounds how long a resolved project-name map is reused before the
@@ -118,7 +119,38 @@ func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 		out = append(out, ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.DomainID})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	c.refreshAllProjectsCapability(ctx)
 	return out, nil
+}
+
+// probeGlobalProjectAccess makes a single, bounded request to the administrative
+// project-list API. Unlike role-name inspection, this honors the cloud's actual
+// Keystone policy. A tenant-scoped user normally receives 403.
+func probeGlobalProjectAccess(ctx context.Context, identity *gophercloud.ServiceClient) error {
+	return projects.List(identity, projects.ListOpts{Limit: 1}).EachPage(ctx, func(context.Context, pagination.Page) (bool, error) {
+		return false, nil
+	})
+}
+
+func (c *Clients) refreshAllProjectsCapability(ctx context.Context) bool {
+	c.mu.Lock()
+	probe := c.probeAll
+	c.mu.Unlock()
+
+	allowed := false
+	if probe != nil {
+		allowed = probe(ctx) == nil
+	}
+	c.mu.Lock()
+	c.Switch.AllProjectsChecked = true
+	c.Switch.CanAllProjects = allowed
+	if allowed {
+		c.Switch.AllProjectsReason = ""
+	} else {
+		c.Switch.AllProjectsReason = "requires admin permissions"
+	}
+	c.mu.Unlock()
+	return allowed
 }
 
 // listAllProjects enumerates every project via the admin Keystone listing
@@ -239,7 +271,17 @@ func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 
 // EnterAllProjects restores the exact authentication scope with which the
 // program started, including any global/admin visibility it provided.
-func (c *Clients) EnterAllProjects(_ context.Context) error {
+func (c *Clients) EnterAllProjects(ctx context.Context) error {
+	c.mu.Lock()
+	checked := c.Switch.AllProjectsChecked
+	allowed := c.Switch.CanAllProjects
+	c.mu.Unlock()
+	if !checked {
+		allowed = c.refreshAllProjectsCapability(ctx)
+	}
+	if !allowed {
+		return fmt.Errorf("all-projects view requires admin permissions")
+	}
 	c.mu.Lock()
 	c.activeServices = c.services
 	c.allMode = true

@@ -97,9 +97,12 @@ type ProjectInfo struct {
 // Failures to enumerate or authenticate to a selected project are reported by
 // the corresponding selector operation.
 type SwitchCapability struct {
-	CanSwitch bool
-	Reason    string
-	Suggest   string
+	CanSwitch          bool
+	Reason             string
+	Suggest            string
+	AllProjectsChecked bool
+	CanAllProjects     bool
+	AllProjectsReason  string
 }
 
 // serviceClients is one consistently-scoped set of OpenStack service clients.
@@ -116,6 +119,7 @@ type serviceClients struct {
 }
 
 type projectScopeFunc func(context.Context, ProjectInfo) (*serviceClients, error)
+type allProjectsProbeFunc func(context.Context) error
 
 // Clients retains the startup authentication scope and switches an independent
 // active client set when a project is selected. Returning to all-projects mode
@@ -128,6 +132,7 @@ type Clients struct {
 	services       *serviceClients // immutable startup scope
 	activeServices *serviceClients // startup scope or selected project scope
 	scopeProject   projectScopeFunc
+	probeAll       allProjectsProbeFunc
 	telemetry      *telemetry.Collector
 	selected       ProjectInfo
 	allMode        bool
@@ -184,6 +189,9 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 	c.services = sc
 	c.activeServices = sc
 	c.selected = sc.project
+	c.probeAll = func(ctx context.Context) error {
+		return probeGlobalProjectAccess(ctx, sc.identity)
+	}
 	baseAuth := *ao
 	c.scopeProject = func(ctx context.Context, target ProjectInfo) (*serviceClients, error) {
 		// Keystone returns the startup token in X-Subject-Token. Authenticate with

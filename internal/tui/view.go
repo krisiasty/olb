@@ -1601,10 +1601,12 @@ func (m Model) projectView() string {
 	fp := m.filteredProjects()
 	// Row 0 is the synthetic "all projects" option; the rest are projects.
 	type prow struct {
-		label   string
-		current bool
+		label    string
+		current  bool
+		disabled bool
 	}
-	rows := []prow{{label: "⟨ all accessible projects ⟩", current: m.allProjects}}
+	allSelectable := m.allProjectsSelectable()
+	rows := []prow{{label: "⟨ all accessible projects ⟩", current: m.allProjects, disabled: !allSelectable}}
 	for _, p := range fp {
 		label := p.Name
 		if label == "" {
@@ -1630,11 +1632,20 @@ func (m Model) projectView() string {
 	}
 	for i := start; i < end; i++ {
 		label := rows[i].label
+		if rows[i].disabled {
+			reason := cap.AllProjectsReason
+			if reason == "" {
+				reason = "requires admin permissions"
+			}
+			label += "  (" + reason + ")"
+		}
 		if rows[i].current {
 			label += m.st.relationship.Render(" (current)")
 		}
 		if i == m.projCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+rows[i].label, m.width)) + "\n")
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+label, m.width)) + "\n")
+		} else if rows[i].disabled {
+			b.WriteString("  " + m.st.disabled.Render(m.clip(label)) + "\n")
 		} else {
 			b.WriteString("  " + m.clip(label) + "\n")
 		}
@@ -1644,6 +1655,18 @@ func (m Model) projectView() string {
 	}
 	b.WriteString("\n" + m.st.help.Render("enter select · ↑/↓ move · type to filter · esc cancel"))
 	return b.String()
+}
+
+func (m Model) allProjectsSelectable() bool {
+	cap := m.backend.SwitchCapability()
+	return !cap.AllProjectsChecked || cap.CanAllProjects
+}
+
+func (m Model) firstProjectCursor() int {
+	if !m.allProjectsSelectable() && len(m.filteredProjects()) > 0 {
+		return 1
+	}
+	return 0
 }
 
 type pickItem struct {

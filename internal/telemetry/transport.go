@@ -185,7 +185,7 @@ func normalizedQueryKeys(values url.Values) string {
 
 func inferService(path string) string {
 	switch {
-	case strings.Contains(path, "/lbaas/"):
+	case strings.Contains(path, "/lbaas/") || strings.Contains(path, "/octavia/"):
 		return "octavia"
 	case strings.Contains(path, "/secrets") || strings.Contains(path, "/containers"):
 		return "barbican"

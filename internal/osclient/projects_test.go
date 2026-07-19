@@ -53,7 +53,9 @@ func TestProjectSelectionScopesClientsAndRestoresOriginalForAllProjects(t *testi
 	tenant := &serviceClients{project: ProjectInfo{ID: "tenant-a", Name: "tenant-a"}}
 	scopeCalls := 0
 	c := &Clients{
-		Switch:         SwitchCapability{CanSwitch: true},
+		Switch: SwitchCapability{
+			CanSwitch: true, AllProjectsChecked: true, CanAllProjects: true,
+		},
 		services:       original,
 		activeServices: original,
 		scopeProject: func(_ context.Context, target ProjectInfo) (*serviceClients, error) {
@@ -105,6 +107,32 @@ func TestProjectSelectionScopesClientsAndRestoresOriginalForAllProjects(t *testi
 	}
 	if !c.AllProjects() {
 		t.Fatal("EnterAllProjects should enable the all-projects filter")
+	}
+}
+
+func TestEnterAllProjectsRequiresAdminCapability(t *testing.T) {
+	original := &serviceClients{project: ProjectInfo{ID: "startup"}}
+	tenant := &serviceClients{project: ProjectInfo{ID: "tenant"}}
+	c := &Clients{
+		Switch:         SwitchCapability{CanSwitch: true},
+		services:       original,
+		activeServices: tenant,
+		selected:       tenant.project,
+		probeAll: func(context.Context) error {
+			return errors.New("forbidden")
+		},
+	}
+
+	err := c.EnterAllProjects(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "requires admin permissions") {
+		t.Fatalf("EnterAllProjects error = %v", err)
+	}
+	if c.activeServices != tenant || c.AllProjects() {
+		t.Fatal("denied all-projects entry changed the active scope")
+	}
+	capability := c.SwitchCapability()
+	if !capability.AllProjectsChecked || capability.CanAllProjects || capability.AllProjectsReason == "" {
+		t.Fatalf("all-projects capability = %+v", capability)
 	}
 }
 

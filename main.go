@@ -40,7 +40,7 @@ func run(args []string) (runErr error) {
 		showVersion  = fs.Bool("version", false, "print version and exit")
 		showLicenses = fs.Bool("licenses", false, "print third-party license notices and exit")
 		printMode    = fs.Bool("print", false, "copy actions show the value on screen for manual copy instead of emitting OSC 52")
-		allProjects  = fs.Bool("all-projects", false, "start by listing load balancers across all accessible projects (admin: the whole cluster)")
+		allProjects  = fs.Bool("all-projects", false, "start in the admin-only all-projects view")
 		apiLogPath   = fs.String("api-log", "", "append sanitized API request/response metadata as JSON Lines to this file")
 		apiLogBodies = fs.Bool("api-log-bodies", false, "include sanitized, size-limited JSON bodies in --api-log (requires --api-log)")
 	)

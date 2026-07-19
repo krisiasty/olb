@@ -542,12 +542,24 @@ func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
 			headings = append(headings, e.label)
 		}
 	}
-	wantHeadings := []string{"VIPS · 2", "LISTENERS · 1", "POOLS · 2", "AMPHORAE · 2"}
+	wantHeadings := []string{"VIPS 2", "LISTENERS 1", "POOLS 2", "AMPHORAE 2"}
 	if strings.Join(headings, ",") != strings.Join(wantHeadings, ",") {
 		t.Fatalf("related-object headings = %v, want %v", headings, wantHeadings)
 	}
 	if got := selectableEntryCount(m.entries); got != 7 {
 		t.Fatalf("selectable related objects = %d, want 7", got)
+	}
+	for _, e := range m.entries {
+		switch e.label {
+		case "LISTENERS 1", "POOLS 2":
+			if e.issueErrors != 0 || e.issueDegraded != 1 {
+				t.Errorf("%s issue counts = ERROR %d, DEGRADED %d; want ERROR 0, DEGRADED 1", e.label, e.issueErrors, e.issueDegraded)
+			}
+		case "VIPS 2", "AMPHORAE 2":
+			if e.issueErrors != 0 || e.issueDegraded != 0 {
+				t.Errorf("%s should have no issue counts", e.label)
+			}
+		}
 	}
 	if m.entries[m.cursor].kind == entGroup {
 		t.Fatal("initial cursor landed on a group heading")
@@ -578,7 +590,7 @@ func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
 	m.filter.SetValue("listener:http")
 	m.cursor = 0
 	m.applyFilters()
-	if len(m.entries) != 2 || m.entries[0].kind != entGroup || m.entries[0].label != "LISTENERS · 1" ||
+	if len(m.entries) != 2 || m.entries[0].kind != entGroup || m.entries[0].label != "LISTENERS 1" ||
 		m.entries[1].node == nil || m.entries[1].node.Type != model.TypeListener {
 		t.Fatalf("filtered related rows = %v, want listener heading and one listener", labels(m))
 	}
@@ -586,17 +598,33 @@ func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
 		t.Fatalf("filtered cursor = %d, want selectable row 1", m.cursor)
 	}
 	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if strings.Contains(plain, "VIPS ·") || strings.Contains(plain, "POOLS ·") || strings.Contains(plain, "AMPHORAE ·") {
+	if strings.Contains(plain, "VIPS ") || strings.Contains(plain, "POOLS ") || strings.Contains(plain, "AMPHORAE ") {
 		t.Fatalf("empty filtered groups should be omitted:\n%s", plain)
 	}
-	if heading := lineContaining(plain, "LISTENERS · 1"); !strings.HasPrefix(heading, "── ") {
+	if heading := lineContaining(plain, "LISTENERS 1"); !strings.HasPrefix(heading, "── ") || !strings.Contains(heading, "DEGRADED 1") {
 		t.Fatalf("group heading should render as a panel-aligned divider: %q", heading)
 	}
 	if listener := navigationLineContaining(plain, "http"); !strings.HasPrefix(listener, "  ●") {
 		t.Fatalf("related object should be indented below its group: %q", listener)
 	}
-	if line := lineContaining(plain, "RELATED OBJECTS"); !strings.Contains(line, "1/7") {
+	if line := lineContaining(plain, "RELATED OBJECTS"); !strings.Contains(line, "RELATED OBJECTS 1/7") {
 		t.Fatalf("filtered related-object count should exclude headings: %q", line)
+	} else if !strings.Contains(line, "DEGRADED 1") {
+		t.Fatalf("filtered issue count should describe only visible related objects: %q", line)
+	}
+}
+
+func TestRelatedIssueCountsUseHighestSeverityAndSkipHeadings(t *testing.T) {
+	entries := []entry{
+		{kind: entGroup, label: "POOLS 4"},
+		{kind: entChild, oper: "ONLINE", prov: "ACTIVE"},
+		{kind: entChild, oper: "DEGRADED", prov: "ACTIVE"},
+		{kind: entChild, oper: "DEGRADED", prov: "ERROR"},
+		{kind: entChild, oper: "ERROR", prov: "ERROR"},
+	}
+	errors, degraded := relatedIssueCounts(entries)
+	if errors != 2 || degraded != 1 {
+		t.Fatalf("related issue counts = ERROR %d, DEGRADED %d; want ERROR 2, DEGRADED 1", errors, degraded)
 	}
 }
 

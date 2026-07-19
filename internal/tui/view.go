@@ -230,12 +230,15 @@ func (m Model) lbOverviewLines(h int) []string {
 	if len(lines) < h {
 		visibleCount := selectableEntryCount(m.entries)
 		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS · %d", visibleCount)
+		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
 		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", visibleCount, allCount)
+			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
 		}
+		renderedTitle := m.st.title.Render(title)
+		errorCount, degradedCount := relatedIssueCounts(m.entries)
+		renderedTitle = m.renderIssueCounts(renderedTitle, errorCount, degradedCount)
 		lbID := m.loc.node.ID
-		title = m.overviewPanelTitle(title, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
+		title = m.overviewPanelTitleRendered(renderedTitle, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
 		lines = append(lines, m.clip(title))
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
@@ -430,6 +433,10 @@ func (m Model) statsPanelTitle(lbID string) string {
 }
 
 func (m Model) overviewPanelTitle(title string, loading bool, errText string, updatedAt time.Time, stale bool) string {
+	return m.overviewPanelTitleRendered(m.st.title.Render(title), loading, errText, updatedAt, stale)
+}
+
+func (m Model) overviewPanelTitleRendered(title string, loading bool, errText string, updatedAt time.Time, stale bool) string {
 	state := ""
 	if freshness := m.freshnessLabel(updatedAt); freshness != "" {
 		state = " · " + m.st.disabled.Render(freshness)
@@ -441,7 +448,7 @@ func (m Model) overviewPanelTitle(title string, loading bool, errText string, up
 	} else if errText != "" {
 		state = " · " + m.st.flashErr.Render("unavailable")
 	}
-	return m.st.title.Render(title) + state
+	return title + state
 }
 
 func (m Model) renderOverviewPanel(title string, fields []overviewField, width, limit int) string {
@@ -570,7 +577,8 @@ func (m Model) lbTableLines(h int) []string {
 
 func (m Model) renderRow(e entry, sel bool) string {
 	if e.kind == entGroup {
-		return m.clip(m.st.groupHeading.Render("── " + e.label))
+		heading := m.st.groupHeading.Render("── " + e.label)
+		return m.clip(m.renderIssueCounts(heading, e.issueErrors, e.issueDegraded))
 	}
 	eff := e.oper
 	if eff == "" {
@@ -624,6 +632,16 @@ func (m Model) renderRow(e entry, sel bool) string {
 		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
 	}
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+func (m Model) renderIssueCounts(base string, errors, degraded int) string {
+	if errors > 0 {
+		base += m.st.statusBar.Render(" · ") + lipgloss.NewStyle().Bold(true).Foreground(statusColor("ERROR")).Render(fmt.Sprintf("ERROR %d", errors))
+	}
+	if degraded > 0 {
+		base += m.st.statusBar.Render(" · ") + lipgloss.NewStyle().Bold(true).Foreground(statusColor("DEGRADED")).Render(fmt.Sprintf("DEGRADED %d", degraded))
+	}
+	return base
 }
 
 // navigationRelation returns the stable left-hand label for a resource link.

@@ -107,7 +107,8 @@ reference jump.
   a short ID suffix. A zero-listener count makes unattached pools explicit.
   Non-selectable headings divide related objects
   into VIP, listener, pool, and Amphora groups; their visible counts update with
-  the active text and status filters.
+  the active text and status filters. The panel and individual group headings
+  also roll up ERROR and DEGRADED counts from their currently visible rows.
 - **Other detail is lazy.** Per-object `show` calls used for raw inspection and
   precise reference resolution are fetched only when needed.
 - **Readable traffic statistics.** Byte totals use IEC units and show throughput,

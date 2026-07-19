@@ -30,12 +30,14 @@ type entry struct {
 	node *model.Node // child node, or resolved edge target
 	edge *model.Edge // set for entRef / entBackRef
 
-	label        string // target label, e.g. "pool:backend-v2"
-	relationship string // edge relationship, e.g. "default pool"
-	oper         string
-	prov         string
-	extra        string // list-only trailing facts (provider, vip)
-	showID       bool   // disambiguate duplicate sibling names
+	label         string // target label, e.g. "pool:backend-v2"
+	relationship  string // edge relationship, e.g. "default pool"
+	oper          string
+	prov          string
+	extra         string // list-only trailing facts (provider, vip)
+	showID        bool   // disambiguate duplicate sibling names
+	issueErrors   int    // entGroup visible ERROR count
+	issueDegraded int    // entGroup visible DEGRADED count
 }
 
 // entrySelection is the durable part of a selectable row. It deliberately
@@ -197,7 +199,11 @@ func withRelatedGroupHeadings(entries []entry) []entry {
 			}
 			end++
 		}
-		out = append(out, entry{kind: entGroup, label: fmt.Sprintf("%s · %d", title, end-start)})
+		errors, degraded := relatedIssueCounts(entries[start:end])
+		out = append(out, entry{
+			kind: entGroup, label: fmt.Sprintf("%s %d", title, end-start),
+			issueErrors: errors, issueDegraded: degraded,
+		})
 		out = append(out, entries[start:end]...)
 		start = end
 	}
@@ -237,6 +243,23 @@ func selectableEntryCount(entries []entry) int {
 		}
 	}
 	return count
+}
+
+// relatedIssueCounts summarizes only rows in the visible related-object list.
+// An object with both statuses is counted once at its highest severity.
+func relatedIssueCounts(entries []entry) (errors, degraded int) {
+	for _, e := range entries {
+		if !e.selectable() {
+			continue
+		}
+		switch {
+		case strings.EqualFold(e.oper, "ERROR"), strings.EqualFold(e.prov, "ERROR"):
+			errors++
+		case strings.EqualFold(e.oper, "DEGRADED"), strings.EqualFold(e.prov, "DEGRADED"):
+			degraded++
+		}
+	}
+	return errors, degraded
 }
 
 func firstSelectableIndex(entries []entry) int {

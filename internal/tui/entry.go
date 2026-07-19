@@ -232,7 +232,25 @@ func locationEntries(n *model.Node) []entry {
 			kind: entRelated, node: lb, label: lb.Label(),
 			oper: lb.OperatingStatus, prov: lb.ProvisioningStatus, extra: inlineAttrs(lb),
 		}}
-		return append(entries, nodeEntries(n)...)
+		related := nodeEntries(n)
+		// Pools are graph references rather than listener children, but this view
+		// presents them as related objects. Render resolved pool targets with the
+		// same type label, status dot, name and summary used by the LB overview;
+		// the graph edge remains attached for durable selection identity.
+		poolNameCounts := map[string]int{}
+		for i := range related {
+			if related[i].kind != entRef || related[i].node == nil || related[i].node.Type != model.TypePool {
+				continue
+			}
+			related[i].kind = entRelated
+			poolNameCounts[strings.ToLower(related[i].node.Name)]++
+		}
+		for i := range related {
+			if related[i].kind == entRelated && related[i].node != nil && related[i].node.Type == model.TypePool {
+				related[i].showID = related[i].node.Name != "" && poolNameCounts[strings.ToLower(related[i].node.Name)] > 1
+			}
+		}
+		return append(entries, related...)
 	}
 	return nodeEntries(n)
 }
@@ -268,8 +286,13 @@ func withRelatedGroupHeadings(entries []entry) []entry {
 func relatedObjectGroup(e entry) (key, title string) {
 	switch e.kind {
 	case entRelated:
-		if e.node != nil && e.node.Type == model.TypeLoadBalancer {
-			return "load-balancer", "LOAD BALANCER"
+		if e.node != nil {
+			switch e.node.Type {
+			case model.TypeLoadBalancer:
+				return "load-balancer", "LOAD BALANCER"
+			case model.TypePool:
+				return "pools", "POOLS"
+			}
 		}
 		return "related", "RELATED"
 	case entChild:

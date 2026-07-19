@@ -243,7 +243,7 @@ func TestResourceNavigationRows(t *testing.T) {
 	}
 }
 
-func TestResourceNavigationRowsShowGraphDirection(t *testing.T) {
+func TestListenerPoolsUseRelatedPoolRepresentationAndBackRefsShowDirection(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // load balancer
 	i, ok := m.selectLabel("listener:http")
@@ -254,9 +254,9 @@ func TestResourceNavigationRowsShowGraphDirection(t *testing.T) {
 	m = updExec(t, m, press("enter")) // listener
 
 	view := ansiRE.ReplaceAllString(m.View(), "")
-	refLine := lineContaining(view, "pool:web")
-	if !strings.Contains(refLine, "→") || !strings.Contains(refLine, "Pool") {
-		t.Errorf("outgoing resource link should show its direction and relationship: %q", refLine)
+	poolLine := lineContaining(view, "web")
+	if !strings.Contains(poolLine, "●") || !strings.Contains(poolLine, "Pool") || strings.Contains(poolLine, "→") {
+		t.Errorf("listener pool should use the normal status-dot pool representation: %q\n%s", poolLine, view)
 	}
 
 	i, ok = m.selectLabel("pool:web")

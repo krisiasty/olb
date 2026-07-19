@@ -719,7 +719,8 @@ func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 		t.Fatalf("expected listener location, got %+v", m.loc.node)
 	}
 
-	// The listener shows a reference edge to its pool ("→ pool:web").
+	// The listener presents its pool like an LB-related pool row even though the
+	// underlying graph connection remains a reference edge.
 	i, ok = m.selectLabel("pool:web")
 	if !ok {
 		t.Fatalf("listener should reference a pool; entries=%v", labels(m))
@@ -767,7 +768,7 @@ func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
 	for _, want := range []string{
 		"DETAILS", "STATS", "HTTPS (TLS termination)", "Total connections", "80",
 		"Certificate", "api.example.test", "Expires", "13d remaining",
-		"RELATED OBJECTS", "LOAD BALANCER 1", "POOLS 1", "L7 POLICIES 1",
+		"RELATED OBJECTS", "LOAD BALANCER 1", "POOLS 1", "● Pool", "L7 POLICIES 1",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("listener overview missing %q:\n%s", want, plain)

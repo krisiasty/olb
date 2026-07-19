@@ -16,6 +16,9 @@ type styles struct {
 	relationship  lipgloss.Style
 	attrs         lipgloss.Style
 	statusBar     lipgloss.Style
+	refreshAuto   lipgloss.Style
+	refreshManual lipgloss.Style
+	refreshPaused lipgloss.Style
 	flash         lipgloss.Style
 	flashErr      lipgloss.Style
 	help          lipgloss.Style
@@ -45,6 +48,9 @@ func newStyles() styles {
 		relationship:  lipgloss.NewStyle().Foreground(subtle).Italic(true),
 		attrs:         lipgloss.NewStyle().Foreground(subtle),
 		statusBar:     lipgloss.NewStyle().Foreground(subtle),
+		refreshAuto:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
+		refreshManual: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
+		refreshPaused: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
 		flash:         lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 		flashErr:      lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
 		help:          lipgloss.NewStyle().Foreground(subtle),

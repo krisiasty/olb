@@ -259,11 +259,23 @@ func TestListAndDrillDown(t *testing.T) {
 
 func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	if m.statsSpinner.Spinner.FPS != time.Second {
+		t.Fatalf("stats cadence spinner interval = %s, want 1s", m.statsSpinner.Spinner.FPS)
+	}
+	for _, frame := range m.statsSpinner.Spinner.Frames {
+		if width := len([]rune(frame)); width != 4 {
+			t.Fatalf("stats cadence frame %q has width %d, want four points", frame, width)
+		}
+	}
 	if !m.autoRefreshEnabled || m.autoRefreshInterval() != 5*time.Second {
 		t.Fatalf("auto-refresh defaults = enabled:%v interval:%s", m.autoRefreshEnabled, m.autoRefreshInterval())
 	}
-	if view := ansiRE.ReplaceAllString(m.View(), ""); !strings.Contains(view, "refresh: auto (5s)") {
+	if view := ansiRE.ReplaceAllString(m.View(), ""); !strings.Contains(view, "refresh: auto (5s/30s)") {
 		t.Fatalf("subtitle does not show the auto-refresh interval:\n%s", view)
+	}
+	autoStyle := m.styledAutoRefreshLabel()
+	if !strings.Contains(m.View(), autoStyle) {
+		t.Fatalf("subtitle does not use the automatic-refresh style: %q", autoStyle)
 	}
 
 	m = upd(t, m, press("+"))
@@ -284,6 +296,10 @@ func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
 	m = upd(t, m, press("a"))
 	if m.autoRefreshEnabled || m.autoRefreshLabel() != "refresh: manual" {
 		t.Fatalf("a did not disable auto-refresh: enabled=%v label=%q", m.autoRefreshEnabled, m.autoRefreshLabel())
+	}
+	manualStyle := m.styledAutoRefreshLabel()
+	if autoStyle == manualStyle || !strings.Contains(m.View(), manualStyle) {
+		t.Fatalf("manual and automatic refresh modes should have distinct subtitle styles: auto=%q manual=%q", autoStyle, manualStyle)
 	}
 	next, cmd := m.Update(autoFullTickMsg{generation: staleGeneration})
 	m = next.(Model)
@@ -321,7 +337,7 @@ func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
 	if cmd == nil || m.autoStatsLoading["lb-1"] {
 		t.Fatal("active list filter should pause requests while continuing the timer")
 	}
-	if label := m.autoRefreshLabel(); label != "refresh: auto (5s, paused)" {
+	if label := m.autoRefreshLabel(); label != "refresh: auto (5s/30s, paused)" {
 		t.Fatalf("paused auto-refresh label = %q", label)
 	}
 
@@ -332,8 +348,36 @@ func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
 	if cmd == nil || !m.autoStatsLoading["lb-1"] {
 		t.Fatal("status filtering should not pause automatic stats refresh")
 	}
-	if label := m.autoRefreshLabel(); label != "refresh: auto (5s)" {
+	if label := m.autoRefreshLabel(); label != "refresh: auto (5s/30s)" {
 		t.Fatalf("status filter incorrectly paused auto-refresh: %q", label)
+	}
+}
+
+func TestReenablingAutoRefreshImmediatelyRefreshesStaleStats(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
+
+	m = upd(t, m, press("a"))
+	now = now.Add(10 * time.Second)
+	if line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS"); !strings.Contains(line, "updated 10s ago") || strings.Contains(line, "stale") {
+		t.Fatalf("manual mode should show the old sample without an automatic-stale marker: %q", line)
+	}
+
+	next, cmd := m.Update(press("a"))
+	m = next.(Model)
+	if cmd == nil || !m.autoStatsLoading["lb-1"] {
+		t.Fatal("re-enabling auto-refresh should immediately request stale stats")
+	}
+	m = upd(t, m, statsMsg{
+		lbID: "lb-1", automatic: true,
+		stats: map[string]any{"active_connections": 2},
+	})
+	line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS")
+	if !strings.ContainsAny(line, "●∙") || strings.Contains(line, "stale") {
+		t.Fatalf("successful immediate refresh should restore the cadence indicator: %q", line)
 	}
 }
 
@@ -750,7 +794,30 @@ func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
 		lbID: "lb-1", automatic: true,
 		stats: map[string]any{"active_connections": 2},
 	})
-	now = now.Add(10 * time.Second)
+	freshStatsLine := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS")
+	if !strings.ContainsAny(freshStatsLine, "●∙") || strings.Contains(freshStatsLine, "STATS · updated") {
+		t.Fatalf("fresh automatic stats should show the Points cadence indicator: %q", freshStatsLine)
+	}
+	beforeFrame := m.statsSpinner.View()
+	next, animationCmd := m.Update(m.statsSpinner.Tick())
+	m = next.(Model)
+	if animationCmd == nil || m.statsSpinner.View() == beforeFrame {
+		t.Fatal("Points cadence indicator did not advance or reschedule")
+	}
+
+	now = now.Add(4 * time.Second)
+	if line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS"); !strings.ContainsAny(line, "●∙") {
+		t.Fatalf("stats should retain the cadence indicator inside the five-second interval: %q", line)
+	}
+	now = now.Add(time.Second)
+	if line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS"); !strings.ContainsAny(line, "●∙") || strings.Contains(line, "stale") {
+		t.Fatalf("stats should retain the cadence indicator during the grace window: %q", line)
+	}
+	now = now.Add(time.Second)
+	if line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS"); !strings.Contains(line, "updated 6s ago") || !strings.Contains(line, "stale") {
+		t.Fatalf("stats should switch to stale timing after the grace window: %q", line)
+	}
+	now = now.Add(4 * time.Second)
 	m = upd(t, m, tea.WindowSizeMsg{Width: 60, Height: 30})
 
 	view := ansiRE.ReplaceAllString(m.View(), "")
@@ -762,6 +829,9 @@ func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
 		if line := lineContaining(view, title); !strings.Contains(line, want) {
 			t.Errorf("%s freshness line = %q, want %q", title, line, want)
 		}
+	}
+	if line := lineContaining(view, "STATS"); !strings.Contains(line, "stale") {
+		t.Errorf("overdue automatic stats should be marked stale: %q", line)
 	}
 
 	// The local freshness tick only redraws elapsed labels; it does not start a
@@ -797,6 +867,11 @@ func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
 	}
 	if line := lineContaining(view, "STATS"); !strings.Contains(line, "updated 13s ago") {
 		t.Errorf("cached navigation reset stats freshness: %q", line)
+	}
+	m.autoRefreshEnabled = false
+	manualStatsLine := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "STATS")
+	if !strings.Contains(manualStatsLine, "updated 13s ago") || strings.Contains(manualStatsLine, "stale") {
+		t.Errorf("manual stats should show age without an overdue marker: %q", manualStatsLine)
 	}
 }
 
@@ -836,7 +911,7 @@ func TestFailedRefreshRetainsTimestampsAndMarksSectionsStale(t *testing.T) {
 		}
 	}
 	statsLine := lineContaining(view, "STATS")
-	if !strings.Contains(statsLine, "updated now") || strings.Contains(statsLine, "stale") {
+	if !strings.ContainsAny(statsLine, "●∙") || strings.Contains(statsLine, "updated") || strings.Contains(statsLine, "stale") {
 		t.Errorf("successful stats refresh should have independent freshness: %q", statsLine)
 	}
 	if !strings.Contains(view, "Active connections") || !strings.Contains(view, "9") {

@@ -28,9 +28,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
-		if m.loading {
+		switch msg.ID {
+		case m.spinner.ID():
+			if !m.loading {
+				return m, nil
+			}
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		case m.statsSpinner.ID():
+			updated := m.updatedAt(m.currentLBID(), sectionStats)
+			if !m.isLBOverview() || !m.statsWithinAutoInterval(updated) {
+				m.statsSpinnerRunning = false
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.statsSpinner, cmd = m.statsSpinner.Update(msg)
 			return m, cmd
 		}
 		return m, nil
@@ -235,7 +248,8 @@ func (m Model) onStats(msg statsMsg) (tea.Model, tea.Cmd) {
 	delete(m.lbStatsErr, msg.lbID)
 	m.lbStats[msg.lbID] = msg.stats
 	m.markFresh(msg.lbID, sectionStats)
-	return m, nil
+	cmd := m.ensureStatsSpinner()
+	return m, cmd
 }
 
 func (m Model) onLBFloatingIP(msg lbFloatingIPMsg) (tea.Model, tea.Cmd) {
@@ -377,6 +391,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 	if !m.lbPoolsLoaded[n.ID] && !m.lbPoolsLoading[n.ID] {
 		m.lbPoolsLoading[n.ID] = true
 		cmds = append(cmds, m.poolSummariesCmd(n.ID, false))
+	}
+	if cmd := m.ensureStatsSpinner(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	switch len(cmds) {
 	case 0:
@@ -543,9 +560,18 @@ func (m *Model) commitLBRefresh() tea.Cmd {
 		failures = append(failures, "related objects: "+m.lbRelatedErr[lbID])
 	}
 	if len(failures) > 0 {
-		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
+		finish := m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
+		return batchWithOptional(finish, m.ensureStatsSpinner())
 	}
-	return m.finishRefresh("")
+	finish := m.finishRefresh("")
+	return batchWithOptional(finish, m.ensureStatsSpinner())
+}
+
+func batchWithOptional(primary, optional tea.Cmd) tea.Cmd {
+	if optional == nil {
+		return primary
+	}
+	return tea.Batch(primary, optional)
 }
 
 func (m *Model) finishRefresh(errText string) tea.Cmd {
@@ -853,6 +879,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshPools = nil
 	m.refreshPoolsExpected = false
 	m.refreshAutomatic = false
+	m.statsSpinnerRunning = false
 	if msg.err != nil {
 		return m, m.setFlash(msg.err.Error(), true)
 	}

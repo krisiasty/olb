@@ -7,7 +7,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const freshnessTickInterval = time.Second
+const (
+	freshnessTickInterval = time.Second
+	statsFreshnessGrace   = time.Second
+)
 
 type freshnessTickMsg struct{}
 
@@ -82,4 +85,31 @@ func (m Model) freshnessLabel(updated time.Time) string {
 	default:
 		return fmt.Sprintf("updated %dd ago", int(age/(24*time.Hour)))
 	}
+}
+
+func (m Model) statsWithinAutoInterval(updated time.Time) bool {
+	if !m.autoRefreshEnabled || updated.IsZero() {
+		return false
+	}
+	age := m.clock().Sub(updated)
+	return age >= 0 && age < m.autoRefreshInterval()+statsFreshnessGrace
+}
+
+func (m *Model) ensureStatsSpinner() tea.Cmd {
+	if !m.isLBOverview() {
+		return nil
+	}
+	updated := m.updatedAt(m.currentLBID(), sectionStats)
+	if m.statsSpinnerRunning || !m.statsWithinAutoInterval(updated) {
+		return nil
+	}
+	m.statsSpinnerRunning = true
+	return m.statsSpinner.Tick
+}
+
+func (m Model) currentLBID() string {
+	if m.loc.node == nil {
+		return ""
+	}
+	return m.loc.node.OwningLBID
 }

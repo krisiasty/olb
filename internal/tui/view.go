@@ -82,7 +82,7 @@ func (m Model) subtitleLine() string {
 	if m.allProjects {
 		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all accessible projects")
 	}
-	parts := []string{scope, m.st.statusBar.Render(m.autoRefreshLabel())}
+	parts := []string{scope, m.styledAutoRefreshLabel()}
 	if !m.isLBOverview() {
 		if len(m.entries) != len(m.allEntries) {
 			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries))))
@@ -227,7 +227,7 @@ func (m Model) lbOverviewLines(h int) []string {
 			title = fmt.Sprintf("RELATED OBJECTS · %d/%d", len(m.entries), len(m.allEntries))
 		}
 		lbID := m.loc.node.ID
-		title = m.overviewPanelTitle(title, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated))
+		title = m.overviewPanelTitle(title, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
 		lines = append(lines, m.clip(title))
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
@@ -256,8 +256,8 @@ func (m Model) lbOverviewSummary(budget int) []string {
 	// committed panel values visible. Per-panel loading labels would duplicate
 	// that status and make the retained values look unavailable.
 	lbID := m.loc.node.ID
-	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[lbID], m.lbDetailErr[lbID], m.updatedAt(lbID, sectionDetails))
-	statsTitle := m.overviewPanelTitle("STATS", !m.refreshing && m.lbStatsLoading[lbID], m.lbStatsErr[lbID], m.updatedAt(lbID, sectionStats))
+	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[lbID], m.lbDetailErr[lbID], m.updatedAt(lbID, sectionDetails), m.lbDetailErr[lbID] != "")
+	statsTitle := m.statsPanelTitle(lbID)
 
 	if m.width >= 90 {
 		limit := budget - 1
@@ -384,11 +384,22 @@ func (m Model) lbStatFields() []overviewField {
 	}
 }
 
-func (m Model) overviewPanelTitle(title string, loading bool, errText string, updatedAt time.Time) string {
+func (m Model) statsPanelTitle(lbID string) string {
+	updated := m.updatedAt(lbID, sectionStats)
+	errText := m.lbStatsErr[lbID]
+	loading := !m.refreshing && m.lbStatsLoading[lbID]
+	if errText == "" && m.statsWithinAutoInterval(updated) {
+		return m.st.title.Render("STATS") + " · " + m.st.disabled.Render(m.statsSpinner.View())
+	}
+	overdue := m.autoRefreshEnabled && !updated.IsZero() && !m.statsWithinAutoInterval(updated)
+	return m.overviewPanelTitle("STATS", loading, errText, updated, errText != "" || overdue)
+}
+
+func (m Model) overviewPanelTitle(title string, loading bool, errText string, updatedAt time.Time, stale bool) string {
 	state := ""
 	if freshness := m.freshnessLabel(updatedAt); freshness != "" {
 		state = " · " + m.st.disabled.Render(freshness)
-		if errText != "" {
+		if stale {
 			state += " · " + m.st.flashErr.Render("stale")
 		}
 	} else if loading {
@@ -1015,7 +1026,8 @@ Global
   q                quit (back out, then exit)      ctrl+c  force quit
 
 Notes
-  • enter is the only descent key; arrows are reserved for history.
+	• auto-refresh header intervals are stats/full (for example, 5s/30s).
+	• enter is the only descent key; arrows are reserved for history.
   • esc clears an active filter first, otherwise it is back.
   • → reference edges are shared/cross-cutting; ← back-references answer
     "who points at me?".  ↦ in the breadcrumb marks a reference jump.

@@ -117,12 +117,16 @@ reference jump.
   ready, and prunes dead history entries. Automatic refresh is enabled by
   default: visible overview stats update every 5 seconds (adjustable with `+`
   and `-` through 1/2/5/10/30/60-second steps), while lists, details, and
-  related objects update every 30 seconds. Each overview section shows its own
-  last-successful update age; a local one-second display tick advances those
-  labels without making API calls, and failed refreshes retain old values with
-  a `stale` marker. `a` pauses or resumes all automatic requests; overlays and
-  active text filters pause them temporarily. Status filters remain applied
-  while refresh continues normally.
+  related objects update every 30 seconds. Details and related objects show
+  their last-successful update age. Fresh automatic stats instead show a moving
+  `Points` cadence indicator; after the interval and a short grace window they
+  switch to an advancing age and a `stale` marker (manual mode always shows
+  age). These display animations make no API calls, and failed refreshes retain
+  old values. `a` pauses or resumes
+  all automatic requests; overlays and active text filters pause them
+  temporarily. Status filters remain applied while refresh continues normally.
+  The header summarizes both cadences as `refresh: auto (stats/full)`, for
+  example `refresh: auto (5s/30s)`.
 - **Graceful degradation.** Admin-only (amphorae) and cross-service (floating IP,
   Nova instance) surfaces degrade with a clear reason when scope or RBAC is
   missing, rather than erroring out or rendering a dead node. OVN-backed LBs have

@@ -117,12 +117,38 @@ func (m Model) toggleAutoRefresh() (tea.Model, tea.Cmd) {
 	m.autoRefreshEnabled = !m.autoRefreshEnabled
 	m.autoGeneration++
 	if !m.autoRefreshEnabled {
-		return m, m.setFlash("auto-refresh: off", false)
+		m.statsSpinnerRunning = false
+		flashCmd := m.setFlash("auto-refresh: off", false)
+		return m, flashCmd
 	}
+	refreshCmd := m.scheduleAutoRefresh()
+	staleStatsCmd := m.refreshStaleStatsCmd()
+	spinnerCmd := m.ensureStatsSpinner()
+	flashCmd := m.setFlash("auto-refresh: "+m.autoRefreshInterval().String(), false)
 	return m, tea.Batch(
-		m.scheduleAutoRefresh(),
-		m.setFlash("auto-refresh: "+m.autoRefreshInterval().String(), false),
+		refreshCmd,
+		staleStatsCmd,
+		spinnerCmd,
+		flashCmd,
 	)
+}
+
+// refreshStaleStatsCmd reconciles an overdue sample immediately when automatic
+// refresh is enabled. The regular timer still owns all subsequent samples.
+func (m *Model) refreshStaleStatsCmd() tea.Cmd {
+	if !m.autoRefreshEnabled || !m.isLBOverview() || m.refreshing || m.autoRefreshPaused() {
+		return nil
+	}
+	lbID := m.loc.node.ID
+	if m.lbStatsLoading[lbID] || m.autoStatsLoading[lbID] {
+		return nil
+	}
+	updated := m.updatedAt(lbID, sectionStats)
+	if m.lbStatsErr[lbID] == "" && m.statsWithinAutoInterval(updated) {
+		return nil
+	}
+	m.autoStatsLoading[lbID] = true
+	return m.autoStatsCmd(lbID)
 }
 
 func (m Model) changeAutoRefreshInterval(delta int) (tea.Model, tea.Cmd) {
@@ -140,11 +166,18 @@ func (m Model) changeAutoRefreshInterval(delta int) (tea.Model, tea.Cmd) {
 	state := m.autoRefreshInterval().String()
 	if !m.autoRefreshEnabled {
 		state += " (off)"
-		return m, m.setFlash("auto-refresh interval: "+state, false)
+		flashCmd := m.setFlash("auto-refresh interval: "+state, false)
+		return m, flashCmd
 	}
+	refreshCmd := m.scheduleAutoRefresh()
+	staleStatsCmd := m.refreshStaleStatsCmd()
+	spinnerCmd := m.ensureStatsSpinner()
+	flashCmd := m.setFlash("auto-refresh interval: "+state, false)
 	return m, tea.Batch(
-		m.scheduleAutoRefresh(),
-		m.setFlash("auto-refresh interval: "+state, false),
+		refreshCmd,
+		staleStatsCmd,
+		spinnerCmd,
+		flashCmd,
 	)
 }
 
@@ -152,9 +185,20 @@ func (m Model) autoRefreshLabel() string {
 	if !m.autoRefreshEnabled {
 		return "refresh: manual"
 	}
-	state := m.autoRefreshInterval().String()
+	state := m.autoRefreshInterval().String() + "/" + fullAutoRefreshInterval.String()
 	if m.autoInteractionPaused() {
 		state += ", paused"
 	}
 	return fmt.Sprintf("refresh: auto (%s)", state)
+}
+
+func (m Model) styledAutoRefreshLabel() string {
+	label := m.autoRefreshLabel()
+	if !m.autoRefreshEnabled {
+		return m.st.refreshManual.Render(label)
+	}
+	if m.autoInteractionPaused() {
+		return m.st.refreshPaused.Render(label)
+	}
+	return m.st.refreshAuto.Render(label)
 }

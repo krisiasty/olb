@@ -63,8 +63,13 @@ type Model struct {
 	width, height int
 
 	spinner spinner.Model
-	filter  textinput.Model // shared for list filter and overlay search
-	vp      viewport.Model  // raw / help scroll region
+	// statsSpinner is a cadence indicator, not a loading indicator: while the
+	// latest automatic stats sample is still within its expected interval, the
+	// moving point shows that another sample is scheduled.
+	statsSpinner        spinner.Model
+	statsSpinnerRunning bool
+	filter              textinput.Model // shared for list filter and overlay search
+	vp                  viewport.Model  // raw / help scroll region
 
 	cache *cache.TreeCache
 
@@ -172,6 +177,11 @@ func New(backend Backend, cfg Config) Model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
+	statsSpinner := spinner.New()
+	statsSpinner.Spinner = spinner.Spinner{
+		Frames: []string{"∙∙∙∙", "●∙∙∙", "∙●∙∙", "∙∙●∙", "∙∙∙●"},
+		FPS:    time.Second,
+	}
 
 	fi := textinput.New()
 	fi.Prompt = "/"
@@ -187,6 +197,7 @@ func New(backend Backend, cfg Config) Model {
 		st:                 newStyles(),
 		cfg:                cfg,
 		spinner:            sp,
+		statsSpinner:       statsSpinner,
 		filter:             fi,
 		search:             se,
 		vp:                 viewport.New(0, 0),

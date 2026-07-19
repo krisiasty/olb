@@ -98,7 +98,6 @@ type Model struct {
 	lbStatsLoading     map[string]bool
 	lbDetailErr        map[string]string
 	lbStatsErr         map[string]string
-	lbFloatingIPs      map[string]string
 	lbFIPLoading       map[string]bool
 	lbFIPLoaded        map[string]bool
 	lbAmphoraLoading   map[string]bool
@@ -197,7 +196,6 @@ func New(backend Backend, cfg Config) Model {
 		lbStatsLoading:     map[string]bool{},
 		lbDetailErr:        map[string]string{},
 		lbStatsErr:         map[string]string{},
-		lbFloatingIPs:      map[string]string{},
 		lbFIPLoading:       map[string]bool{},
 		lbFIPLoaded:        map[string]bool{},
 		lbAmphoraLoading:   map[string]bool{},

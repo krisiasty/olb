@@ -93,7 +93,9 @@ reference jump.
 - **Load-balancer overview.** Opening an LB immediately shows a responsive
   details/stats dashboard above its selectable related objects. Details include
   the owning project name and ID, which disambiguates LBs opened from the global
-  scope, and append an associated floating IP to the VIP when one exists. Full
+  scope, and show the primary VIP with its associated floating IP when one
+  exists. Additional VIPs are selectable related objects; because all VIPs
+  share one Neutron port, floating IPs are matched to them by fixed address. Full
   LB config and traffic counters load independently; Amphora-backed LBs also
   list each backing VM directly by ID and role. The results are cached with the
   status tree. Listener rows include normalized endpoints such as `TCP/443` or

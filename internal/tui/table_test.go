@@ -102,7 +102,7 @@ func TestResourceNavigationRows(t *testing.T) {
 		relation string
 		target   string
 	}{
-		{relation: "VIP", target: "203.0.113.9"},
+		{relation: "Primary VIP", target: "203.0.113.9"},
 		{relation: "Pool", target: "web"},
 		{relation: "Listener", target: "http"},
 		{relation: "Amphora", target: "11111111-1111-1111-1111-111111111111 (MASTER)"},

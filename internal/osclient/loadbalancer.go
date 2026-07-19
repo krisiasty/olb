@@ -25,6 +25,7 @@ type LB struct {
 	Provider           string
 	VipAddress         string
 	VipPortID          string
+	AdditionalVIPs     []model.AdditionalVIP
 	ProjectID          string
 	ProjectName        string // owning project's name (shown in all-projects mode)
 	ProvisioningStatus string
@@ -54,7 +55,7 @@ type PoolSummary struct {
 // Meta returns the LB-level facts the graph builder needs.
 func (l LB) Meta() model.LBMeta {
 	return model.LBMeta{
-		VipAddress: l.VipAddress, VipPortID: l.VipPortID, Provider: l.Provider,
+		VipAddress: l.VipAddress, VipPortID: l.VipPortID, AdditionalVIPs: l.AdditionalVIPs, Provider: l.Provider,
 		ProjectID: l.ProjectID, ProjectName: l.ProjectName,
 	}
 }
@@ -136,7 +137,7 @@ func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, 
 	for _, l := range raw {
 		out = append(out, LB{
 			ID: l.ID, Name: l.Name, Provider: l.Provider,
-			VipAddress: l.VipAddress, VipPortID: l.VipPortID,
+			VipAddress: l.VipAddress, VipPortID: l.VipPortID, AdditionalVIPs: additionalVIPMeta(l.AdditionalVips),
 			ProjectID: l.ProjectID, ProjectName: proj.Name,
 			ProvisioningStatus: l.ProvisioningStatus, OperatingStatus: l.OperatingStatus,
 		})
@@ -162,7 +163,10 @@ func (c *Clients) GetTree(ctx context.Context, lbID string, hint *model.LBMeta) 
 		if err != nil {
 			return nil, err
 		}
-		meta = model.LBMeta{VipAddress: lb.VipAddress, VipPortID: lb.VipPortID, Provider: lb.Provider, ProjectID: lb.ProjectID}
+		meta = model.LBMeta{
+			VipAddress: lb.VipAddress, VipPortID: lb.VipPortID, AdditionalVIPs: additionalVIPMeta(lb.AdditionalVips),
+			Provider: lb.Provider, ProjectID: lb.ProjectID,
+		}
 	}
 
 	res := loadbalancers.GetStatuses(ctx, sc.lb, lbID)
@@ -182,6 +186,14 @@ func (c *Clients) GetTree(ctx context.Context, lbID string, hint *model.LBMeta) 
 		return nil, fmt.Errorf("decoding status tree: %w", err)
 	}
 	return model.Build(&wrapper.Statuses, meta), nil
+}
+
+func additionalVIPMeta(vips []loadbalancers.AdditionalVip) []model.AdditionalVIP {
+	out := make([]model.AdditionalVIP, 0, len(vips))
+	for _, vip := range vips {
+		out = append(out, model.AdditionalVIP{Address: vip.IPAddress, SubnetID: vip.SubnetID})
+	}
+	return out
 }
 
 // DetailResult is the outcome of a lazy per-object show. It carries only data —
@@ -400,11 +412,11 @@ func (c *Clients) ListPoolSummaries(ctx context.Context, lbID string) (map[strin
 	return out, nil
 }
 
-// ResolveFloatingIP looks up the floating IP mapped to the VIP's Neutron port,
-// if any. lbID selects the project scope so a non-admin can resolve it in
-// all-projects mode. Returns (nil, nil) when the LB has no floating IP (common
-// for internal LBs) and ErrUnavailable when Neutron is not in scope.
-func (c *Clients) ResolveFloatingIP(ctx context.Context, lbID, portID string) (*model.Node, error) {
+// ResolveFloatingIPs looks up every floating IP mapped to the load balancer's
+// VIP port, keyed by its fixed IP address. A multi-VIP port may have a distinct
+// floating IP for each primary/additional address. lbID selects the project
+// scope so a non-admin can resolve it in all-projects mode.
+func (c *Clients) ResolveFloatingIPs(ctx context.Context, lbID, portID string) (map[string]*model.Node, error) {
 	sc, err := c.clientsForLB(ctx, lbID)
 	if err != nil {
 		return nil, err
@@ -413,7 +425,7 @@ func (c *Clients) ResolveFloatingIP(ctx context.Context, lbID, portID string) (*
 		return nil, ErrUnavailable
 	}
 	if portID == "" {
-		return nil, nil
+		return map[string]*model.Node{}, nil
 	}
 	pages, err := floatingips.List(sc.network, floatingips.ListOpts{PortID: portID}).AllPages(ctx)
 	if err != nil {
@@ -423,17 +435,25 @@ func (c *Clients) ResolveFloatingIP(ctx context.Context, lbID, portID string) (*
 	if err != nil {
 		return nil, err
 	}
-	if len(fips) == 0 {
-		return nil, nil
+	return floatingIPNodes(fips), nil
+}
+
+func floatingIPNodes(fips []floatingips.FloatingIP) map[string]*model.Node {
+	out := make(map[string]*model.Node, len(fips))
+	for _, f := range fips {
+		if f.FixedIP == "" {
+			continue
+		}
+		node := model.NewNode(model.TypeFloatingIP, f.ID, f.FloatingIP)
+		node.ProvisioningStatus = f.Status
+		node.SetAttr("floating_ip", f.FloatingIP)
+		node.SetAttr("fixed_ip", f.FixedIP)
+		node.SetAttr("port_id", f.PortID)
+		node.Raw = rawFIP(f)
+		node.DetailLoaded = true
+		out[f.FixedIP] = node
 	}
-	f := fips[0]
-	node := model.NewNode(model.TypeFloatingIP, f.ID, f.FloatingIP)
-	node.ProvisioningStatus = f.Status
-	node.SetAttr("floating_ip", f.FloatingIP)
-	node.SetAttr("port_id", f.PortID)
-	node.Raw = rawFIP(f)
-	node.DetailLoaded = true
-	return node, nil
+	return out
 }
 
 // ResolveInstance finds the Nova server whose fixed IP matches a member address.
@@ -525,7 +545,7 @@ func innerRaw(body any, key string) map[string]any {
 
 func rawFIP(f floatingips.FloatingIP) map[string]any {
 	return map[string]any{
-		"id": f.ID, "floating_ip_address": f.FloatingIP, "port_id": f.PortID,
+		"id": f.ID, "floating_ip_address": f.FloatingIP, "fixed_ip_address": f.FixedIP, "port_id": f.PortID,
 		"status": f.Status, "description": f.Description,
 	}
 }

@@ -17,7 +17,7 @@ type Backend interface {
 	LBStats(ctx context.Context, lbID string) (map[string]any, error)
 	ListListenerSummaries(ctx context.Context, lbID string) (map[string]osclient.ListenerSummary, error)
 	ListPoolSummaries(ctx context.Context, lbID string) (map[string]osclient.PoolSummary, error)
-	ResolveFloatingIP(ctx context.Context, lbID, portID string) (*model.Node, error)
+	ResolveFloatingIPs(ctx context.Context, lbID, portID string) (map[string]*model.Node, error)
 	ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error)
 	ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error)
 	ListProjects(ctx context.Context) ([]osclient.ProjectInfo, error)

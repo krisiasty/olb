@@ -49,12 +49,13 @@ func newTree() *model.Tree {
 	_ = json.Unmarshal([]byte(sampleStatus), &top)
 	return model.Build(&top.Statuses, model.LBMeta{
 		VipAddress: "203.0.113.9", VipPortID: "port-9", Provider: "amphora",
-		ProjectID: "p1", ProjectName: "alpha",
+		AdditionalVIPs: []model.AdditionalVIP{{Address: "203.0.114.9", SubnetID: "subnet-10"}},
+		ProjectID:      "p1", ProjectName: "alpha",
 	})
 }
 
 func newFloatingIP(address string) *model.Node {
-	n := model.NewNode(model.TypeFloatingIP, "fip-1", address)
+	n := model.NewNode(model.TypeFloatingIP, "fip-"+address, address)
 	n.SetAttr("floating_ip", address)
 	n.DetailLoaded = true
 	return n
@@ -62,7 +63,7 @@ func newFloatingIP(address string) *model.Node {
 
 func (f *fakeBackend) ListLoadBalancers(context.Context) ([]osclient.LB, error) {
 	lbs := []osclient.LB{
-		{ID: "lb-1", Name: "lb1", Provider: "amphora", VipAddress: "203.0.113.9", VipPortID: "port-9", ProjectID: "p1", ProjectName: "alpha", ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED"},
+		{ID: "lb-1", Name: "lb1", Provider: "amphora", VipAddress: "203.0.113.9", VipPortID: "port-9", AdditionalVIPs: []model.AdditionalVIP{{Address: "203.0.114.9", SubnetID: "subnet-10"}}, ProjectID: "p1", ProjectName: "alpha", ProvisioningStatus: "ACTIVE", OperatingStatus: "DEGRADED"},
 		{ID: "lb-2", Name: "lb2", Provider: "ovn", ProjectID: "p1", ProjectName: "alpha", ProvisioningStatus: "ACTIVE", OperatingStatus: "ERROR"},
 	}
 	if f.all {
@@ -117,8 +118,8 @@ func (f *fakeBackend) ListPoolSummaries(context.Context, string) (map[string]osc
 	}, nil
 }
 
-func (f *fakeBackend) ResolveFloatingIP(context.Context, string, string) (*model.Node, error) {
-	return nil, nil // internal LB: no floating IP
+func (f *fakeBackend) ResolveFloatingIPs(context.Context, string, string) (map[string]*model.Node, error) {
+	return map[string]*model.Node{}, nil // internal LB: no floating IP
 }
 
 func (f *fakeBackend) ResolveInstance(_ context.Context, lbID, addr string) (*model.Node, error) {
@@ -367,7 +368,16 @@ func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
 		model.NewNode(model.TypeAmphora, "amphora-b", ""),
 		model.NewNode(model.TypeListener, "listener-b", "beta"),
 		model.NewNode(model.TypePool, "pool-a", "alpha"),
-		model.NewNode(model.TypeVIP, "vip-b", "10.0.0.2"),
+		func() *model.Node {
+			n := model.NewNode(model.TypeVIP, "vip-additional", "10.0.0.1")
+			n.SetAttr("vip_kind", "additional")
+			return n
+		}(),
+		func() *model.Node {
+			n := model.NewNode(model.TypeVIP, "vip-primary", "10.0.0.2")
+			n.SetAttr("vip_kind", "primary")
+			return n
+		}(),
 		model.NewNode(model.TypeListener, "listener-a2", "Alpha"),
 		model.NewNode(model.TypeAmphora, "amphora-a", ""),
 		model.NewNode(model.TypeListener, "listener-a1", "Alpha"),
@@ -379,7 +389,7 @@ func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
 		got = append(got, string(entry.node.Type)+":"+entry.node.ID)
 	}
 	want := []string{
-		"vip:vip-b",
+		"vip:vip-primary", "vip:vip-additional",
 		"listener:listener-a1", "listener:listener-a2", "listener:listener-b",
 		"pool:pool-a", "pool:pool-z",
 		"amphora:amphora-a", "amphora:amphora-b",
@@ -449,7 +459,10 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 		}},
 	})
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
-	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", vipID: "port-9", node: newFloatingIP("198.51.100.7")})
+	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", nodes: map[string]*model.Node{
+		"203.0.113.9": newFloatingIP("198.51.100.7"),
+		"203.0.114.9": newFloatingIP("198.51.100.17"),
+	}})
 	view = m.View()
 	for _, value := range []string{"Admin state", "ENABLED", "203.0.113.9 (198.51.100.7)", "Active connections", "1"} {
 		if !strings.Contains(view, value) {
@@ -460,6 +473,10 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	vipRow := navigationLineContaining(plainView, "203.0.113.9")
 	if !strings.Contains(vipRow, "203.0.113.9 (198.51.100.7)") || strings.Count(vipRow, "203.0.113.9") != 1 {
 		t.Fatalf("related VIP row should use fixed-and-floating form without repetition: %q", vipRow)
+	}
+	additionalVIPRow := navigationLineContaining(plainView, "203.0.114.9")
+	if !strings.Contains(additionalVIPRow, "Additional VIP") || !strings.Contains(additionalVIPRow, "203.0.114.9 (198.51.100.17)") {
+		t.Fatalf("additional VIP row should identify the relation and its own floating IP: %q", additionalVIPRow)
 	}
 	fields := m.lbDetailFields()
 	admin := fields[len(fields)-1]
@@ -508,10 +525,13 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 		res: osclient.DetailResult{Attrs: map[string]string{"admin_state_up": "true"}},
 	})
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
-	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", vipID: "port-9", node: newFloatingIP("198.51.100.7")})
-	selected, ok := m.selectLabel("listener:http")
+	m = upd(t, m, lbFloatingIPMsg{lbID: "lb-1", nodes: map[string]*model.Node{
+		"203.0.113.9": newFloatingIP("198.51.100.7"),
+		"203.0.114.9": newFloatingIP("198.51.100.17"),
+	}})
+	selected, ok := m.selectLabel("203.0.114.9")
 	if !ok {
-		t.Fatal("test LB has no listener row")
+		t.Fatal("test LB has no additional VIP row")
 	}
 	m.cursor = selected
 
@@ -548,8 +568,8 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 		t.Fatal("graph refresh should start detail and stats requests")
 	}
 	selectedID, _, _ := m.entries[m.cursor].identity()
-	if selectedID.ID != "lsn-1" {
-		t.Fatalf("refresh selected %q, want retained listener lsn-1", selectedID.ID)
+	if selectedID.ID != "lb-1/additional-vip/subnet-10" {
+		t.Fatalf("refresh selected %q, want retained additional VIP", selectedID.ID)
 	}
 	m = upd(t, m, detailMsg{
 		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview, refresh: true,
@@ -565,6 +585,10 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 	if !strings.Contains(partialVIPRow, "203.0.113.9 (198.51.100.7)") {
 		t.Fatalf("related VIP row lost its floating IP during refresh: %q", partialVIPRow)
 	}
+	partialAdditionalVIPRow := navigationLineContaining(ansiRE.ReplaceAllString(view, ""), "203.0.114.9")
+	if !strings.Contains(partialAdditionalVIPRow, "203.0.114.9 (198.51.100.17)") {
+		t.Fatalf("additional VIP row lost its floating IP during refresh: %q", partialAdditionalVIPRow)
+	}
 
 	m = upd(t, m, statsMsg{
 		lbID: "lb-1", refresh: true,
@@ -574,8 +598,11 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 		t.Fatal("refresh should wait for the floating-IP lookup")
 	}
 	m = upd(t, m, lbFloatingIPMsg{
-		lbID: "lb-1", vipID: "port-9", refresh: true,
-		node: newFloatingIP("198.51.100.8"),
+		lbID: "lb-1", refresh: true,
+		nodes: map[string]*model.Node{
+			"203.0.113.9": newFloatingIP("198.51.100.8"),
+			"203.0.114.9": newFloatingIP("198.51.100.18"),
+		},
 	})
 	if !m.refreshing {
 		t.Fatal("refresh should wait for the amphora VM listing")
@@ -602,7 +629,7 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 	}
 	m = upd(t, m, poolSummariesMsg{lbID: "lb-1", items: pools, refresh: true})
 	view = m.View()
-	for _, want := range []string{"DISABLED", "203.0.113.9 (198.51.100.8)", "Active connections", "9"} {
+	for _, want := range []string{"DISABLED", "203.0.113.9 (198.51.100.8)", "203.0.114.9 (198.51.100.18)", "Active connections", "9"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("completed refresh missing %q:\n%s", want, view)
 		}
@@ -634,7 +661,7 @@ func TestLBOverviewResponsiveLayout(t *testing.T) {
 		t.Fatalf("single-project subtitle should use consistent scope wording: %q", wideLines[1])
 	}
 	lastField := -1
-	for _, field := range []string{"Name", "ID", "Project name", "Project ID", "VIP", "Provider", "Operating"} {
+	for _, field := range []string{"Name", "ID", "Project name", "Project ID", "Primary VIP", "Provider", "Operating"} {
 		at := strings.Index(wide, field)
 		if at <= lastField {
 			t.Fatalf("detail field %q is missing or out of order:\n%s", field, wide)

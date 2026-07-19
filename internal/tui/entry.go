@@ -137,6 +137,13 @@ func nodeEntries(n *model.Node) []entry {
 			if left.Type != right.Type {
 				return left.Type < right.Type
 			}
+			if left.Type == model.TypeVIP {
+				leftPrimary := left.Attrs["vip_kind"] != "additional"
+				rightPrimary := right.Attrs["vip_kind"] != "additional"
+				if leftPrimary != rightPrimary {
+					return leftPrimary
+				}
+			}
 			leftName := strings.ToLower(strings.TrimSpace(left.Name))
 			rightName := strings.ToLower(strings.TrimSpace(right.Name))
 			if leftName != rightName {

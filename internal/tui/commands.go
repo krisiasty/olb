@@ -86,8 +86,7 @@ type statsMsg struct {
 
 type lbFloatingIPMsg struct {
 	lbID    string
-	vipID   string
-	node    *model.Node
+	nodes   map[string]*model.Node // keyed by fixed VIP address
 	refresh bool
 	err     error
 }
@@ -162,21 +161,23 @@ func (m Model) resolveFloatingIPCmd(source *model.Node, portID string) tea.Cmd {
 	b := m.backend
 	sid := source.ID
 	lbID := source.OwningLBID
+	fixedIP := source.Attrs["address"]
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		node, err := b.ResolveFloatingIP(ctx, lbID, portID)
+		nodes, err := b.ResolveFloatingIPs(ctx, lbID, portID)
+		node := nodes[fixedIP]
 		return refResolveMsg{sourceID: sid, label: "floating IP", node: node, err: err}
 	}
 }
 
-func (m Model) lbFloatingIPCmd(lbID, vipID, portID string, refresh bool) tea.Cmd {
+func (m Model) lbFloatingIPCmd(lbID, portID string, refresh bool) tea.Cmd {
 	b := m.backend
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		node, err := b.ResolveFloatingIP(ctx, lbID, portID)
-		return lbFloatingIPMsg{lbID: lbID, vipID: vipID, node: node, refresh: refresh, err: err}
+		nodes, err := b.ResolveFloatingIPs(ctx, lbID, portID)
+		return lbFloatingIPMsg{lbID: lbID, nodes: nodes, refresh: refresh, err: err}
 	}
 }
 

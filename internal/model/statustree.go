@@ -104,11 +104,20 @@ type StatusL7Rule struct {
 // amphora branch applies. ProjectName can be empty when Keystone cannot supply
 // a friendly name; ProjectID remains authoritative.
 type LBMeta struct {
-	VipAddress  string
-	VipPortID   string
-	Provider    string
-	ProjectID   string
-	ProjectName string
+	VipAddress     string
+	VipPortID      string
+	AdditionalVIPs []AdditionalVIP
+	Provider       string
+	ProjectID      string
+	ProjectName    string
+}
+
+// AdditionalVIP is an extra fixed address attached to the load balancer's VIP
+// port. Octavia identifies the requested network by subnet; Neutron identifies
+// any floating IP association by the concrete fixed address.
+type AdditionalVIP struct {
+	Address  string
+	SubnetID string
 }
 
 // IsOVN reports whether the LB is backed by the OVN provider driver, for which

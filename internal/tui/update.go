@@ -312,11 +312,11 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 		m.lbDetailLoading[n.ID] = true
 		m.lbStatsLoading[n.ID] = true
 		cmds := []tea.Cmd{m.refreshDetailCmd(n), m.refreshStatsCmd(n.ID)}
-		vipID, portID := lbVIPLookup(n)
+		portID := lbVIPPortID(n)
 		m.refreshFIPExpected = portID != ""
 		if m.refreshFIPExpected {
 			m.lbFIPLoading[n.ID] = true
-			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, vipID, portID, true))
+			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, portID, true))
 		}
 		m.refreshAmphoraeExpected = m.loc.tree != nil && !m.loc.tree.Meta.IsOVN()
 		if m.refreshAmphoraeExpected {
@@ -343,9 +343,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 		cmds = append(cmds, m.lbStatsCmd(n.ID))
 	}
 	if !m.lbFIPLoaded[n.ID] && !m.lbFIPLoading[n.ID] {
-		if vipID, portID := lbVIPLookup(n); portID != "" {
+		if portID := lbVIPPortID(n); portID != "" {
 			m.lbFIPLoading[n.ID] = true
-			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, vipID, portID, false))
+			cmds = append(cmds, m.lbFloatingIPCmd(n.ID, portID, false))
 		}
 	}
 	if m.loc.tree != nil && !m.loc.tree.Meta.IsOVN() && !m.lbAmphoraLoaded[n.ID] && !m.lbAmphoraLoading[n.ID] {
@@ -370,13 +370,26 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 	}
 }
 
-func lbVIPLookup(lb *model.Node) (vipID, portID string) {
+func primaryVIP(lb *model.Node) *model.Node {
 	for _, child := range lb.Children {
-		if child.Type == model.TypeVIP {
-			return child.ID, child.Attrs["port_id"]
+		if child.Type == model.TypeVIP && child.Attrs["vip_kind"] == "primary" {
+			return child
 		}
 	}
-	return "", ""
+	// Trees cached by older versions have no vip_kind marker.
+	for _, child := range lb.Children {
+		if child.Type == model.TypeVIP {
+			return child
+		}
+	}
+	return nil
+}
+
+func lbVIPPortID(lb *model.Node) string {
+	if vip := primaryVIP(lb); vip != nil {
+		return vip.Attrs["port_id"]
+	}
+	return ""
 }
 
 // preserveLBOverview carries full-detail values into a newly-fetched status
@@ -535,27 +548,31 @@ func (m *Model) applyLBFloatingIP(msg lbFloatingIPMsg) {
 	if msg.err != nil {
 		return
 	}
-	tree, vip := m.detailTarget(msg.lbID, msg.vipID)
-	if vip == nil || tree == nil {
+	tree, lb := m.detailTarget(msg.lbID, msg.lbID)
+	if lb == nil || tree == nil {
 		return
 	}
-	if msg.node == nil {
-		delete(m.lbFloatingIPs, msg.lbID)
-		delete(vip.Attrs, "floating_ip")
-		vip.ResolveEdge("floating IP", nil)
-	} else {
-		msg.node.OwningLBID = msg.lbID
-		tree.Attach(msg.node)
-		vip.ResolveEdge("floating IP", msg.node)
-		address := msg.node.Attrs["floating_ip"]
-		if address == "" {
-			address = msg.node.Name
+	for _, vip := range lb.Children {
+		if vip.Type != model.TypeVIP {
+			continue
 		}
-		m.lbFloatingIPs[msg.lbID] = address
+		node := msg.nodes[vip.Attrs["address"]]
+		if node == nil {
+			delete(vip.Attrs, "floating_ip")
+			vip.ResolveEdge("floating IP", nil)
+			continue
+		}
+		node.OwningLBID = msg.lbID
+		tree.Attach(node)
+		vip.ResolveEdge("floating IP", node)
+		address := node.Attrs["floating_ip"]
+		if address == "" {
+			address = node.Name
+		}
 		vip.SetAttr("floating_ip", address)
 	}
-	if m.loc.node == vip {
-		m.allEntries = nodeEntries(vip)
+	if m.loc.node != nil && m.loc.node.Type == model.TypeVIP && m.loc.node.OwningLBID == msg.lbID {
+		m.allEntries = nodeEntries(m.loc.node)
 		m.applyFilters()
 	}
 }
@@ -618,9 +635,7 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 		if src != nil {
 			src.ResolveEdge(msg.label, nil)
 			if msg.label == "floating IP" {
-				delete(m.lbFloatingIPs, src.OwningLBID)
 				delete(src.Attrs, "floating_ip")
-				m.lbFIPLoaded[src.OwningLBID] = true
 			}
 			if m.loc.node == src {
 				m.allEntries = nodeEntries(src)
@@ -636,9 +651,7 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 			if address == "" {
 				address = msg.node.Name
 			}
-			m.lbFloatingIPs[src.OwningLBID] = address
 			src.SetAttr("floating_ip", address)
-			m.lbFIPLoaded[src.OwningLBID] = true
 		}
 	}
 	m.loc.tree.Attach(msg.node)
@@ -810,7 +823,6 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbStatsLoading = map[string]bool{}
 	m.lbDetailErr = map[string]string{}
 	m.lbStatsErr = map[string]string{}
-	m.lbFloatingIPs = map[string]string{}
 	m.lbFIPLoading = map[string]bool{}
 	m.lbFIPLoaded = map[string]bool{}
 	m.lbAmphoraLoading = map[string]bool{}
@@ -866,7 +878,6 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	delete(m.lbStatsLoading, id.OwningLBID)
 	delete(m.lbDetailErr, id.OwningLBID)
 	delete(m.lbStatsErr, id.OwningLBID)
-	delete(m.lbFloatingIPs, id.OwningLBID)
 	delete(m.lbFIPLoading, id.OwningLBID)
 	delete(m.lbFIPLoaded, id.OwningLBID)
 	delete(m.lbAmphoraLoading, id.OwningLBID)

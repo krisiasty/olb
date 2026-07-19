@@ -44,14 +44,19 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 	t.Root = root
 	t.register(root)
 
-	// VIP is a property of the LB, not part of the status tree. Model it as a
-	// synthetic child so the floating-IP boundary edge has somewhere to hang.
+	// VIPs are properties of the LB, not part of the status tree. Model them as
+	// synthetic children so each fixed address can carry its own floating-IP
+	// boundary edge. Additional VIPs share the primary VIP's Neutron port.
 	if meta.VipAddress != "" {
 		vip := NewNode(TypeVIP, meta.VipPortID, meta.VipAddress)
 		vip.OwningLBID = lb.ID
 		vip.SetAttr("address", meta.VipAddress)
 		vip.SetAttr("port_id", meta.VipPortID)
-		vip.Raw = map[string]any{"vip_address": meta.VipAddress, "vip_port_id": meta.VipPortID}
+		vip.SetAttr("vip_kind", "primary")
+		vip.Raw = map[string]any{
+			"vip_address": meta.VipAddress, "vip_port_id": meta.VipPortID,
+			"vip_kind": "primary",
+		}
 		vip.DetailLoaded = true // the VIP has no separate show; its facts are inline
 		// The floating IP is a Neutron lookup against the VIP port; often absent
 		// (internal LBs). Rendered as a jump entry, resolved on landing.
@@ -60,6 +65,25 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 		if meta.VipPortID != "" {
 			t.register(vip)
 		}
+	}
+	for _, extra := range meta.AdditionalVIPs {
+		if extra.Address == "" {
+			continue
+		}
+		vip := NewNode(TypeVIP, additionalVIPID(lb.ID, extra), extra.Address)
+		vip.OwningLBID = lb.ID
+		vip.SetAttr("address", extra.Address)
+		vip.SetAttr("port_id", meta.VipPortID)
+		vip.SetAttr("subnet_id", extra.SubnetID)
+		vip.SetAttr("vip_kind", "additional")
+		vip.Raw = map[string]any{
+			"ip_address": extra.Address, "subnet_id": extra.SubnetID,
+			"vip_port_id": meta.VipPortID, "vip_kind": "additional",
+		}
+		vip.DetailLoaded = true
+		vip.AddUnresolvedRef("floating IP", TypeFloatingIP, meta.VipPortID)
+		root.addChild(vip)
+		t.register(vip)
 	}
 
 	// Canonical, de-duplicated pool nodes come from the LB-level pools array,
@@ -125,6 +149,14 @@ func Build(st *StatusTree, meta LBMeta) *Tree {
 	}
 
 	return t
+}
+
+func additionalVIPID(lbID string, vip AdditionalVIP) string {
+	key := vip.SubnetID
+	if key == "" {
+		key = vip.Address
+	}
+	return lbID + "/additional-vip/" + key
 }
 
 func buildPool(t *Tree, sp *StatusPool, lbID string) *Node {

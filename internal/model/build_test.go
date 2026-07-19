@@ -259,3 +259,48 @@ func TestUnresolvedEdges(t *testing.T) {
 		t.Errorf("member should have an unresolved instance edge")
 	}
 }
+
+func TestBuildAdditionalVIPs(t *testing.T) {
+	var wrapped struct {
+		Statuses StatusTree `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(canonicalStatus), &wrapped); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tr := Build(&wrapped.Statuses, LBMeta{
+		VipAddress: "203.0.113.50", VipPortID: "port-1", Provider: "amphora",
+		AdditionalVIPs: []AdditionalVIP{
+			{Address: "203.0.114.50", SubnetID: "subnet-b"},
+			{Address: "203.0.115.50", SubnetID: "subnet-c"},
+		},
+	})
+
+	var primary, additional int
+	ids := map[string]bool{}
+	for _, child := range tr.Root.Children {
+		if child.Type != TypeVIP {
+			continue
+		}
+		if ids[child.ID] {
+			t.Fatalf("duplicate VIP node ID %q", child.ID)
+		}
+		ids[child.ID] = true
+		if child.Attrs["port_id"] != "port-1" || !child.HasUnresolvedRef("floating IP") {
+			t.Errorf("VIP %q does not share the port and floating-IP edge", child.Name)
+		}
+		switch child.Attrs["vip_kind"] {
+		case "primary":
+			primary++
+		case "additional":
+			additional++
+		default:
+			t.Errorf("VIP %q has invalid kind %q", child.Name, child.Attrs["vip_kind"])
+		}
+	}
+	if primary != 1 || additional != 2 {
+		t.Fatalf("VIP kinds = primary:%d additional:%d, want 1 and 2", primary, additional)
+	}
+	if tr.Node(tr.Root.ID+"/additional-vip/subnet-b") == nil {
+		t.Fatal("additional VIP does not have a stable indexed identity")
+	}
+}

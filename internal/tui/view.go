@@ -306,16 +306,14 @@ func (m Model) lbDetailFields() []overviewField {
 		name = shortID(n.ID)
 	}
 	vip := n.Attrs["vip_address"]
-	if vip == "" {
-		for _, child := range n.Children {
-			if child.Type == model.TypeVIP {
-				vip = child.Name
-				break
-			}
-		}
+	primary := primaryVIP(n)
+	if vip == "" && primary != nil {
+		vip = primary.Name
 	}
-	if floatingIP := m.lbFloatingIPs[n.ID]; vip != "" && floatingIP != "" {
-		vip += " (" + floatingIP + ")"
+	if primary != nil {
+		if floatingIP := primary.Attrs["floating_ip"]; vip != "" && floatingIP != "" {
+			vip += " (" + floatingIP + ")"
+		}
 	}
 	adminState := n.Attrs["admin_state_up"]
 	if adminState == "" && m.lbDetailLoading[n.ID] {
@@ -331,7 +329,7 @@ func (m Model) lbDetailFields() []overviewField {
 		{label: "ID", value: n.ID},
 		{label: "Project name", value: displayValue(projectName)},
 		{label: "Project ID", value: displayValue(projectID)},
-		{label: "VIP", value: displayValue(vip)},
+		{label: "Primary VIP", value: displayValue(vip)},
 		{label: "Provider", value: displayValue(n.Attrs["provider"])},
 		{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
 		{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
@@ -581,6 +579,12 @@ func navigationRelation(e entry) string {
 		}
 	case entChild:
 		if e.node != nil {
+			if e.node.Type == model.TypeVIP {
+				if e.node.Attrs["vip_kind"] == "additional" {
+					return "Additional VIP"
+				}
+				return "Primary VIP"
+			}
 			return nodeTypeLabel(e.node.Type)
 		}
 	}

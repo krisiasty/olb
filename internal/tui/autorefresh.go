@@ -54,6 +54,41 @@ func (m Model) scheduleAutoRefresh() tea.Cmd {
 	)
 }
 
+// resumeAutoRefreshAfterPause establishes a fresh pair of timers after a
+// modal interaction. Invalidating the old generation avoids duplicate timer
+// chains if its ticks are still pending. Work that became overdue while the
+// interaction was paused is reconciled immediately instead of waiting for a
+// whole new interval.
+func (m Model) resumeAutoRefreshAfterPause() (tea.Model, tea.Cmd) {
+	if !m.autoRefreshEnabled {
+		return m, nil
+	}
+	m.autoGeneration++
+	timers := m.scheduleAutoRefresh()
+	if m.autoRefreshPaused() {
+		return m, timers
+	}
+	if m.fullOverviewRefreshOverdue() && !m.overviewRequestInFlight() {
+		next, refreshCmd := m.beginRefresh(true)
+		return next, tea.Batch(timers, refreshCmd)
+	}
+	return m, tea.Batch(timers, m.refreshStaleStatsCmd(), m.ensureStatsSpinner())
+}
+
+func (m Model) fullOverviewRefreshOverdue() bool {
+	if !m.isOverview() || m.loc.node == nil {
+		return false
+	}
+	now := m.clock()
+	for _, section := range []overviewSection{sectionDetails, sectionRelated} {
+		updated := m.updatedAt(m.loc.node.ID, section)
+		if !updated.IsZero() && now.Sub(updated) >= fullAutoRefreshInterval {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Model) onAutoStatsTick(msg autoStatsTickMsg) (tea.Model, tea.Cmd) {
 	if !m.validAutoRefreshGeneration(msg.generation) {
 		return m, nil

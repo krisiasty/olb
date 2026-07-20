@@ -462,7 +462,7 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit):
 			m.overlay = overlayNone
-			return m, nil
+			return m.resumeAutoRefreshAfterPause()
 		case key.Matches(msg, m.keys.CopyRaw):
 			cmd := m.copyRaw()
 			return m, cmd

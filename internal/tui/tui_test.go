@@ -461,6 +461,73 @@ func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
 	}
 }
 
+func TestClosingRawOverlayRestartsAndReconcilesAutoRefresh(t *testing.T) {
+	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	newOverview := func(t *testing.T) Model {
+		t.Helper()
+		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m = updExec(t, m, press("enter"))
+		m.clock = func() time.Time { return now }
+		m.overlay = overlayRaw
+		m.rawContent = "id: lb-1"
+		m.rawFormat = "yaml"
+		m.setupRawViewport()
+		m.lbDetailLoading = map[string]bool{}
+		m.lbStatsLoading = map[string]bool{}
+		m.lbFIPLoading = map[string]bool{}
+		m.lbAmphoraLoading = map[string]bool{}
+		m.lbListenersLoading = map[string]bool{}
+		m.lbPoolsLoading = map[string]bool{}
+		m.autoStatsLoading = map[string]bool{}
+		return m
+	}
+
+	t.Run("overdue stats", func(t *testing.T) {
+		m := newOverview(t)
+		m.markFresh("lb-1", sectionDetails)
+		m.markFresh("lb-1", sectionRelated)
+		m.lbFreshness["lb-1"] = overviewFreshness{
+			details: m.updatedAt("lb-1", sectionDetails),
+			stats:   now.Add(-2 * m.autoRefreshInterval()),
+			related: m.updatedAt("lb-1", sectionRelated),
+		}
+		oldGeneration := m.autoGeneration
+
+		next, cmd := m.Update(press("esc"))
+		m = next.(Model)
+		if m.overlay != overlayNone || cmd == nil {
+			t.Fatalf("closing raw overlay did not resume auto-refresh: overlay=%v cmd=%v", m.overlay, cmd)
+		}
+		if m.autoGeneration != oldGeneration+1 {
+			t.Fatalf("auto-refresh generation = %d, want %d", m.autoGeneration, oldGeneration+1)
+		}
+		if !m.autoStatsLoading["lb-1"] {
+			t.Fatal("closing raw overlay did not immediately refresh overdue stats")
+		}
+		next, staleCmd := m.Update(autoStatsTickMsg{generation: oldGeneration})
+		m = next.(Model)
+		if staleCmd != nil {
+			t.Fatal("pre-overlay stats timer remained active after the timer restart")
+		}
+	})
+
+	t.Run("overdue details and related objects", func(t *testing.T) {
+		m := newOverview(t)
+		m.lbFreshness["lb-1"] = overviewFreshness{
+			details: now.Add(-fullAutoRefreshInterval),
+			stats:   now,
+			related: now.Add(-fullAutoRefreshInterval),
+		}
+
+		next, cmd := m.Update(press("esc"))
+		m = next.(Model)
+		if cmd == nil || !m.refreshing || !m.refreshAutomatic {
+			t.Fatalf("closing raw overlay did not catch up the overdue full refresh: cmd=%v refreshing=%v automatic=%v",
+				cmd, m.refreshing, m.refreshAutomatic)
+		}
+	})
+}
+
 func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))

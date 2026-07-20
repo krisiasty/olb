@@ -174,7 +174,8 @@ func (m Model) apiTelemetryContent(available bool) string {
 	b.WriteString(m.st.groupHeading.Render("API REQUESTS"))
 	b.WriteString("\n")
 	if !available {
-		b.WriteString("\n  " + m.st.disabled.Render("— API telemetry is unavailable for this backend —"))
+		b.WriteString("\n  ")
+		b.WriteString(m.st.disabled.Render("— API telemetry is unavailable for this backend —"))
 		return b.String()
 	}
 	b.WriteString(m.st.title.Render(fmt.Sprintf("TOTAL %d", snapshot.Calls)))
@@ -192,7 +193,8 @@ func (m Model) apiTelemetryContent(available bool) string {
 		b.WriteString("\n")
 	}
 	if len(snapshot.Endpoints) == 0 {
-		b.WriteString("\n  " + m.st.disabled.Render("— no completed API calls since reset —"))
+		b.WriteString("\n  ")
+		b.WriteString(m.st.disabled.Render("— no completed API calls since reset —"))
 		return b.String()
 	}
 	for _, endpoint := range snapshot.Endpoints {

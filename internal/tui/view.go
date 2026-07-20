@@ -2228,7 +2228,8 @@ func (m Model) projectView() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(title + "\n\n")
+	b.WriteString(title)
+	b.WriteString("\n\n")
 	maxRows := m.projectPageSize()
 	start := 0
 	if m.projCursor >= maxRows {
@@ -2251,24 +2252,33 @@ func (m Model) projectView() string {
 			label += m.st.relationship.Render(" (current)")
 		}
 		if i == m.projCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+label, m.width)) + "\n")
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+label, m.width)))
+			b.WriteString("\n")
 		} else if rows[i].disabled {
-			b.WriteString("  " + m.st.disabled.Render(m.clip(label)) + "\n")
+			b.WriteString("  ")
+			b.WriteString(m.st.disabled.Render(m.clip(label)))
+			b.WriteString("\n")
 		} else {
-			b.WriteString("  " + m.clip(label) + "\n")
+			b.WriteString("  ")
+			b.WriteString(m.clip(label))
+			b.WriteString("\n")
 		}
 	}
 	if len(fp) == 0 && m.search.Value() != "" {
-		b.WriteString("  " + m.st.disabled.Render("— no matching projects —") + "\n")
+		b.WriteString("  ")
+		b.WriteString(m.st.disabled.Render("— no matching projects —"))
+		b.WriteString("\n")
 	}
 	if !cap.GlobalAdmin {
-		b.WriteString("\n" + m.st.help.Render("global view: restart with --global-admin"))
+		b.WriteString("\n")
+		b.WriteString(m.st.help.Render("global view: restart with --global-admin"))
 	}
 	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
 	if m.search.Focused() {
 		footer = "type to filter · enter apply · esc clear"
 	}
-	b.WriteString("\n" + m.st.help.Render(footer))
+	b.WriteString("\n")
+	b.WriteString(m.st.help.Render(footer))
 	return b.String()
 }
 
@@ -2366,14 +2376,16 @@ func (m Model) pickerView() string {
 	title := m.st.overlayTitle.Render("History · " + m.activeWorkspace.rootLabel())
 	items := m.pickerItems()
 	var b strings.Builder
-	b.WriteString(title + "\n")
+	b.WriteString(title)
+	b.WriteString("\n")
 	searchLine := ""
 	if m.search.Focused() {
 		searchLine = m.search.View()
 	} else if query := m.search.Value(); query != "" {
 		searchLine = m.st.statusBar.Render("filter: " + query)
 	}
-	b.WriteString(searchLine + "\n\n")
+	b.WriteString(searchLine)
+	b.WriteString("\n\n")
 	maxRows := m.pickerPageSize()
 	start := 0
 	if m.pickCursor >= maxRows {
@@ -2384,7 +2396,9 @@ func (m Model) pickerView() string {
 		end = len(items)
 	}
 	if len(items) == 0 {
-		b.WriteString("  " + m.st.disabled.Render("— no history —") + "\n")
+		b.WriteString("  ")
+		b.WriteString(m.st.disabled.Render("— no history —"))
+		b.WriteString("\n")
 	}
 	for i := start; i < end; i++ {
 		it := items[i]
@@ -2402,16 +2416,20 @@ func (m Model) pickerView() string {
 			selectedLabel += " (deleted)"
 		}
 		if i == m.pickCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+selectedLabel, m.width)) + "\n")
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+selectedLabel, m.width)))
+			b.WriteString("\n")
 		} else {
-			b.WriteString("  " + m.clip(label) + "\n")
+			b.WriteString("  ")
+			b.WriteString(m.clip(label))
+			b.WriteString("\n")
 		}
 	}
 	footer := "enter jump · arrows/page/home/end move · / filter · esc cancel"
 	if m.search.Focused() {
 		footer = "enter apply · esc clear · type to filter"
 	}
-	b.WriteString("\n" + m.st.help.Render(footer))
+	b.WriteString("\n")
+	b.WriteString(m.st.help.Render(footer))
 	return b.String()
 }
 

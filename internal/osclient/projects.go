@@ -9,6 +9,7 @@ import (
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/projects"
+	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/v2/pagination"
 )
 
@@ -17,8 +18,8 @@ import (
 // few minutes keeps newly-created projects resolvable without per-refresh load.
 const projNamesTTL = 5 * time.Minute
 
-// SelectProject resolves the command-line project selector and activates the
-// same project-scoped service clients used by the TUI project switcher.
+// SelectProject resolves the command-line project selector and applies the same
+// scoped or global-admin behavior used by the TUI project switcher.
 func (c *Clients) SelectProject(ctx context.Context, selector string) error {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -64,7 +65,7 @@ func resolveProjectSelector(available []ProjectInfo, selector string) (ProjectIn
 type SwitchErrorKind int
 
 const (
-	// EnumerationFailed: GET /v3/auth/projects errored (token/endpoint issue).
+	// EnumerationFailed: the configured Keystone project enumeration failed.
 	EnumerationFailed SwitchErrorKind = iota
 )
 
@@ -86,13 +87,26 @@ func (e *SwitchError) Error() string {
 
 func (e *SwitchError) Unwrap() error { return e.err }
 
-// ListProjects returns the projects the current token may access, via Keystone
-// GET /v3/auth/projects. Unlike `project list` this works for regular
-// (non-admin) users, which is why the selector uses it.
+// ListProjects returns projects appropriate for the configured credential
+// strategy. Regular mode discovers scopeable projects through
+// GET /v3/auth/projects; explicit global-admin mode uses GET /v3/projects.
 func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 	c.mu.Lock()
 	identity := c.services.identity
+	globalAdmin := c.globalAdmin
 	c.mu.Unlock()
+	if globalAdmin {
+		ps, err := c.listAllProjects(ctx)
+		if err != nil {
+			return nil, &SwitchError{
+				Kind:    EnumerationFailed,
+				Reason:  "Couldn't list all projects from the identity service.",
+				Suggest: "Check that --global-admin credentials may use Keystone GET /v3/projects.",
+				err:     err,
+			}
+		}
+		return ps, nil
+	}
 	pages, err := projects.ListAvailable(identity).AllPages(ctx)
 	if err != nil {
 		return nil, &SwitchError{
@@ -119,38 +133,7 @@ func (c *Clients) ListProjects(ctx context.Context) ([]ProjectInfo, error) {
 		out = append(out, ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.DomainID})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	c.refreshAllProjectsCapability(ctx)
 	return out, nil
-}
-
-// probeGlobalProjectAccess makes a single, bounded request to the administrative
-// project-list API. Unlike role-name inspection, this honors the cloud's actual
-// Keystone policy. A tenant-scoped user normally receives 403.
-func probeGlobalProjectAccess(ctx context.Context, identity *gophercloud.ServiceClient) error {
-	return projects.List(identity, projects.ListOpts{Limit: 1}).EachPage(ctx, func(context.Context, pagination.Page) (bool, error) {
-		return false, nil
-	})
-}
-
-func (c *Clients) refreshAllProjectsCapability(ctx context.Context) bool {
-	c.mu.Lock()
-	probe := c.probeAll
-	c.mu.Unlock()
-
-	allowed := false
-	if probe != nil {
-		allowed = probe(ctx) == nil
-	}
-	c.mu.Lock()
-	c.Switch.AllProjectsChecked = true
-	c.Switch.CanAllProjects = allowed
-	if allowed {
-		c.Switch.AllProjectsReason = ""
-	} else {
-		c.Switch.AllProjectsReason = "requires admin permissions"
-	}
-	c.mu.Unlock()
-	return allowed
 }
 
 // listAllProjects enumerates every project via the admin Keystone listing
@@ -180,16 +163,52 @@ func (c *Clients) listAllProjects(ctx context.Context) ([]ProjectInfo, error) {
 		}
 		out = append(out, ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.DomainID})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-// projectNameMap returns a best-effort project ID→name map for labeling
-// all-projects rows, cached for projNamesTTL. The admin full listing is the
-// authoritative source (Octavia lists LBs cluster-wide, but the token is usually
-// assigned to only a few projects, so the accessible list alone leaves most rows
-// showing a bare ID); the accessible list fills any gaps and is the sole source
-// for non-admins, where a 403 on the admin listing is expected. An empty map is
-// returned (never nil) if both enumerations fail, so rows fall back to their IDs.
+// validateGlobalAdmin fails early when an explicitly global credential cannot
+// enumerate Keystone projects or perform a cross-project Octavia read. The
+// foreign-project request is bounded to one row and does not mutate cloud state.
+func (c *Clients) validateGlobalAdmin(ctx context.Context) error {
+	all, err := c.listAllProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("--global-admin requires Keystone permission to list all projects: %w", err)
+	}
+	names := mergeProjectNames(all, nil)
+	if len(names) > 0 {
+		c.mu.Lock()
+		c.projNames = names
+		c.projNamesAt = time.Now()
+		c.mu.Unlock()
+	}
+
+	c.mu.Lock()
+	startupProjectID := c.services.project.ID
+	lb := c.services.lb
+	c.mu.Unlock()
+	var foreign ProjectInfo
+	for _, project := range all {
+		if project.ID != startupProjectID {
+			foreign = project
+			break
+		}
+	}
+	if foreign.ID == "" {
+		return nil
+	}
+	pages := loadbalancers.List(lb, loadbalancers.ListOpts{ProjectID: foreign.ID, Limit: 1})
+	if err := pages.EachPage(ctx, func(context.Context, pagination.Page) (bool, error) {
+		return false, nil
+	}); err != nil {
+		return fmt.Errorf("--global-admin requires cross-project Octavia read access: %w", err)
+	}
+	return nil
+}
+
+// projectNameMap returns a best-effort project ID→name map for labeling global
+// rows, cached for projNamesTTL. The administrative listing is authoritative;
+// regular-mode scope discovery is retained as a graceful fallback.
 func (c *Clients) projectNameMap(ctx context.Context) map[string]string {
 	c.mu.Lock()
 	if c.projNames != nil && time.Since(c.projNamesAt) < projNamesTTL {
@@ -197,18 +216,19 @@ func (c *Clients) projectNameMap(ctx context.Context) map[string]string {
 		c.mu.Unlock()
 		return cached
 	}
+	globalAdmin := c.globalAdmin
 	c.mu.Unlock()
 
-	// The admin full listing is authoritative; the accessible list supplements it
-	// (and, for non-admins where the admin call 403s, is the sole source). Both
-	// enumerations are best-effort — a nil slice from a failed call simply
-	// contributes no names.
+	// Both enumerations are best-effort. Global mode does not repeat the same
+	// administrative request through ListProjects.
 	var admin, accessible []ProjectInfo
 	if all, err := c.listAllProjects(ctx); err == nil {
 		admin = all
 	}
-	if acc, err := c.ListProjects(ctx); err == nil {
-		accessible = acc
+	if !globalAdmin {
+		if acc, err := c.ListProjects(ctx); err == nil {
+			accessible = acc
+		}
 	}
 	names := mergeProjectNames(admin, accessible)
 
@@ -244,13 +264,21 @@ func mergeProjectNames(admin, accessible []ProjectInfo) map[string]string {
 	return names
 }
 
-// SwitchProject obtains and activates a new project-scoped service client. The
-// startup clients remain untouched for all-projects mode.
+// SwitchProject selects a concrete project. Explicit global-admin mode retains
+// the startup clients and changes only the target filter; regular mode obtains
+// and activates a new project-scoped service client.
 func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 	if target.ID == "" {
 		return fmt.Errorf("cannot switch to a project without an ID")
 	}
 	c.mu.Lock()
+	if c.globalAdmin {
+		c.activeServices = c.services
+		c.selected = target
+		c.allMode = false
+		c.mu.Unlock()
+		return nil
+	}
 	scopeProject := c.scopeProject
 	c.mu.Unlock()
 	if scopeProject == nil {
@@ -271,18 +299,12 @@ func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 
 // EnterAllProjects restores the exact authentication scope with which the
 // program started, including any global/admin visibility it provided.
-func (c *Clients) EnterAllProjects(ctx context.Context) error {
+func (c *Clients) EnterAllProjects(_ context.Context) error {
 	c.mu.Lock()
-	checked := c.Switch.AllProjectsChecked
-	allowed := c.Switch.CanAllProjects
-	c.mu.Unlock()
-	if !checked {
-		allowed = c.refreshAllProjectsCapability(ctx)
+	if !c.globalAdmin {
+		c.mu.Unlock()
+		return fmt.Errorf("all-projects view requires --global-admin")
 	}
-	if !allowed {
-		return fmt.Errorf("all-projects view requires admin permissions")
-	}
-	c.mu.Lock()
 	c.activeServices = c.services
 	c.allMode = true
 	c.mu.Unlock()

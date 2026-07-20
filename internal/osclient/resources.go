@@ -49,7 +49,11 @@ func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 	}
 	c.mu.Unlock()
 
-	pages, err := listeners.List(sc.lb, listeners.ListOpts{}).AllPages(ctx)
+	queryProjectID := selected.ID
+	if allMode {
+		queryProjectID = ""
+	}
+	pages, err := listeners.List(sc.lb, listeners.ListOpts{ProjectID: queryProjectID}).AllPages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +87,11 @@ func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 	}
 	c.mu.Unlock()
 
-	pages, err := pools.List(sc.lb, pools.ListOpts{}).AllPages(ctx)
+	queryProjectID := selected.ID
+	if allMode {
+		queryProjectID = ""
+	}
+	pages, err := pools.List(sc.lb, pools.ListOpts{ProjectID: queryProjectID}).AllPages(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +119,8 @@ func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 
 // ListAllAmphorae returns every amphora VM in the cluster (no load-balancer
 // filter). Admin-only, like the per-LB variant: a 403 becomes ErrAdminRequired so
-// the caller can degrade gracefully. Amphorae carry no project attribute, so the
-// project filter does not apply — the owning LB gives their scope in the UI.
+// the caller can degrade gracefully. Amphorae carry no project attribute, so
+// the TUI filters them through the selected project's owning load balancers.
 func (c *Clients) ListAllAmphorae(ctx context.Context) ([]*model.Node, error) {
 	c.mu.Lock()
 	sc := c.activeServices

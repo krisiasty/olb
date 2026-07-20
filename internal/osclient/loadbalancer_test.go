@@ -1,12 +1,45 @@
 package osclient
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
 )
+
+func TestListLoadBalancersSendsSelectedProjectFilterToOctavia(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("project_id"); got != "project-b" {
+			t.Errorf("project_id query = %q, want project-b", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"loadbalancers":[{"id":"lb-b","name":"lb-b","project_id":"project-b"}],"loadbalancers_links":[]}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{lb: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2/lbaas/",
+	}}
+	c := &Clients{
+		services:       sc,
+		activeServices: sc,
+		selected:       ProjectInfo{ID: "project-b", Name: "beta"},
+		globalAdmin:    true,
+	}
+	got, err := c.ListLoadBalancers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ProjectID != "project-b" || got[0].ProjectName != "beta" {
+		t.Fatalf("load balancers = %+v", got)
+	}
+}
 
 func TestFormatAPITimeUsesUTCAndOmitsZeroValue(t *testing.T) {
 	if got := formatAPITime(time.Time{}); got != "" {

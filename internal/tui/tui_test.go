@@ -1662,31 +1662,28 @@ func TestProjectSwitcherEnabled(t *testing.T) {
 	m = upd(t, m, press("esc"))
 }
 
-func TestProjectSwitcherDisablesAllProjectsWithoutAdmin(t *testing.T) {
+func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {
 	capability := osclient.SwitchCapability{
 		CanSwitch: true, AllProjectsChecked: true,
-		AllProjectsReason: "requires admin permissions",
+		AllProjectsReason: "start olb with --global-admin",
 	}
 	m := start(t, capability)
 	m = updExec(t, m, press("p"))
-	if m.projCursor != 1 {
+	if m.projCursor != 0 {
 		t.Fatalf("project cursor = %d, want first accessible project", m.projCursor)
 	}
 	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if !strings.Contains(plain, "⟨ all accessible projects ⟩  (requires admin permissions)") {
-		t.Fatalf("disabled all-projects annotation missing:\n%s", plain)
+	if strings.Contains(plain, "⟨ all projects ⟩") {
+		t.Fatalf("all-projects row should be hidden without --global-admin:\n%s", plain)
 	}
-	m = upd(t, m, press("up"))
-	if m.projCursor != 1 {
-		t.Fatalf("cursor moved onto disabled all-projects row: %d", m.projCursor)
+	if !strings.Contains(plain, "global view: restart with --global-admin") {
+		t.Fatalf("global-admin hint missing:\n%s", plain)
 	}
 
-	// Even if stale state puts the cursor on the disabled row, Enter is inert.
-	m.projCursor = 0
 	next, cmd := m.Update(press("enter"))
 	m = next.(Model)
-	if cmd != nil || m.overlay != overlayProject || m.allProjects {
-		t.Fatal("disabled all-projects row was selectable")
+	if cmd == nil || m.overlay != overlayNone || m.allProjects {
+		t.Fatal("first visible project was not selectable at row zero")
 	}
 }
 
@@ -1838,7 +1835,9 @@ func TestPoolRowsShowProtocolAlgorithmMemberAndListenerCounts(t *testing.T) {
 }
 
 func TestAllProjectsMode(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, osclient.SwitchCapability{
+		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
+	})
 	m = updExec(t, m, press("p")) // open switcher, load projects (cursor on ALL row)
 
 	// Select the "all projects" row (index 0).
@@ -1866,7 +1865,7 @@ func TestAllProjectsMode(t *testing.T) {
 	if !tagged {
 		t.Errorf("cross-project LB should be tagged with its project; entries=%v", labels(m))
 	}
-	if !strings.Contains(m.View(), "all accessible projects") {
+	if !strings.Contains(m.View(), "global admin · all projects") {
 		t.Errorf("subtitle should indicate all-projects scope")
 	}
 
@@ -1879,7 +1878,7 @@ func TestAllProjectsMode(t *testing.T) {
 			t.Fatalf("all-projects LB overview missing owner %q:\n%s", owner, overview)
 		}
 	}
-	if !strings.Contains(strings.Split(overview, "\n")[1], "scope: all accessible projects") {
+	if !strings.Contains(strings.Split(overview, "\n")[1], "scope: global admin · all projects") {
 		t.Fatalf("LB overview should retain the global scope subtitle:\n%s", overview)
 	}
 	m = upd(t, m, press("esc"))

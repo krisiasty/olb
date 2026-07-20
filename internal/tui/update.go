@@ -1233,7 +1233,10 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	}
 	scope := "project " + projectLabel(msg.project)
 	if msg.all {
-		scope = "all accessible projects"
+		scope = "all projects"
+	}
+	if m.backend.SwitchCapability().GlobalAdmin {
+		scope = "global admin · " + scope
 	}
 	return m, tea.Batch(loadCmd, m.setFlash("switched to "+scope, false))
 }
@@ -1352,7 +1355,7 @@ func (m *Model) setTopLevelEntries() {
 	case kindPool:
 		m.allEntries = poolEntries(m.pools, m.lbNameByID())
 	case kindAmphora:
-		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID())
+		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID(), !m.allProjects)
 	default:
 		m.allEntries = lbEntries(m.lbs, m.allProjects)
 	}

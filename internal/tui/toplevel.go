@@ -177,10 +177,13 @@ func poolEntries(rows []osclient.PoolRow, lbNames map[string]string) []entry {
 	return es
 }
 
-func amphoraEntries(nodes []*model.Node, lbNames map[string]string) []entry {
+func amphoraEntries(nodes []*model.Node, lbNames map[string]string, filterToLBs bool) []entry {
 	es := make([]entry, 0, len(nodes))
 	for _, n := range nodes {
-		lbName := lbNames[n.OwningLBID]
+		lbName, visible := lbNames[n.OwningLBID]
+		if filterToLBs && !visible {
+			continue
+		}
 		es = append(es, entry{
 			kind: entAmphora, node: n, lbName: lbName,
 			label: "amphora:" + shortID(n.ID), prov: n.ProvisioningStatus,

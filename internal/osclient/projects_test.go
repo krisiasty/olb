@@ -3,10 +3,53 @@ package osclient
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gophercloud/gophercloud/v2"
 )
+
+func TestListProjectsUsesConfiguredEnumerationStrategy(t *testing.T) {
+	tests := []struct {
+		name        string
+		globalAdmin bool
+		wantPath    string
+	}{
+		{name: "scopeable projects", wantPath: "/v3/auth/projects"},
+		{name: "global projects", globalAdmin: true, wantPath: "/v3/projects"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.wantPath {
+					t.Errorf("request path = %q, want %q", r.URL.Path, tt.wantPath)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"projects":[{"id":"p1","name":"alpha","domain_id":"default"}],"links":{"next":"","previous":""}}`))
+			}))
+			defer server.Close()
+
+			identity := &gophercloud.ServiceClient{
+				ProviderClient: &gophercloud.ProviderClient{},
+				Endpoint:       server.URL + "/v3/",
+			}
+			c := &Clients{
+				services:    &serviceClients{identity: identity},
+				globalAdmin: tt.globalAdmin,
+			}
+			got, err := c.ListProjects(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].ID != "p1" {
+				t.Fatalf("projects = %+v", got)
+			}
+		})
+	}
+}
 
 func TestMergeProjectNamesPrefersAdminAndFillsGaps(t *testing.T) {
 	admin := []ProjectInfo{
@@ -48,7 +91,7 @@ func TestProjectNameMapServesCachedWithinTTL(t *testing.T) {
 	}
 }
 
-func TestProjectSelectionScopesClientsAndRestoresOriginalForAllProjects(t *testing.T) {
+func TestProjectSelectionScopesClients(t *testing.T) {
 	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}
 	tenant := &serviceClients{project: ProjectInfo{ID: "tenant-a", Name: "tenant-a"}}
 	scopeCalls := 0
@@ -96,42 +139,65 @@ func TestProjectSelectionScopesClientsAndRestoresOriginalForAllProjects(t *testi
 		t.Fatalf("second project switch made %d authentication calls, want 2", scopeCalls)
 	}
 
-	if err := c.EnterAllProjects(context.Background()); err != nil {
-		t.Fatalf("EnterAllProjects: %v", err)
-	}
-	if c.services != original {
-		t.Fatal("returning to all projects replaced the original authentication clients")
-	}
-	if got, err := c.clientsForLB(context.Background(), "lb-any-project"); err != nil || got != original {
-		t.Fatalf("all-project drill-in clients = %p, %v; want original %p", got, err, original)
-	}
-	if !c.AllProjects() {
-		t.Fatal("EnterAllProjects should enable the all-projects filter")
-	}
 }
 
-func TestEnterAllProjectsRequiresAdminCapability(t *testing.T) {
-	original := &serviceClients{project: ProjectInfo{ID: "startup"}}
-	tenant := &serviceClients{project: ProjectInfo{ID: "tenant"}}
+func TestGlobalAdminSelectionRetainsStartupClients(t *testing.T) {
+	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}
 	c := &Clients{
-		Switch:         SwitchCapability{CanSwitch: true},
+		Switch: SwitchCapability{
+			CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
+		},
 		services:       original,
-		activeServices: tenant,
-		selected:       tenant.project,
-		probeAll: func(context.Context) error {
-			return errors.New("forbidden")
+		activeServices: original,
+		globalAdmin:    true,
+		selected:       original.project,
+		allMode:        true,
+		scopeProject: func(context.Context, ProjectInfo) (*serviceClients, error) {
+			t.Fatal("global-admin selection attempted to obtain a scoped token")
+			return nil, nil
 		},
 	}
 
+	target := ProjectInfo{ID: "tenant-a", Name: "tenant-a"}
+	if err := c.SwitchProject(context.Background(), target); err != nil {
+		t.Fatalf("SwitchProject: %v", err)
+	}
+	if c.activeServices != original || c.CurrentProject() != target || c.AllProjects() {
+		t.Fatalf("global selection changed clients or state: active=%p project=%+v all=%v", c.activeServices, c.CurrentProject(), c.AllProjects())
+	}
+	if got, err := c.clientsForLB(context.Background(), "lb-in-tenant"); err != nil || got != original {
+		t.Fatalf("global drill-in clients = %p, %v; want startup %p", got, err, original)
+	}
+
+	if err := c.EnterAllProjects(context.Background()); err != nil {
+		t.Fatalf("EnterAllProjects: %v", err)
+	}
+	if c.activeServices != original || !c.AllProjects() {
+		t.Fatalf("all-projects state: active=%p all=%v", c.activeServices, c.AllProjects())
+	}
+}
+
+func TestEnterAllProjectsRequiresExplicitGlobalAdmin(t *testing.T) {
+	original := &serviceClients{project: ProjectInfo{ID: "startup"}}
+	tenant := &serviceClients{project: ProjectInfo{ID: "tenant"}}
+	c := &Clients{
+		Switch: SwitchCapability{
+			CanSwitch: true, AllProjectsChecked: true, AllProjectsReason: "start olb with --global-admin",
+		},
+		services:       original,
+		activeServices: tenant,
+		selected:       tenant.project,
+	}
+
 	err := c.EnterAllProjects(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "requires admin permissions") {
+	if err == nil || !strings.Contains(err.Error(), "requires --global-admin") {
 		t.Fatalf("EnterAllProjects error = %v", err)
 	}
 	if c.activeServices != tenant || c.AllProjects() {
 		t.Fatal("denied all-projects entry changed the active scope")
 	}
 	capability := c.SwitchCapability()
-	if !capability.AllProjectsChecked || capability.CanAllProjects || capability.AllProjectsReason == "" {
+	if !capability.AllProjectsChecked || capability.GlobalAdmin || capability.CanAllProjects || capability.AllProjectsReason == "" {
 		t.Fatalf("all-projects capability = %+v", capability)
 	}
 }

@@ -187,7 +187,7 @@ type Model struct {
 	refreshAutomatic         bool
 
 	project     osclient.ProjectInfo
-	allProjects bool // listing across all accessible projects
+	allProjects bool // global-admin listing without a concrete project filter
 	showIDs     bool // list columns show object/project IDs instead of names
 	quitting    bool
 	clock       func() time.Time

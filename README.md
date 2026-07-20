@@ -43,9 +43,11 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 `OS_CLOUD`), and CLI flags (`--os-auth-url`, `--os-username`, …). Precedence is
 **CLI flags > environment > clouds.yaml**.
 
-`--project` selects the initial TUI project filter without changing the
-authentication scope. Use `--os-project-name` or `--os-project-id` when the
-authentication request itself must be scoped to a particular project.
+`--project` selects the initial TUI project. In regular mode this exchanges the
+startup token for a token scoped to that project. With `--global-admin`, it
+keeps the startup token and applies a server-side project filter instead. Use
+`--os-project-name` or `--os-project-id` to set the startup authentication
+scope itself.
 
 ### API debugging log
 
@@ -76,23 +78,24 @@ jq 'select(.event == "response" and (.slow or .outcome != "success"))' api.jsonl
 
 ### Project switching
 
-Press `p` to change the active project without leaving the tool. The selector is
-populated by Keystone's `GET /v3/auth/projects` endpoint. Selecting a concrete
-project exchanges the startup token for a new token scoped to that project and
-creates matching Octavia, Neutron, Nova, and Barbican clients. This lets a
-regular user enter every project in which they have an assignment. Each switch
-requests a fresh scoped token rather than reusing a previous project session.
+Press `p` to change the active project without leaving the tool. Regular mode
+populates the selector from Keystone `GET /v3/auth/projects`. A selection
+exchanges the startup token for a fresh project-scoped token and creates
+matching Octavia, Neutron, Nova, and Barbican clients.
 
-The switcher's first entry, **⟨ all accessible projects ⟩**, is the admin-only
-global view (also available at startup through `--all-projects`). The selector
-checks the startup token against Keystone's administrative project listing. If
-that permission is absent, the row is disabled and annotated **requires admin
-permissions**; regular users select an individual accessible project instead.
-For an administrator the entry restores the exact startup authentication and
-its unfiltered Octavia result, preserving objects from projects on which the
-administrator has no explicit assignment. Changing scope clears all five
-workspace histories and returns to the load-balancer list because their
-previous objects may not exist in the newly active scope.
+Pass `--global-admin` to explicitly treat the startup credentials as globally
+privileged. This mode validates administrative Keystone project enumeration and
+a bounded cross-project Octavia read, populates the selector from
+`GET /v3/projects`, and retains the original clients when a project is selected.
+The selection becomes an Octavia `project_id` filter rather than an
+authentication-scope change.
+
+In `--global-admin` mode, the switcher's first entry is
+**⟨ all projects ⟩**. Regular mode omits that row and shows a footer hint to
+restart with `--global-admin` for the global view. `--all-projects` selects this
+view at startup and therefore requires `--global-admin`. Changing the selected
+project clears all five workspace histories and returns to the load-balancer
+list because previous objects may not exist in the new view.
 
 ### Keybindings
 

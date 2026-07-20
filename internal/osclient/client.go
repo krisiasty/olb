@@ -8,24 +8,24 @@ func IsNotFound(err error) bool {
 	return gophercloud.ResponseCodeIs(err, 404)
 }
 
-// CurrentProject returns the project selected in the TUI. When concrete, the
-// active service clients carry a token scoped to this project.
+// CurrentProject returns the project selected in the TUI. In global-admin mode
+// this is a target filter; otherwise the active clients are scoped to it.
 func (c *Clients) CurrentProject() ProjectInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.selected
 }
 
-// AllProjects reports whether the tool is listing across all accessible
-// projects rather than a single selected project.
+// AllProjects reports whether global-admin mode currently has no concrete
+// project filter.
 func (c *Clients) AllProjects() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.allMode
 }
 
-// SwitchCapability reports whether project switching and the admin-only global
-// view are available.
+// SwitchCapability reports the configured project-switching strategy and
+// whether the global view is available.
 func (c *Clients) SwitchCapability() SwitchCapability {
 	c.mu.Lock()
 	defer c.mu.Unlock()

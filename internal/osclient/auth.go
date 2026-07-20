@@ -1,7 +1,7 @@
 // Package osclient wires OpenStack authentication and the Octavia / Neutron /
 // Nova / Keystone service clients, and exposes the data operations the TUI
 // needs (list load balancers, fetch a status tree, load per-object detail,
-// and list accessible projects).
+// and list selectable projects).
 //
 // Auth sources follow python-openstackclient conventions so existing
 // credentials work unchanged: OS_* environment variables, clouds.yaml (selected
@@ -30,9 +30,10 @@ import (
 // Options holds the auth-related inputs captured from CLI flags. Empty fields
 // are treated as "not provided" and fall through to env / clouds.yaml.
 type Options struct {
-	Cloud   string // --os-cloud / OS_CLOUD
-	Region  string // --os-region-name / OS_REGION_NAME
-	Project string // --project: initial project scope (name or ID)
+	Cloud       string // --os-cloud / OS_CLOUD
+	Region      string // --os-region-name / OS_REGION_NAME
+	Project     string // --project: initial project selection (name or ID)
+	GlobalAdmin bool   // --global-admin: retain the startup token across projects
 
 	AuthURL           string
 	Username          string
@@ -100,14 +101,15 @@ type SwitchCapability struct {
 	CanSwitch          bool
 	Reason             string
 	Suggest            string
+	GlobalAdmin        bool
 	AllProjectsChecked bool
 	CanAllProjects     bool
 	AllProjectsReason  string
 }
 
-// serviceClients is one consistently-scoped set of OpenStack service clients.
-// The original set is retained for the all-projects view; a new set is created
-// when the user selects an accessible project.
+// serviceClients is one consistently authenticated set of OpenStack service
+// clients. Regular selections create a project-scoped set; global-admin
+// selections retain the original set.
 type serviceClients struct {
 	provider   *gophercloud.ProviderClient
 	lb         *gophercloud.ServiceClient // Octavia (required)
@@ -119,11 +121,10 @@ type serviceClients struct {
 }
 
 type projectScopeFunc func(context.Context, ProjectInfo) (*serviceClients, error)
-type allProjectsProbeFunc func(context.Context) error
 
-// Clients retains the startup authentication scope and switches an independent
-// active client set when a project is selected. Returning to all-projects mode
-// restores the exact startup clients, preserving global-admin visibility.
+// Clients retains the startup authentication scope. Regular project selections
+// activate a scoped client set; global-admin selections retain the startup set
+// and change only the target project filter.
 type Clients struct {
 	Region string
 	Switch SwitchCapability
@@ -132,10 +133,10 @@ type Clients struct {
 	services       *serviceClients // immutable startup scope
 	activeServices *serviceClients // startup scope or selected project scope
 	scopeProject   projectScopeFunc
-	probeAll       allProjectsProbeFunc
 	telemetry      *telemetry.Collector
 	selected       ProjectInfo
 	allMode        bool
+	globalAdmin    bool
 
 	// projNames caches the ID→display-name map used to label all-projects rows,
 	// so repeated (auto-)refreshes don't re-enumerate Keystone every time.
@@ -173,9 +174,19 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 	ao.AllowReauth = true
 
 	c := &Clients{
-		Region:    region,
-		Switch:    SwitchCapability{CanSwitch: true},
-		telemetry: telemetry.NewCollector(telemetry.DefaultSlowThreshold),
+		Region: region,
+		Switch: SwitchCapability{
+			CanSwitch:          true,
+			GlobalAdmin:        o.GlobalAdmin,
+			AllProjectsChecked: true,
+			CanAllProjects:     o.GlobalAdmin,
+			AllProjectsReason:  "start olb with --global-admin",
+		},
+		globalAdmin: o.GlobalAdmin,
+		telemetry:   telemetry.NewCollector(telemetry.DefaultSlowThreshold),
+	}
+	if o.GlobalAdmin {
+		c.Switch.AllProjectsReason = ""
 	}
 
 	// Authenticate exactly once with the credentials' original scope.
@@ -189,9 +200,6 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 	c.services = sc
 	c.activeServices = sc
 	c.selected = sc.project
-	c.probeAll = func(ctx context.Context) error {
-		return probeGlobalProjectAccess(ctx, sc.identity)
-	}
 	baseAuth := *ao
 	c.scopeProject = func(ctx context.Context, target ProjectInfo) (*serviceClients, error) {
 		// Keystone returns the startup token in X-Subject-Token. Authenticate with
@@ -212,6 +220,11 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 			scoped.project = target
 		}
 		return scoped, nil
+	}
+	if o.GlobalAdmin {
+		if err := c.validateGlobalAdmin(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
 }
@@ -260,9 +273,9 @@ func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoi
 	return sc, nil
 }
 
-// clientsForLB returns the clients matching the current view scope. In
-// all-projects mode this is the untouched startup scope; in a selected project
-// it is the explicitly project-scoped token used for both lists and drill-in.
+// clientsForLB returns the clients matching the current view. Global-admin mode
+// always retains the startup clients; regular project selections use the token
+// explicitly scoped to the selected project.
 func (c *Clients) clientsForLB(_ context.Context, _ string) (*serviceClients, error) {
 	c.mu.Lock()
 	services := c.activeServices

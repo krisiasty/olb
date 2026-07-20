@@ -75,6 +75,22 @@ func TestListenerTableHumanizesTerminatedHTTPS(t *testing.T) {
 	t.Fatal("terminated HTTPS listener row not found")
 }
 
+func TestAmphoraEntriesFilterThroughVisibleLoadBalancers(t *testing.T) {
+	visible := model.NewNode(model.TypeAmphora, "amp-visible", "amp-visible")
+	visible.OwningLBID = "lb-visible"
+	hidden := model.NewNode(model.TypeAmphora, "amp-hidden", "amp-hidden")
+	hidden.OwningLBID = "lb-hidden"
+	nodes := []*model.Node{visible, hidden}
+
+	filtered := amphoraEntries(nodes, map[string]string{"lb-visible": "frontend"}, true)
+	if len(filtered) != 1 || filtered[0].node.ID != "amp-visible" {
+		t.Fatalf("filtered amphorae = %+v", filtered)
+	}
+	if all := amphoraEntries(nodes, map[string]string{"lb-visible": "frontend"}, false); len(all) != 2 {
+		t.Fatalf("global amphorae count = %d, want 2", len(all))
+	}
+}
+
 func TestTopLevelWorkspacesKeepIndependentHistory(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	lbHistory := m.hist

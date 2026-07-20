@@ -76,9 +76,9 @@ var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
 var ErrAdminRequired = errors.New("requires admin")
 
-// ListLoadBalancers uses the active authentication scope. A concrete project
-// also applies a defensive local project filter in case a cloud's policy lets
-// that scoped token see a wider result.
+// ListLoadBalancers uses the active credential strategy. A concrete selection
+// is sent to Octavia as a project_id filter and also applied locally in case a
+// cloud ignores or broadens the server-side filter.
 func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	c.mu.Lock()
 	allMode := c.allMode
@@ -89,10 +89,11 @@ func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	}
 	c.mu.Unlock()
 
-	// An empty ProjectInfo deliberately leaves Octavia's list unfiltered. For an
-	// admin in all-projects mode this preserves the startup client's cluster-wide
-	// get_all result; a selected project uses that project's scoped client.
-	lbs, err := listWith(ctx, services, ProjectInfo{})
+	queryProject := selected
+	if allMode {
+		queryProject = ProjectInfo{}
+	}
+	lbs, err := listWith(ctx, services, queryProject)
 	if err != nil {
 		return nil, err
 	}
@@ -541,8 +542,8 @@ func (c *Clients) ListPoolSummaries(ctx context.Context, lbID string) (map[strin
 
 // ResolveFloatingIPs looks up every floating IP mapped to the load balancer's
 // VIP port, keyed by its fixed IP address. A multi-VIP port may have a distinct
-// floating IP for each primary/additional address. lbID selects the project
-// scope so a non-admin can resolve it in all-projects mode.
+// floating IP for each primary/additional address. The active credential
+// strategy determines whether the clients are project-scoped or global.
 func (c *Clients) ResolveFloatingIPs(ctx context.Context, lbID, portID string) (map[string]*model.Node, error) {
 	sc, err := c.clientsForLB(ctx, lbID)
 	if err != nil {

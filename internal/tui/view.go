@@ -108,7 +108,13 @@ func (m Model) fitBreadcrumb(parts []string) string {
 func (m Model) subtitleLine() string {
 	scope := m.st.statusBar.Render("scope: project ") + m.st.title.Render(projectLabel(m.project))
 	if m.allProjects {
-		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all accessible projects")
+		if m.backend.SwitchCapability().GlobalAdmin {
+			scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("global admin · all projects")
+		} else {
+			scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all projects")
+		}
+	} else if m.backend.SwitchCapability().GlobalAdmin {
+		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("global admin · project "+projectLabel(m.project))
 	}
 	parts := []string{scope, m.styledAutoRefreshLabel()}
 	if !m.isOverview() {
@@ -1623,17 +1629,23 @@ func (m Model) projectView() string {
 		return title + "\n\n" + body + cur + "\n\n" + m.st.help.Render("esc / q  close")
 	}
 	if m.loading && len(m.projects) == 0 {
-		return title + "\n\n" + m.spinner.View() + " loading accessible projects…\n\n" + m.st.help.Render("esc cancel")
+		kind := "accessible projects"
+		if cap.GlobalAdmin {
+			kind = "all projects"
+		}
+		return title + "\n\n" + m.spinner.View() + " loading " + kind + "…\n\n" + m.st.help.Render("esc cancel")
 	}
 	fp := m.filteredProjects()
-	// Row 0 is the synthetic "all projects" option; the rest are projects.
 	type prow struct {
 		label    string
 		current  bool
 		disabled bool
 	}
 	allSelectable := m.allProjectsSelectable()
-	rows := []prow{{label: "⟨ all accessible projects ⟩", current: m.allProjects, disabled: !allSelectable}}
+	rows := make([]prow, 0, len(fp)+1)
+	if m.hasAllProjectsRow() {
+		rows = append(rows, prow{label: "⟨ all projects ⟩", current: m.allProjects, disabled: !allSelectable})
+	}
 	for _, p := range fp {
 		label := p.Name
 		if label == "" {
@@ -1646,6 +1658,9 @@ func (m Model) projectView() string {
 	b.WriteString(title + "\n")
 	b.WriteString(m.search.View() + "\n\n")
 	maxRows := m.height - 7
+	if !cap.GlobalAdmin {
+		maxRows--
+	}
 	if maxRows < 1 {
 		maxRows = 1
 	}
@@ -1662,7 +1677,7 @@ func (m Model) projectView() string {
 		if rows[i].disabled {
 			reason := cap.AllProjectsReason
 			if reason == "" {
-				reason = "requires admin permissions"
+				reason = "requires --global-admin"
 			}
 			label += "  (" + reason + ")"
 		}
@@ -1680,17 +1695,24 @@ func (m Model) projectView() string {
 	if len(fp) == 0 && m.search.Value() != "" {
 		b.WriteString("  " + m.st.disabled.Render("— no matching projects —") + "\n")
 	}
+	if !cap.GlobalAdmin {
+		b.WriteString("\n" + m.st.help.Render("global view: restart with --global-admin"))
+	}
 	b.WriteString("\n" + m.st.help.Render("enter select · ↑/↓ move · type to filter · esc cancel"))
 	return b.String()
 }
 
 func (m Model) allProjectsSelectable() bool {
 	cap := m.backend.SwitchCapability()
-	return !cap.AllProjectsChecked || cap.CanAllProjects
+	return cap.GlobalAdmin && cap.CanAllProjects
+}
+
+func (m Model) hasAllProjectsRow() bool {
+	return m.backend.SwitchCapability().GlobalAdmin
 }
 
 func (m Model) firstProjectCursor() int {
-	if !m.allProjectsSelectable() && len(m.filteredProjects()) > 0 {
+	if m.hasAllProjectsRow() && !m.allProjectsSelectable() && len(m.filteredProjects()) > 0 {
 		return 1
 	}
 	return 0

@@ -40,7 +40,7 @@ func run(args []string) (runErr error) {
 		showVersion  = fs.Bool("version", false, "print version and exit")
 		showLicenses = fs.Bool("licenses", false, "print third-party license notices and exit")
 		printMode    = fs.Bool("print", false, "copy actions show the value on screen for manual copy instead of emitting OSC 52")
-		allProjects  = fs.Bool("all-projects", false, "start in the admin-only all-projects view")
+		allProjects  = fs.Bool("all-projects", false, "start in the all-projects view (requires --global-admin)")
 		apiLogPath   = fs.String("api-log", "", "append sanitized API request/response metadata as JSON Lines to this file")
 		apiLogBodies = fs.Bool("api-log-bodies", false, "include sanitized, size-limited JSON bodies in --api-log (requires --api-log)")
 	)
@@ -59,6 +59,9 @@ func run(args []string) (runErr error) {
 	}
 	if *apiLogBodies && *apiLogPath == "" {
 		return errors.New("--api-log-bodies requires --api-log PATH")
+	}
+	if *allProjects && !opts.GlobalAdmin {
+		return errors.New("--all-projects requires --global-admin")
 	}
 
 	var apiLogger *telemetry.APILogger

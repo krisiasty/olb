@@ -501,11 +501,10 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	fp := m.filteredProjects()
-	// Row 0 is the synthetic "all projects" option; rows 1..N are the projects.
-	total := len(fp) + 1
-	minimum := 0
-	if !m.allProjectsSelectable() && len(fp) > 0 {
-		minimum = 1
+	hasAllProjects := m.hasAllProjectsRow()
+	total := len(fp)
+	if hasAllProjects {
+		total++
 	}
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
@@ -513,7 +512,7 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.search.Blur()
 		return m, nil
 	case key.Matches(msg, m.keys.Up):
-		if m.projCursor > minimum {
+		if m.projCursor > 0 {
 			m.projCursor--
 		}
 		return m, nil
@@ -523,16 +522,19 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Accept):
-		if m.projCursor == 0 {
-			if !m.allProjectsSelectable() {
-				return m, nil
+		idx := m.projCursor
+		if hasAllProjects {
+			if m.projCursor == 0 {
+				if !m.allProjectsSelectable() {
+					return m, nil
+				}
+				m.overlay = overlayNone
+				m.search.Blur()
+				m.loading, m.loadingWhat = true, "all projects"
+				return m, m.enterAllProjectsCmd()
 			}
-			m.overlay = overlayNone
-			m.search.Blur()
-			m.loading, m.loadingWhat = true, "all projects"
-			return m, m.enterAllProjectsCmd()
+			idx--
 		}
-		idx := m.projCursor - 1
 		if idx < 0 || idx >= len(fp) {
 			return m, nil
 		}

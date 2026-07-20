@@ -587,13 +587,17 @@ func TestTopLevelDrillIn(t *testing.T) {
 		t.Errorf("breadcrumb root after listener drill-in = %q, want listeners", root)
 	}
 
-	// Amphora drills into its owning load balancer (amphorae aren't tree nodes).
+	// Amphora drills directly into a detailed view; the selected list object is
+	// attached to its owning status tree after that tree loads.
 	m = start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("5"))
 	m.cursor = firstSelectableIndex(m.entries)
 	m = updExec(t, m, press("enter"))
-	if m.loc.node == nil || m.loc.node.Type != model.TypeLoadBalancer || m.loc.node.ID != "lb-1" {
-		t.Fatalf("amphora drill-in landed on %+v, want owning LB lb-1", m.loc.id)
+	if m.loc.node == nil || m.loc.node.Type != model.TypeAmphora || m.loc.node.ID != "amp-1" {
+		t.Fatalf("amphora drill-in landed on %+v, want amphora amp-1", m.loc.id)
+	}
+	if root := ansiRE.ReplaceAllString(m.breadcrumbLine(), ""); !strings.Contains(root, "amphorae › amphora:amp-1") {
+		t.Errorf("breadcrumb after amphora drill-in = %q, want amphorae root and object", root)
 	}
 }
 

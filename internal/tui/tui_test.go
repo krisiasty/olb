@@ -143,6 +143,10 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["tags"] = "api, blue"
 		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
 		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+	case model.TypeAmphora:
+		for key, value := range n.Attrs {
+			res.Attrs[key] = value
+		}
 	case model.TypeHealthMonitor:
 		res.Attrs["type"] = "HTTP"
 		res.Attrs["delay"] = "5"
@@ -215,7 +219,20 @@ func (f *fakeBackend) ListAmphorae(_ context.Context, lbID string) ([]*model.Nod
 		a.SetAttr("role", role)
 		a.SetAttr("status", "ALLOCATED")
 		a.SetAttr("lb_network_ip", managementIP)
+		a.SetAttr("ha_ip", "203.0.113.9")
+		a.SetAttr("ha_port_id", "ha-port-1")
 		a.SetAttr("compute_id", computeID)
+		a.SetAttr("vrrp_port_id", "vrrp-port-1")
+		a.SetAttr("vrrp_ip", "10.0.3.30")
+		a.SetAttr("vrrp_interface", "eth1")
+		a.SetAttr("vrrp_id", "1")
+		a.SetAttr("vrrp_priority", "100")
+		a.SetAttr("cached_zone", "nova")
+		a.SetAttr("image_id", "image-1")
+		a.SetAttr("cert_expiration", "2026-08-20T12:00:00Z")
+		a.SetAttr("cert_busy", "false")
+		a.SetAttr("created_at", "2026-07-18T10:15:30Z")
+		a.SetAttr("updated_at", "2026-07-19T11:20:45Z")
 		a.DetailLoaded = true
 		a.Raw = map[string]any{
 			"id": id, "role": role, "status": "ALLOCATED",
@@ -252,7 +269,20 @@ func (f *fakeBackend) ListAllAmphorae(_ context.Context) ([]*model.Node, error) 
 	a.SetAttr("role", "MASTER")
 	a.SetAttr("status", "ALLOCATED")
 	a.SetAttr("lb_network_ip", "10.0.3.20")
+	a.SetAttr("ha_ip", "203.0.113.9")
+	a.SetAttr("ha_port_id", "ha-port-1")
 	a.SetAttr("compute_id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	a.SetAttr("vrrp_port_id", "vrrp-port-1")
+	a.SetAttr("vrrp_ip", "10.0.3.30")
+	a.SetAttr("vrrp_interface", "eth1")
+	a.SetAttr("vrrp_id", "1")
+	a.SetAttr("vrrp_priority", "100")
+	a.SetAttr("cached_zone", "nova")
+	a.SetAttr("image_id", "image-1")
+	a.SetAttr("cert_expiration", "2026-08-20T12:00:00Z")
+	a.SetAttr("cert_busy", "false")
+	a.SetAttr("created_at", "2026-07-18T10:15:30Z")
+	a.SetAttr("updated_at", "2026-07-19T11:20:45Z")
 	a.DetailLoaded = true
 	a.Raw = map[string]any{"id": "amp-1", "loadbalancer_id": "lb-1", "role": "MASTER", "status": "ALLOCATED"}
 	return []*model.Node{a}, nil
@@ -392,8 +422,24 @@ func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
 	if !m.autoRefreshEnabled || m.autoRefreshInterval() != 5*time.Second {
 		t.Fatalf("auto-refresh defaults = enabled:%v interval:%s", m.autoRefreshEnabled, m.autoRefreshInterval())
 	}
+	if view := ansiRE.ReplaceAllString(m.View(), ""); !strings.Contains(view, "refresh: auto (30s)") {
+		t.Fatalf("list subtitle does not show the fixed auto-refresh interval:\n%s", view)
+	}
+	if strings.Contains(m.hintLine(), "+/- interval") {
+		t.Fatalf("list without stats should not advertise interval controls: %q", m.hintLine())
+	}
+	m = upd(t, m, press("+"))
+	if m.autoRefreshInterval() != 5*time.Second {
+		t.Fatalf("+ changed the stats interval outside a stats view: %s", m.autoRefreshInterval())
+	}
+
+	m = updExec(t, m, press("enter"))
+	m = upd(t, m, tea.WindowSizeMsg{Width: 220, Height: 30})
 	if view := ansiRE.ReplaceAllString(m.View(), ""); !strings.Contains(view, "refresh: auto (5s/30s)") {
-		t.Fatalf("subtitle does not show the auto-refresh interval:\n%s", view)
+		t.Fatalf("stats subtitle does not show both auto-refresh intervals:\n%s", view)
+	}
+	if !strings.Contains(m.hintLine(), "+/- interval") {
+		t.Fatalf("stats view should advertise interval controls: %q", m.hintLine())
 	}
 	autoStyle := m.styledAutoRefreshLabel()
 	if !strings.Contains(m.View(), autoStyle) {
@@ -1052,8 +1098,8 @@ func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
 	}
 	m = upd(t, m, treeMsg{lbID: listener.OwningLBID, tree: newTree()})
 	refreshedListener := m.loc.node
-	if !m.refreshPoolsExpected || !m.lbPoolsLoading[refreshedListener.OwningLBID] {
-		t.Fatal("listener refresh did not request related pool summaries")
+	if m.refreshPoolsExpected || !m.lbPoolsLoading[refreshedListener.OwningLBID] {
+		t.Fatal("listener refresh should request pool summaries without making them transaction-blocking")
 	}
 	refreshedDetail, err := m.backend.FetchDetail(context.Background(), refreshedListener)
 	if err != nil {
@@ -1071,11 +1117,11 @@ func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
 		lbID: refreshedListener.OwningLBID, listenerID: refreshedListener.ID,
 		stats: refreshedStats, sampledAt: m.clock(), refresh: true,
 	})
-	if !m.refreshing {
-		t.Fatal("listener refresh completed before related pool summaries arrived")
+	if m.refreshing || m.loading {
+		t.Fatal("listener refresh remained blocked on delayed pool summaries")
 	}
 	m = upd(t, m, poolSummariesMsg{
-		lbID: refreshedListener.OwningLBID, refresh: true,
+		lbID: refreshedListener.OwningLBID,
 		items: map[string]osclient.PoolSummary{
 			"pool-1": {
 				ID: "pool-1", Name: "web", Protocol: "TCP", LBMethod: "LEAST_CONNECTIONS",
@@ -1091,8 +1137,41 @@ func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
 			t.Errorf("refreshed listener pool row missing %q: %q", want, line)
 		}
 	}
-	if m.refreshing || m.loading {
-		t.Fatal("listener refresh did not complete after pool summaries arrived")
+	if m.lbPoolsLoading[refreshedListener.OwningLBID] {
+		t.Fatal("background listener pool-summary refresh did not complete")
+	}
+
+	// The 30-second automatic refresh uses the same non-blocking enrichment
+	// path and must also finish without waiting for pool summaries.
+	m = upd(t, m, flashClearMsg{token: m.flashToken})
+	next, cmd = m.Update(autoFullTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || !m.refreshing || !m.refreshAutomatic {
+		t.Fatal("automatic listener refresh did not start")
+	}
+	m = upd(t, m, treeMsg{lbID: listener.OwningLBID, tree: newTree()})
+	automaticListener := m.loc.node
+	automaticDetail, err := m.backend.FetchDetail(context.Background(), automaticListener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	automaticStats, err := m.backend.ListenerStats(context.Background(), automaticListener.OwningLBID, automaticListener.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: automaticListener.ID, lbID: automaticListener.OwningLBID,
+		res: automaticDetail, intent: intentOverview, refresh: true,
+	})
+	m = upd(t, m, listenerStatsMsg{
+		lbID: automaticListener.OwningLBID, listenerID: automaticListener.ID,
+		stats: automaticStats, sampledAt: m.clock(), refresh: true,
+	})
+	if m.refreshing || m.loading || m.refreshAutomatic {
+		t.Fatal("automatic listener refresh remained blocked on delayed pool summaries")
+	}
+	if m.flash == "refreshed" {
+		t.Fatal("successful automatic listener refresh should remain silent")
 	}
 }
 
@@ -1635,7 +1714,7 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	if m.showIDs {
 		t.Fatal("d should not toggle name/ID mode in a detail view")
 	}
-	if strings.Contains(m.hintLine(), "d names/ids") || strings.Contains(helpContent(false), "toggle top-level tables") {
+	if strings.Contains(m.hintLine(), "d names/ids") || strings.Contains(helpContent(false, true, true, true), "toggle top-level tables") {
 		t.Fatal("detail views should not advertise the name/ID toggle")
 	}
 
@@ -1743,7 +1822,7 @@ func TestHelpIncludesStatusColoredLegend(t *testing.T) {
 	if view := m.View(); view == "" {
 		t.Fatal("help overlay rendered an empty view")
 	}
-	content := helpContent(true)
+	content := helpContent(true, true, true, false)
 	plain := ansiRE.ReplaceAllString(content, "")
 	for _, want := range []string{
 		"Status colors",
@@ -2464,6 +2543,8 @@ func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {
 
 func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
 	m = updExec(t, m, press("enter")) // LB
 	if !m.lbAmphoraLoading["lb-1"] {
 		t.Fatal("amphora-provider overview should start a background VM listing")
@@ -2513,6 +2594,90 @@ func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 	m = updExec(t, m, press("enter"))
 	if m.loc.node == nil || m.loc.node.Type != model.TypeAmphora || m.loc.node.ID != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("expected to land directly on the amphora VM, got %+v", m.loc.node)
+	}
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"AMPHORA DETAILS", "11111111-1111-1111-1111-111111111111",
+		"Load balancer name", "lb1", "Load balancer ID", "lb-1", "MASTER", "ALLOCATED",
+		"Management IP", "10.0.3.20", "HA IP", "203.0.113.9", "HA port ID", "ha-port-1",
+		"Compute ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Image ID", "image-1", "Cached zone", "nova",
+		"NETWORK", "VRRP", "10.0.3.30", "vrrp-port-1", "eth1", "Priority", "100",
+		"INTERNAL CERTIFICATE", "Expires", "2026-08-20 12:00:00 UTC (30d remaining)", "Busy", "No",
+		"LIFECYCLE", "2026-07-18 10:15:30 UTC", "2026-07-19 11:20:45 UTC",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("amphora overview missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "RELATED OBJECTS") || len(m.entries) != 0 {
+		t.Fatalf("amphora overview should be details-only:\n%s", view)
+	}
+	if label := m.autoRefreshLabel(); label != "refresh: auto (30s)" {
+		t.Fatalf("amphora refresh label = %q, want fixed full-refresh cadence", label)
+	}
+	if hasFilterableEntries(m.allEntries) || hasStatusEntries(m.allEntries) {
+		t.Fatal("amphora detail should not expose filtering for an empty object list")
+	}
+	help := helpContent(false, false, false, false)
+	if strings.Contains(m.hintLine(), "/ filter") || strings.Contains(m.hintLine(), "s status") ||
+		strings.Contains(m.hintLine(), "+/- interval") || strings.Contains(help, "filter current list") ||
+		strings.Contains(help, "status filter") || strings.Contains(help, "stats refresh interval") {
+		t.Fatalf("amphora view advertises unavailable list or interval controls")
+	}
+	interval := m.autoRefreshInterval()
+	m = upd(t, m, press("+"))
+	if m.autoRefreshInterval() != interval {
+		t.Fatalf("+ changed stats interval from an amphora view: %s -> %s", interval, m.autoRefreshInterval())
+	}
+	m = upd(t, m, press("/"))
+	if m.filtering {
+		t.Fatal("/ activated filtering from an amphora detail with no objects")
+	}
+	m = upd(t, m, press("s"))
+	if m.status != statusAll {
+		t.Fatalf("s changed status filter from an amphora detail: %s", m.status)
+	}
+	for _, pair := range []struct {
+		left  string
+		right string
+	}{
+		{left: "ID", right: "COMPUTE"},
+		{left: "NETWORK", right: "VRRP"},
+		{left: "INTERNAL CERTIFICATE", right: "LIFECYCLE"},
+	} {
+		if line := lineContaining(view, pair.right); !strings.Contains(line, pair.left) {
+			t.Errorf("wide amphora overview should place %s and %s side by side:\n%s", pair.left, pair.right, view)
+		}
+	}
+	expiry, expiryColor := certificateExpiryDisplay("2026-08-20T12:00:00Z", now)
+	styledExpiry := lipgloss.NewStyle().Foreground(expiryColor).Render(expiry)
+	if !strings.Contains(m.View(), styledExpiry) {
+		t.Errorf("amphora certificate expiration should use listener coloring %q:\n%s", expiryColor, m.View())
+	}
+
+	m = upd(t, m, tea.WindowSizeMsg{Width: 70, Height: 40})
+	narrow := ansiRE.ReplaceAllString(m.View(), "")
+	previous := -1
+	for _, heading := range []string{"COMPUTE", "NETWORK", "VRRP", "INTERNAL CERTIFICATE", "LIFECYCLE"} {
+		index := strings.Index(narrow, heading)
+		if index <= previous {
+			t.Fatalf("narrow amphora sections are not stacked in order at %s:\n%s", heading, narrow)
+		}
+		previous = index
+	}
+	if strings.Contains(lineContaining(narrow, "NETWORK"), "VRRP") ||
+		strings.Contains(lineContaining(narrow, "INTERNAL CERTIFICATE"), "LIFECYCLE") {
+		t.Fatalf("narrow amphora sections should be stacked, not paired:\n%s", narrow)
+	}
+
+	next, refreshCmd := m.Update(press("r"))
+	m = next.(Model)
+	if refreshCmd == nil || !m.refreshing || !m.lbDetailLoading[m.loc.node.ID] {
+		t.Fatal("amphora refresh did not request fresh amphora details")
+	}
+	m = upd(t, m, refreshCmd())
+	if m.refreshing || m.loading {
+		t.Fatal("amphora refresh did not complete after the detail response")
 	}
 }
 

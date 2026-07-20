@@ -471,6 +471,16 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		}
 		res.Raw = raw
 
+	case model.TypeAmphora:
+		r := amphorae.Get(ctx, sc.lb, n.ID)
+		a, err := r.Extract()
+		if err != nil {
+			return res, err
+		}
+		detail := amphoraNode(*a, n.OwningLBID)
+		res.Attrs = detail.Attrs
+		res.Raw, _ = detail.Raw.(map[string]any)
+
 	case model.TypeL7Policy:
 		r := l7policies.Get(ctx, sc.lb, n.ID)
 		p, err := r.Extract()
@@ -502,7 +512,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Raw = innerRaw(r.Body, "rule")
 
 	default:
-		// Floating IP / instance / amphora carry their detail from the
+		// Floating IP / instance carry their detail from the
 		// resolution step; expose whatever raw object is already attached.
 		if m, ok := n.Raw.(map[string]any); ok {
 			res.Raw = m
@@ -725,10 +735,31 @@ func amphoraNode(a amphorae.Amphora, owningLBID string) *model.Node {
 	n.SetAttr("status", a.Status)
 	n.SetAttr("lb_network_ip", a.LBNetworkIP)
 	n.SetAttr("ha_ip", a.HAIP)
+	n.SetAttr("ha_port_id", a.HAPortID)
 	n.SetAttr("compute_id", a.ComputeID)
+	n.SetAttr("vrrp_port_id", a.VRRPPortID)
+	n.SetAttr("vrrp_ip", a.VRRPIP)
+	n.SetAttr("vrrp_interface", a.VRRPInterface)
+	if a.VRRPID != 0 {
+		n.SetAttr("vrrp_id", fmt.Sprintf("%d", a.VRRPID))
+	}
+	if a.VRRPPriority != 0 {
+		n.SetAttr("vrrp_priority", fmt.Sprintf("%d", a.VRRPPriority))
+	}
+	n.SetAttr("cached_zone", a.CachedZone)
+	n.SetAttr("image_id", a.ImageID)
+	n.SetAttr("cert_expiration", formatAPITime(a.CertExpiration))
+	n.SetAttr("cert_busy", boolStr(a.CertBusy))
+	n.SetAttr("created_at", formatAPITime(a.CreatedAt))
+	n.SetAttr("updated_at", formatAPITime(a.UpdatedAt))
 	n.Raw = map[string]any{
 		"id": a.ID, "loadbalancer_id": a.LoadbalancerID, "compute_id": a.ComputeID,
 		"role": a.Role, "status": a.Status, "lb_network_ip": a.LBNetworkIP, "ha_ip": a.HAIP,
+		"ha_port_id": a.HAPortID, "vrrp_port_id": a.VRRPPortID, "vrrp_ip": a.VRRPIP,
+		"vrrp_interface": a.VRRPInterface, "vrrp_id": a.VRRPID, "vrrp_priority": a.VRRPPriority,
+		"cached_zone": a.CachedZone, "image_id": a.ImageID,
+		"cert_expiration": formatAPITime(a.CertExpiration), "cert_busy": a.CertBusy,
+		"created_at": formatAPITime(a.CreatedAt), "updated_at": formatAPITime(a.UpdatedAt),
 	}
 	n.DetailLoaded = true
 	return n

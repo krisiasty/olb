@@ -247,6 +247,9 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 		delete(m.lbRelatedErr, msg.lbID)
 		m.markFresh(msg.lbID, sectionRelated)
 	}
+	if msg.attach != nil && msg.tree != nil {
+		attachAmphora(msg.tree, msg.attach)
+	}
 	m.cache.Put(msg.lbID, msg.tree)
 	if ok && cur.id.OwningLBID == msg.lbID {
 		m.buildNodeLocation(cur.id, msg.tree)
@@ -312,6 +315,8 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 				return m, m.commitPoolRefresh()
 			case model.TypeMember:
 				return m, m.commitMemberRefresh()
+			case model.TypeAmphora:
+				return m, m.commitAmphoraRefresh()
 			case model.TypeHealthMonitor:
 				return m, m.commitHealthMonitorRefresh()
 			default:
@@ -341,7 +346,7 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
-		if node.Type == model.TypeLoadBalancer || node.Type == model.TypeListener || node.Type == model.TypePool || node.Type == model.TypeMember || node.Type == model.TypeHealthMonitor {
+		if node.Type == model.TypeLoadBalancer || node.Type == model.TypeListener || node.Type == model.TypePool || node.Type == model.TypeMember || node.Type == model.TypeAmphora || node.Type == model.TypeHealthMonitor {
 			m.markFresh(node.ID, sectionDetails)
 		}
 		if node.Type == model.TypeHealthMonitor && m.loc.node != nil && node.Parent == m.loc.node && m.loc.node.Type == model.TypePool {
@@ -405,6 +410,15 @@ func (m *Model) applyDetailResult(msg detailMsg) *model.Node {
 			"name", "project_id", "subnet_id", "address", "port", "weight",
 			"backup", "admin_state_up", "monitor_address", "monitor_port",
 			"tags", "created_at", "updated_at",
+		} {
+			delete(node.Attrs, key)
+		}
+	}
+	if node.Type == model.TypeAmphora {
+		for _, key := range []string{
+			"role", "status", "lb_network_ip", "ha_ip", "ha_port_id", "compute_id",
+			"vrrp_port_id", "vrrp_ip", "vrrp_interface", "vrrp_id", "vrrp_priority",
+			"cached_zone", "image_id", "cert_expiration", "cert_busy", "created_at", "updated_at",
 		} {
 			delete(node.Attrs, key)
 		}
@@ -582,6 +596,9 @@ func (m *Model) loadLBOverview() tea.Cmd {
 	if m.isMemberOverview() {
 		return m.loadMemberOverview(false)
 	}
+	if m.isAmphoraOverview() {
+		return m.loadAmphoraOverview(false)
+	}
 	if m.isHealthMonitorOverview() {
 		return m.loadHealthMonitorOverview(false)
 	}
@@ -600,6 +617,24 @@ func (m *Model) reloadMemberOverview() tea.Cmd {
 	return m.loadMemberOverview(true)
 }
 
+func (m *Model) loadAmphoraOverview(refresh bool) tea.Cmd {
+	n := m.loc.node
+	if n == nil || n.Type != model.TypeAmphora {
+		return nil
+	}
+	if refresh {
+		m.refreshDetail = nil
+		m.lbDetailLoading[n.ID] = true
+		return m.refreshDetailCmd(n)
+	}
+	if n.DetailLoaded || m.lbDetailLoading[n.ID] {
+		return nil
+	}
+	m.lbDetailLoading[n.ID] = true
+	delete(m.lbDetailErr, n.ID)
+	return m.fetchDetailCmd(n, intentOverview)
+}
+
 func (m *Model) reloadHealthMonitorOverview() tea.Cmd {
 	return m.loadHealthMonitorOverview(true)
 }
@@ -616,16 +651,21 @@ func (m *Model) loadListenerOverview(refresh bool) tea.Cmd {
 	if refresh {
 		m.refreshDetail = nil
 		m.refreshListenerStats = nil
-		m.refreshPools = nil
 		m.lbDetailLoading[n.ID] = true
 		m.lbStatsLoading[n.ID] = true
-		m.refreshPoolsExpected = true
-		m.lbPoolsLoading[n.OwningLBID] = true
-		return tea.Batch(
+		m.refreshPoolsExpected = false
+		cmds := []tea.Cmd{
 			m.refreshDetailCmd(n),
 			m.listenerStatsCmd(n.OwningLBID, n.ID, true, false),
-			m.poolSummariesCmd(n.OwningLBID, true),
-		)
+		}
+		// Pool summaries enrich related-object rows, but they are independent of
+		// the listener's own detail and statistics refresh. Do not let a slow
+		// pool-list request keep the entire view in the refreshing state.
+		if !m.lbPoolsLoading[n.OwningLBID] {
+			m.lbPoolsLoading[n.OwningLBID] = true
+			cmds = append(cmds, m.poolSummariesCmd(n.OwningLBID, false))
+		}
+		return tea.Batch(cmds...)
 	}
 	var cmds []tea.Cmd
 	if !n.DetailLoaded && !m.lbDetailLoading[n.ID] {
@@ -1118,7 +1158,9 @@ func (m *Model) commitListenerRefresh() tea.Cmd {
 	resourceID := detail.nodeID
 	delete(m.lbDetailLoading, resourceID)
 	delete(m.lbStatsLoading, resourceID)
-	delete(m.lbPoolsLoading, detail.lbID)
+	if m.refreshPoolsExpected {
+		delete(m.lbPoolsLoading, detail.lbID)
+	}
 
 	var failures []string
 	if detail.err != nil {
@@ -1258,6 +1300,23 @@ func (m *Model) commitMemberRefresh() tea.Cmd {
 	m.applyDetailResult(detail)
 	m.markFresh(resourceID, sectionDetails)
 	m.markFresh(resourceID, sectionRelated)
+	return m.finishRefresh("")
+}
+
+func (m *Model) commitAmphoraRefresh() tea.Cmd {
+	if m.refreshDetail == nil {
+		return nil
+	}
+	detail := *m.refreshDetail
+	resourceID := detail.nodeID
+	delete(m.lbDetailLoading, resourceID)
+	if detail.err != nil {
+		m.lbDetailErr[resourceID] = detail.err.Error()
+		return m.finishRefresh("refresh incomplete (details: " + detail.err.Error() + ")")
+	}
+	delete(m.lbDetailErr, resourceID)
+	m.applyDetailResult(detail)
+	m.markFresh(resourceID, sectionDetails)
 	return m.finishRefresh("")
 }
 
@@ -1690,9 +1749,48 @@ func (m *Model) render() tea.Cmd {
 	return m.showIdentity(cur.id)
 }
 
+func (m *Model) showAmphora(n *model.Node) tea.Cmd {
+	entry, fresh := m.cache.Get(n.OwningLBID)
+	if entry.Tree != nil && fresh {
+		attachAmphora(entry.Tree, n)
+		m.buildNodeLocation(n.Identity(), entry.Tree)
+		return m.loadLBOverview()
+	}
+	m.loading, m.loadingWhat = true, "tree"
+	return m.amphoraTreeCmd(n)
+}
+
+func attachAmphora(tree *model.Tree, amphora *model.Node) {
+	if tree == nil || tree.Root == nil || amphora == nil || tree.Node(amphora.ID) != nil {
+		return
+	}
+	amphora.Parent = tree.Root
+	amphora.OwningLBID = tree.Root.ID
+	tree.Root.Children = append(tree.Root.Children, amphora)
+	tree.Attach(amphora)
+}
+
 func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	if id.IsTopLevelList() {
 		return m.showTopLevelList(id)
+	}
+	if id.Type == model.TypeAmphora {
+		n := model.NewNode(model.TypeAmphora, id.ID, id.ID)
+		n.OwningLBID = id.OwningLBID
+		if cached, ok := m.cache.Peek(id.OwningLBID); ok && cached.Tree != nil {
+			if existing := cached.Tree.Node(id.ID); existing != nil {
+				n = existing
+			}
+		}
+		if !n.DetailLoaded {
+			for _, listed := range m.amphorae {
+				if listed.ID == id.ID && listed.OwningLBID == id.OwningLBID {
+					n = listed
+					break
+				}
+			}
+		}
+		return m.showAmphora(n)
 	}
 	entry, fresh := m.cache.Get(id.OwningLBID)
 	if entry.Tree != nil && fresh {
@@ -1737,6 +1835,11 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 		delete(m.lbDetailLoading, id.ID)
 		delete(m.lbDetailErr, id.ID)
 		delete(m.lbRelatedErr, id.ID)
+		delete(m.lbFreshness, id.ID)
+	}
+	if id.Type == model.TypeAmphora {
+		delete(m.lbDetailLoading, id.ID)
+		delete(m.lbDetailErr, id.ID)
 		delete(m.lbFreshness, id.ID)
 	}
 	if id.Type == model.TypeHealthMonitor {

@@ -153,10 +153,10 @@ func (m Model) subtitleLine() string {
 			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d items", len(m.entries))))
 		}
 	}
-	if m.status != statusAll {
+	if m.status != statusAll && hasStatusEntries(m.allEntries) {
 		parts = append(parts, m.st.statusBar.Render("status="+m.status.String()))
 	}
-	if v := m.filter.Value(); v != "" && !m.filtering {
+	if v := m.filter.Value(); v != "" && !m.filtering && hasFilterableEntries(m.allEntries) {
 		parts = append(parts, m.st.statusBar.Render("filter: "+v))
 	}
 	if !m.backend.SwitchCapability().CanSwitch {
@@ -183,6 +183,8 @@ func (m Model) visibleRows() int {
 		_, h = m.poolOverviewParts(h)
 	} else if m.isMemberOverview() {
 		_, h = m.memberOverviewParts(h)
+	} else if m.isAmphoraOverview() {
+		_, h = m.amphoraOverviewParts(h)
 	} else if m.isHealthMonitorOverview() {
 		_, h = m.healthMonitorOverviewParts(h)
 	}
@@ -211,6 +213,9 @@ func (m Model) bodyLines() []string {
 	}
 	if m.isMemberOverview() {
 		return m.memberOverviewLines(h)
+	}
+	if m.isAmphoraOverview() {
+		return m.amphoraOverviewLines(h)
 	}
 	if m.isHealthMonitorOverview() {
 		return m.healthMonitorOverviewLines(h)
@@ -300,6 +305,10 @@ func (m Model) isMemberOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeMember
 }
 
+func (m Model) isAmphoraOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeAmphora
+}
+
 func (m Model) isHealthMonitorOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor
 }
@@ -309,7 +318,7 @@ func (m Model) isStatsOverview() bool {
 }
 
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isHealthMonitorOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() || m.isHealthMonitorOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -639,6 +648,115 @@ func yesNoValue(value string) string {
 		return "No"
 	default:
 		return displayValue(value)
+	}
+}
+
+func (m Model) amphoraOverviewParts(h int) (summary []string, relatedHeight int) {
+	if h <= 1 {
+		return m.amphoraOverviewSummary(h), 0
+	}
+	return m.amphoraOverviewSummary(h - 1), 0
+}
+
+func (m Model) amphoraOverviewLines(h int) []string {
+	summary, _ := m.amphoraOverviewParts(h)
+	if h <= 1 {
+		return summary
+	}
+	lines := make([]string, 0, h)
+	lines = append(lines, "")
+	lines = append(lines, summary...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) amphoraOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	title := m.overviewPanelTitle(
+		"AMPHORA DETAILS",
+		!m.refreshing && m.lbDetailLoading[n.ID],
+		m.lbDetailErr[n.ID],
+		m.updatedAt(n.ID, sectionDetails),
+		m.lbDetailErr[n.ID] != "",
+	)
+	if budget == 1 {
+		return []string{m.clip(title)}
+	}
+	groups := m.amphoraDetailGroups()
+	lines := []string{m.clip(title)}
+	if m.width >= 90 {
+		gap := 3
+		available := m.width - gap
+		leftWidth := available / 2
+		rightWidth := available - leftWidth
+		for i := 0; i < len(groups); i += 2 {
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[i], groups[i+1], leftWidth, rightWidth, gap), "\n")...)
+		}
+		return limitLines(lines, budget)
+	}
+	for i, group := range groups {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+	}
+	return limitLines(lines, budget)
+}
+
+func (m Model) amphoraDetailGroups() []overviewGroup {
+	n := m.loc.node
+	lbName := ""
+	for _, lb := range m.lbs {
+		if lb.ID == n.OwningLBID {
+			lbName = lb.Name
+			break
+		}
+	}
+	expires, expiryColor := certificateExpiryDisplay(n.Attrs["cert_expiration"], m.clock())
+	return []overviewGroup{
+		{fields: []overviewField{
+			{label: "ID", value: n.ID},
+			{label: "Load balancer name", value: displayValue(lbName)},
+			{label: "Load balancer ID", value: displayValue(n.OwningLBID)},
+			{label: "Role", value: displayValue(n.Attrs["role"])},
+			{label: "Status", value: displayValue(n.Attrs["status"]), status: true},
+		}},
+		{title: "COMPUTE", fields: []overviewField{
+			{label: "Compute ID", value: displayValue(n.Attrs["compute_id"])},
+			{label: "Image ID", value: displayValue(n.Attrs["image_id"])},
+			{label: "Cached zone", value: displayValue(n.Attrs["cached_zone"])},
+		}},
+		{title: "NETWORK", fields: []overviewField{
+			{label: "Management IP", value: displayValue(n.Attrs["lb_network_ip"])},
+			{label: "HA IP", value: displayValue(n.Attrs["ha_ip"])},
+			{label: "HA port ID", value: displayValue(n.Attrs["ha_port_id"])},
+		}},
+		{title: "VRRP", fields: []overviewField{
+			{label: "IP", value: displayValue(n.Attrs["vrrp_ip"])},
+			{label: "Port ID", value: displayValue(n.Attrs["vrrp_port_id"])},
+			{label: "Interface", value: displayValue(n.Attrs["vrrp_interface"])},
+			{label: "ID", value: displayValue(n.Attrs["vrrp_id"])},
+			{label: "Priority", value: displayValue(n.Attrs["vrrp_priority"])},
+		}},
+		{title: "INTERNAL CERTIFICATE", fields: []overviewField{
+			{label: "Expires", value: expires, color: expiryColor},
+			{label: "Busy", value: yesNoValue(n.Attrs["cert_busy"])},
+		}},
+		{title: "LIFECYCLE", fields: []overviewField{
+			{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+			{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+		}},
 	}
 }
 
@@ -2009,10 +2127,17 @@ func (m Model) hintLine() string {
 	if m.loc.isTopLevelList() {
 		parts = append(parts, "d names/ids")
 	}
-	parts = append(parts,
-		"/ filter", "s status", "p project", "r refresh", "a auto", "+/- interval",
-		"h history", "t telemetry", "? help", "q quit",
-	)
+	if hasFilterableEntries(m.allEntries) {
+		parts = append(parts, "/ filter")
+	}
+	if hasStatusEntries(m.allEntries) {
+		parts = append(parts, "s status")
+	}
+	parts = append(parts, "p project", "r refresh", "a auto")
+	if m.isStatsOverview() {
+		parts = append(parts, "+/- interval")
+	}
+	parts = append(parts, "h history", "t telemetry", "? help", "q quit")
 	return m.clip(m.st.help.Render(strings.Join(parts, " · ")))
 }
 
@@ -2021,7 +2146,12 @@ func (m Model) hintLine() string {
 func (m *Model) setupHelpViewport() {
 	m.vp.Width = m.width
 	m.vp.Height = m.height - 2
-	m.vp.SetContent(helpContent(m.loc.isTopLevelList()))
+	m.vp.SetContent(helpContent(
+		m.loc.isTopLevelList(),
+		hasFilterableEntries(m.allEntries),
+		hasStatusEntries(m.allEntries),
+		m.isStatsOverview(),
+	))
 	m.vp.GotoTop()
 }
 
@@ -2350,7 +2480,7 @@ func marshalRaw(v any, format string) string {
 	}
 }
 
-func helpContent(showNameIDToggle bool) string {
+func helpContent(showNameIDToggle, showFilter, showStatusFilter, showStatsIntervalControls bool) string {
 	content := strings.TrimLeft(`
 Move
   ↑ / ↓            selection up / down
@@ -2377,17 +2507,11 @@ Inspect
   n                copy object name to clipboard
   c                copy the displayed raw object (inside the YAML/JSON view)
 
-List
-{{name_id_toggle}}  /                filter current list (substring)
-  s                cycle status filter — all / error / degraded
-
-Global
+{{list_controls}}Global
   p                project switcher
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
-  + / -            lengthen / shorten the stats refresh interval
-  =                same as + (no Shift required)
-  t                API telemetry overlay
+{{stats_interval_controls}}  t                API telemetry overlay
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
 
@@ -2401,7 +2525,8 @@ Status colors
 {{status_legend}}
 
 Notes
-	• auto-refresh header intervals are stats/full (for example, 5s/30s).
+	• load-balancer/listener details show stats/full refresh cadences (for
+	  example, 5s/30s); other views show the fixed full cadence (30s).
 	• enter is the only descent key; arrows are reserved for history.
 	• 1-5 switch persistent views; each keeps its own history, cursor, and filters.
   • esc clears an active filter first, otherwise it is back.
@@ -2410,18 +2535,35 @@ Notes
   • Reference targets and cross-service edges (floating IP, Nova instance)
     resolve lazily on landing. Amphora VMs load in the LB overview. These
     surfaces degrade gracefully when a scope or admin RBAC is missing.
-  • Auto-refresh updates visible LB stats at 1/2/5/10/30/60-second intervals
+  • Auto-refresh updates visible load-balancer/listener stats at
+    1/2/5/10/30/60-second intervals
     (5 seconds by default) and refreshes lists/details/related objects every
     30 seconds. It pauses while overlays or text filters are active.
   • API telemetry is process-local and records endpoint labels, outcomes, and
     timings only—never bodies, credentials, query values, or full UUIDs. Its
     overlay does not pause the application's normal API auto-refresh.
 `, "\n")
-	nameIDHelp := ""
+	var listControls []string
 	if showNameIDToggle {
-		nameIDHelp = "  d                toggle top-level tables between names and IDs\n"
+		listControls = append(listControls, "  d                toggle top-level tables between names and IDs")
 	}
-	content = strings.Replace(content, "{{name_id_toggle}}", nameIDHelp, 1)
+	if showFilter {
+		listControls = append(listControls, "  /                filter current list (substring)")
+	}
+	if showStatusFilter {
+		listControls = append(listControls, "  s                cycle status filter — all / error / degraded")
+	}
+	listHelp := ""
+	if len(listControls) > 0 {
+		listHelp = "List\n" + strings.Join(listControls, "\n") + "\n\n"
+	}
+	content = strings.Replace(content, "{{list_controls}}", listHelp, 1)
+	statsIntervalHelp := ""
+	if showStatsIntervalControls {
+		statsIntervalHelp = "  + / -            lengthen / shorten the stats refresh interval\n" +
+			"  =                same as + (no Shift required)\n"
+	}
+	content = strings.Replace(content, "{{stats_interval_controls}}", statsIntervalHelp, 1)
 	return strings.Replace(content, "{{status_legend}}", statusLegend(), 1)
 }
 

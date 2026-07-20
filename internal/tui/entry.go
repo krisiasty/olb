@@ -112,9 +112,7 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 		}
 		return lbIdentity(e.vip.lbID, e.lbName), false, false
 	case entAmphora:
-		// Amphorae are not part of the status tree fetched on drill-in, so open
-		// the owning load balancer, whose overview lists them.
-		return lbIdentity(e.node.OwningLBID, e.lbName), false, false
+		return e.node.Identity(), false, false
 	case entChild:
 		return e.node.Identity(), false, false
 	case entRelated:
@@ -276,7 +274,7 @@ func locationEntries(n *model.Node) []entry {
 	if n.Type == model.TypeHealthMonitor {
 		return nil
 	}
-	if n.Type == model.TypeMember {
+	if n.Type == model.TypeMember || n.Type == model.TypeAmphora {
 		return nil
 	}
 	return nodeEntries(n)
@@ -397,6 +395,19 @@ func selectableEntryCount(entries []entry) int {
 		}
 	}
 	return count
+}
+
+func hasFilterableEntries(entries []entry) bool {
+	return selectableEntryCount(entries) > 0
+}
+
+func hasStatusEntries(entries []entry) bool {
+	for _, e := range entries {
+		if e.selectable() && (strings.TrimSpace(e.oper) != "" || strings.TrimSpace(e.prov) != "") {
+			return true
+		}
+	}
+	return false
 }
 
 // relatedIssueCounts summarizes only rows in the visible related-object list.

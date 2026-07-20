@@ -160,7 +160,7 @@ func (m Model) toggleAutoRefresh() (tea.Model, tea.Cmd) {
 	refreshCmd := m.scheduleAutoRefresh()
 	staleStatsCmd := m.refreshStaleStatsCmd()
 	spinnerCmd := m.ensureStatsSpinner()
-	flashCmd := m.setFlash("auto-refresh: "+m.autoRefreshInterval().String(), false)
+	flashCmd := m.setFlash("auto-refresh: "+m.autoRefreshCadence(), false)
 	return m, tea.Batch(
 		refreshCmd,
 		staleStatsCmd,
@@ -188,6 +188,9 @@ func (m *Model) refreshStaleStatsCmd() tea.Cmd {
 }
 
 func (m Model) changeAutoRefreshInterval(delta int) (tea.Model, tea.Cmd) {
+	if !m.isStatsOverview() {
+		return m, nil
+	}
 	next := m.autoIntervalIndex + delta
 	if next < 0 {
 		next = 0
@@ -221,11 +224,18 @@ func (m Model) autoRefreshLabel() string {
 	if !m.autoRefreshEnabled {
 		return "refresh: manual"
 	}
-	state := m.autoRefreshInterval().String() + "/" + fullAutoRefreshInterval.String()
+	state := m.autoRefreshCadence()
 	if m.autoInteractionPaused() {
 		state += ", paused"
 	}
 	return fmt.Sprintf("refresh: auto (%s)", state)
+}
+
+func (m Model) autoRefreshCadence() string {
+	if m.isStatsOverview() {
+		return m.autoRefreshInterval().String() + "/" + fullAutoRefreshInterval.String()
+	}
+	return fullAutoRefreshInterval.String()
 }
 
 func (m Model) styledAutoRefreshLabel() string {

@@ -110,9 +110,10 @@ list because previous objects may not exist in the new view.
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` | Copy id / name |
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
-| Search | `/` | Filter current list (substring) |
-| | `s` | Cycle status filter — all / error / degraded |
-| Global | `p` `r` `a` `+`/`-` `t` `?` `q` | Project · refresh · auto-refresh toggle/interval · API telemetry · help · quit (back out, then exit) |
+| Search | `/` | Filter the current list when it contains selectable objects |
+| | `s` | Cycle all/error/degraded when the current objects expose status |
+| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh toggle · API telemetry · help · quit (back out, then exit) |
+| Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
 `enter` is the only descent key; the arrows are reserved for history. `esc`
@@ -177,8 +178,9 @@ counts throughout the TUI.
   every revisit (a back-press can cost a round trip); `r` force-refreshes while
   retaining the last-known view and selected object until the new responses are
   ready, and prunes dead history entries. Automatic refresh is enabled by
-  default: visible overview stats update every 5 seconds (adjustable with `+`
-  and `-` through 1/2/5/10/30/60-second steps), while lists, details, and
+  default: visible load-balancer/listener stats update every 5 seconds
+  (adjustable from those views with `+` and `-` through
+  1/2/5/10/30/60-second steps), while lists, details, and
   related objects update every 30 seconds. Details and related objects show
   their last-successful update age. Fresh automatic stats instead show a moving
   `Points` cadence indicator; after the interval and a short grace window they
@@ -187,8 +189,9 @@ counts throughout the TUI.
   old values. `a` pauses or resumes
   all automatic requests; overlays and active text filters pause them
   temporarily. Status filters remain applied while refresh continues normally.
-  The header summarizes both cadences as `refresh: auto (stats/full)`, for
-  example `refresh: auto (5s/30s)`.
+  Load-balancer and listener detail headers summarize both cadences as
+  `refresh: auto (stats/full)`, for example `refresh: auto (5s/30s)`. Views
+  without statistics show only their fixed cadence as `refresh: auto (30s)`.
 - **Graceful degradation.** Admin-only (amphorae) and cross-service (floating IP,
   Nova instance) surfaces degrade with a clear reason when scope or RBAC is
   missing, rather than erroring out or rendering a dead node. OVN-backed LBs have

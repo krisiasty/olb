@@ -144,6 +144,51 @@ func TestFetchMemberDetailReturnsOverviewAttributes(t *testing.T) {
 	}
 }
 
+func TestFetchAmphoraDetailReturnsOverviewAttributes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/octavia/amphorae/amp-1" {
+			t.Errorf("request path = %q, want amphora detail endpoint", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"amphora":{
+			"id":"amp-1","loadbalancer_id":"lb-1","compute_id":"server-1",
+			"role":"MASTER","status":"ALLOCATED","lb_network_ip":"10.0.3.20",
+			"ha_ip":"203.0.113.9","ha_port_id":"ha-port-1",
+			"vrrp_port_id":"vrrp-port-1","vrrp_ip":"10.0.3.30",
+			"vrrp_interface":"eth1","vrrp_id":1,"vrrp_priority":100,
+			"cached_zone":"nova","image_id":"image-1","cert_busy":false,
+			"cert_expiration":"2026-08-20T12:00:00",
+			"created_at":"2026-07-18T10:15:30","updated_at":"2026-07-19T11:20:45"
+		}}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{lb: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2/",
+	}}
+	c := &Clients{services: sc, activeServices: sc}
+	node := model.NewNode(model.TypeAmphora, "amp-1", "amp-1")
+	node.OwningLBID = "lb-1"
+	result, err := c.FetchDetail(context.Background(), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"role": "MASTER", "status": "ALLOCATED", "lb_network_ip": "10.0.3.20",
+		"ha_ip": "203.0.113.9", "ha_port_id": "ha-port-1", "compute_id": "server-1",
+		"vrrp_port_id": "vrrp-port-1", "vrrp_ip": "10.0.3.30", "vrrp_interface": "eth1",
+		"vrrp_id": "1", "vrrp_priority": "100", "cached_zone": "nova", "image_id": "image-1",
+		"cert_expiration": "2026-08-20T12:00:00Z", "cert_busy": "false",
+		"created_at": "2026-07-18T10:15:30Z", "updated_at": "2026-07-19T11:20:45Z",
+	}
+	for key, value := range want {
+		if result.Attrs[key] != value {
+			t.Errorf("amphora attribute %s = %q, want %q", key, result.Attrs[key], value)
+		}
+	}
+}
+
 func TestFetchHealthMonitorDetailReturnsSummaryAttributes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/lbaas/healthmonitors/hm-1" {

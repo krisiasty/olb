@@ -106,10 +106,16 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case key.Matches(msg, m.keys.Filter):
+		if !hasFilterableEntries(m.allEntries) {
+			return m, nil
+		}
 		m.filtering = true
 		m.filter.Focus()
 		return m, textinput.Blink
 	case key.Matches(msg, m.keys.Status):
+		if !hasStatusEntries(m.allEntries) {
+			return m, nil
+		}
 		m.status = m.status.next()
 		m.cursor = 0
 		m.applyFilters()
@@ -261,6 +267,10 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	m.refreshMonitorExpected = false
 	m.refreshStats = nil
 	m.refreshListenerStats = nil
+	if m.loc.node != nil && m.loc.node.Type == model.TypeAmphora {
+		m.lbDetailLoading[m.loc.node.ID] = true
+		return m, m.refreshDetailCmd(m.loc.node)
+	}
 	return m, m.refreshTreeCmd(lbID, m.loc.id)
 }
 
@@ -310,6 +320,12 @@ func (m *Model) openSelected() tea.Cmd {
 		return nil
 	}
 	e := m.entries[m.cursor]
+	if e.kind == entAmphora && e.node != nil {
+		m.saveHistoryPosition()
+		m.hist.navigate(histEntry{id: e.node.Identity()})
+		m.clearFilter()
+		return m.showAmphora(e.node)
+	}
 
 	if e.kind == entRef && e.edge != nil && e.edge.Unresolved {
 		return m.followUnresolved(e)

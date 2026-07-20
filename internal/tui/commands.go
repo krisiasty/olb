@@ -30,6 +30,7 @@ type treeMsg struct {
 	tree       *model.Tree
 	err        error
 	forID      model.Identity // identity to render once the tree is in
+	attach     *model.Node    // non-status node to attach before rendering
 	background bool           // stale-refresh: don't disturb the view on error
 }
 
@@ -189,6 +190,15 @@ func (m Model) getTreeCmd(lbID string, forID model.Identity, background bool) te
 
 func (m Model) refreshTreeCmd(lbID string, forID model.Identity) tea.Cmd {
 	return m.treeCmd(lbID, forID, false, false)
+}
+
+func (m Model) amphoraTreeCmd(n *model.Node) tea.Cmd {
+	cmd := m.getTreeCmd(n.OwningLBID, n.Identity(), false)
+	return func() tea.Msg {
+		msg := cmd().(treeMsg)
+		msg.attach = n
+		return msg
+	}
 }
 
 func (m Model) treeCmd(lbID string, forID model.Identity, background, useListHint bool) tea.Cmd {

@@ -272,6 +272,17 @@ func locationEntries(n *model.Node) []entry {
 		})
 		return append(entries, related...)
 	}
+	if n.Type == model.TypeHealthMonitor {
+		if n.Parent == nil || n.Parent.Type != model.TypePool {
+			return nil
+		}
+		pool := n.Parent
+		return []entry{{
+			kind: entRelated, node: pool, label: pool.Label(),
+			oper: pool.OperatingStatus, prov: pool.ProvisioningStatus,
+			extra: inlineAttrs(pool),
+		}}
+	}
 	return nodeEntries(n)
 }
 

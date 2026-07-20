@@ -429,12 +429,14 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if err != nil {
 			return res, err
 		}
+		raw := innerRaw(r.Body, "healthmonitor")
 		res.Attrs["type"] = m.Type
 		res.Attrs["delay"] = fmt.Sprintf("%d", m.Delay)
 		res.Attrs["timeout"] = fmt.Sprintf("%d", m.Timeout)
 		res.Attrs["max_retries"] = fmt.Sprintf("%d", m.MaxRetries)
 		res.Attrs["max_retries_down"] = fmt.Sprintf("%d", m.MaxRetriesDown)
 		res.Attrs["admin_state_up"] = boolStr(m.AdminStateUp)
+		res.Attrs["project_id"] = m.ProjectID
 		if m.HTTPMethod != "" {
 			res.Attrs["http_method"] = m.HTTPMethod
 		}
@@ -444,7 +446,15 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if m.ExpectedCodes != "" {
 			res.Attrs["expected_codes"] = m.ExpectedCodes
 		}
-		res.Raw = innerRaw(r.Body, "healthmonitor")
+		for _, key := range []string{"created_at", "updated_at", "domain_name", "http_version"} {
+			if value := rawString(raw, key); value != "" {
+				res.Attrs[key] = value
+			}
+		}
+		if tags := rawStringList(raw, "tags"); tags != "" {
+			res.Attrs["tags"] = tags
+		}
+		res.Raw = raw
 
 	case model.TypeL7Policy:
 		r := l7policies.Get(ctx, sc.lb, n.ID)
@@ -728,6 +738,31 @@ func rawString(raw map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func rawStringList(raw map[string]any, key string) string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	var values []string
+	switch items := value.(type) {
+	case []any:
+		for _, item := range items {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				values = append(values, text)
+			}
+		}
+	case []string:
+		for _, item := range items {
+			if text := strings.TrimSpace(item); text != "" {
+				values = append(values, text)
+			}
+		}
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return strings.Join(values, ", ")
 }
 
 func rawFIP(f floatingips.FloatingIP) map[string]any {

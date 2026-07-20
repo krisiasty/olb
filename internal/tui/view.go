@@ -181,6 +181,8 @@ func (m Model) visibleRows() int {
 		_, h = m.vipOverviewParts(h)
 	} else if m.isPoolOverview() {
 		_, h = m.poolOverviewParts(h)
+	} else if m.isHealthMonitorOverview() {
+		_, h = m.healthMonitorOverviewParts(h)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -204,6 +206,9 @@ func (m Model) bodyLines() []string {
 	}
 	if m.isPoolOverview() {
 		return m.poolOverviewLines(h)
+	}
+	if m.isHealthMonitorOverview() {
+		return m.healthMonitorOverviewLines(h)
 	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
@@ -286,12 +291,16 @@ func (m Model) isPoolOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypePool
 }
 
+func (m Model) isHealthMonitorOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor
+}
+
 func (m Model) isStatsOverview() bool {
 	return m.isLBOverview() || m.isListenerOverview()
 }
 
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isHealthMonitorOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -517,6 +526,150 @@ func (m Model) poolDetailGroups() []overviewGroup {
 	}
 	return []overviewGroup{
 		{title: "POOL", fields: poolFields},
+		{title: "CONFIGURATION", fields: configFields},
+	}
+}
+
+func (m Model) healthMonitorOverviewParts(h int) (summary []string, relatedHeight int) {
+	const fixedChrome = 3
+	if h <= fixedChrome {
+		return nil, 0
+	}
+	minRelated := 1
+	if len(m.entries) > 0 {
+		// Keep the pool group heading and its selectable row visible when the
+		// terminal has enough room for both.
+		minRelated = 2
+	}
+	if minRelated > h-fixedChrome {
+		minRelated = h - fixedChrome
+	}
+	summary = m.healthMonitorOverviewSummary(h - fixedChrome - minRelated)
+	relatedHeight = h - len(summary) - fixedChrome
+	if relatedHeight < 0 {
+		relatedHeight = 0
+	}
+	return summary, relatedHeight
+}
+
+func (m Model) healthMonitorOverviewLines(h int) []string {
+	summary, relatedHeight := m.healthMonitorOverviewParts(h)
+	lines := make([]string, 0, h)
+	lines = append(lines, "")
+	lines = append(lines, summary...)
+	if len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) < h {
+		visibleCount := selectableEntryCount(m.entries)
+		allCount := selectableEntryCount(m.allEntries)
+		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
+		if visibleCount != allCount {
+			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
+		}
+		rendered := m.st.title.Render(title)
+		errors, degraded := relatedIssueCounts(m.entries)
+		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+	}
+	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) healthMonitorOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	title := m.overviewPanelTitle(
+		"DETAILS",
+		!m.refreshing && m.lbDetailLoading[n.ID],
+		m.lbDetailErr[n.ID],
+		m.updatedAt(n.ID, sectionDetails),
+		m.lbDetailErr[n.ID] != "",
+	)
+	groups := m.healthMonitorDetailGroups()
+	lines := []string{m.clip(title)}
+	if m.width >= 90 {
+		gap := 3
+		available := m.width - gap
+		leftWidth := available / 2
+		rightWidth := available - leftWidth
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		return limitLines(lines, budget)
+	}
+	for i, group := range groups {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+	}
+	return limitLines(lines, budget)
+}
+
+func (m Model) healthMonitorDetailGroups() []overviewGroup {
+	n := m.loc.node
+	projectID, projectName := n.Attrs["project_id"], ""
+	if m.loc.tree != nil {
+		if projectID == "" {
+			projectID = m.loc.tree.Meta.ProjectID
+		}
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	name := n.Name
+	if name == "" {
+		name = shortID(n.ID)
+	}
+	monitorFields := []overviewField{
+		{label: "Name", value: name},
+		{label: "ID", value: n.ID},
+		{label: "Project name", value: displayValue(projectName)},
+		{label: "Project ID", value: displayValue(projectID)},
+		{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		{label: "Admin state", value: adminStateLabel(n.Attrs["admin_state_up"]), status: true},
+		{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+		{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+	}
+	if tags := strings.TrimSpace(n.Attrs["tags"]); tags != "" {
+		monitorFields = append(monitorFields, overviewField{label: "Tags", value: tags})
+	}
+
+	seconds := func(value string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return displayValue(value)
+		}
+		return value + " s"
+	}
+	configFields := []overviewField{
+		{label: "Type", value: displayValue(n.Attrs["type"])},
+		{label: "Delay", value: seconds(n.Attrs["delay"])},
+		{label: "Timeout", value: seconds(n.Attrs["timeout"])},
+		{label: "Max retries", value: displayValue(n.Attrs["max_retries"])},
+		{label: "Max retries down", value: displayValue(n.Attrs["max_retries_down"])},
+	}
+	monitorType := strings.ToUpper(strings.TrimSpace(n.Attrs["type"]))
+	if monitorType == "HTTP" || monitorType == "HTTPS" {
+		configFields = append(configFields,
+			overviewField{label: "HTTP method", value: displayValue(n.Attrs["http_method"])},
+			overviewField{label: "URL path", value: displayValue(n.Attrs["url_path"])},
+			overviewField{label: "Expected codes", value: displayValue(n.Attrs["expected_codes"])},
+		)
+		if version := strings.TrimSpace(n.Attrs["http_version"]); version != "" {
+			configFields = append(configFields, overviewField{label: "HTTP version", value: version})
+		}
+		if domain := strings.TrimSpace(n.Attrs["domain_name"]); domain != "" {
+			configFields = append(configFields, overviewField{label: "Domain name", value: domain})
+		}
+	}
+	return []overviewGroup{
+		{title: "HEALTH MONITOR", fields: monitorFields},
 		{title: "CONFIGURATION", fields: configFields},
 	}
 }

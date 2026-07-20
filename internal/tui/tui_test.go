@@ -139,6 +139,12 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["http_method"] = "GET"
 		res.Attrs["url_path"] = "/health"
 		res.Attrs["expected_codes"] = "200"
+		res.Attrs["project_id"] = "p1"
+		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
+		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+		res.Attrs["tags"] = "api, blue"
+		res.Attrs["http_version"] = "1.1"
+		res.Attrs["domain_name"] = "api.example.test"
 	case model.TypeL7Policy:
 		res.IsL7Policy = true
 		res.L7Action = "REDIRECT_TO_POOL"
@@ -1077,6 +1083,88 @@ func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T)
 	if line := lineContaining(view, "● Listener"); !strings.Contains(line, "http") ||
 		!strings.Contains(line, "HTTPS/8443") || strings.Contains(line, "listener:") || strings.Contains(line, "←") {
 		t.Fatalf("pool listener should use the load-balancer overview format: %q\n%s", line, view)
+	}
+}
+
+func TestHealthMonitorOverviewShowsTwoColumnDetailsAndOwningPool(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("4"))
+	m = updExec(t, m, press("enter"))
+	pool := m.loc.node
+	if pool == nil || pool.Type != model.TypePool {
+		t.Fatalf("expected pool detail location, got %+v", pool)
+	}
+	monitor := poolHealthMonitor(pool)
+	if monitor == nil {
+		t.Fatal("expected pool health monitor")
+	}
+	for i, entry := range m.entries {
+		if entry.node == monitor {
+			m.cursor = i
+			break
+		}
+	}
+	m = updExec(t, m, press("enter"))
+	if m.loc.node == nil || m.loc.node.Type != model.TypeHealthMonitor {
+		t.Fatalf("expected health-monitor detail location, got %+v", m.loc.node)
+	}
+	if !m.lbDetailLoading[monitor.ID] {
+		t.Fatal("opening a health monitor should load its full details")
+	}
+
+	poolResult, err := m.backend.FetchDetail(context.Background(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{nodeID: pool.ID, lbID: pool.OwningLBID, res: poolResult, intent: intentOverview})
+	monitorResult, err := m.backend.FetchDetail(context.Background(), monitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{nodeID: monitor.ID, lbID: monitor.OwningLBID, res: monitorResult, intent: intentOverview})
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"DETAILS", "HEALTH MONITOR", "CONFIGURATION", "hm", "hm-1",
+		"alpha", "p1", "HTTP", "5 s", "3 s", "GET", "/health", "200",
+		"1.1", "api.example.test", "api, blue", "2026-07-18 10:15:30 UTC",
+		"RELATED OBJECTS 1", "POOLS 1", "● Pool", "web",
+		"HTTP · round robin · 1 member · 1 listener", "[DEGRADED]",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("health-monitor overview missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "STATS") {
+		t.Fatalf("health-monitor overview should not render a stats panel:\n%s", view)
+	}
+	if line := lineContaining(view, "HEALTH MONITOR"); !strings.Contains(line, "CONFIGURATION") {
+		t.Fatalf("wide health-monitor details should use paired columns: %q\n%s", line, view)
+	}
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("health-monitor refresh did not request a fresh status tree")
+	}
+	m = upd(t, m, treeMsg{lbID: monitor.OwningLBID, tree: newTree()})
+	refreshedMonitor := m.loc.node
+	if refreshedMonitor == nil || refreshedMonitor.Type != model.TypeHealthMonitor || !refreshedMonitor.DetailLoaded {
+		t.Fatal("tree refresh discarded loaded health-monitor details")
+	}
+	if !m.lbDetailLoading[refreshedMonitor.ID] {
+		t.Fatal("health-monitor refresh did not request fresh monitor details")
+	}
+	refreshedResult, err := m.backend.FetchDetail(context.Background(), refreshedMonitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedMonitor.ID, lbID: refreshedMonitor.OwningLBID,
+		res: refreshedResult, intent: intentOverview, refresh: true,
+	})
+	if m.refreshing || m.loading {
+		t.Fatal("health-monitor refresh did not complete after detail response")
 	}
 }
 

@@ -110,7 +110,10 @@ func TestFetchHealthMonitorDetailReturnsSummaryAttributes(t *testing.T) {
 		_, _ = w.Write([]byte(`{"healthmonitor":{
 			"id":"hm-1","name":"api-health","type":"HTTP","delay":5,"timeout":3,
 			"max_retries":2,"max_retries_down":3,"admin_state_up":true,
-			"http_method":"GET","url_path":"/health","expected_codes":"200"
+			"http_method":"GET","url_path":"/health","expected_codes":"200",
+			"project_id":"project-1","created_at":"2026-07-18T10:15:30Z",
+			"updated_at":"2026-07-19T11:20:45Z","tags":["api","blue"],
+			"http_version":1.1,"domain_name":"api.example.test"
 		}}`))
 	}))
 	defer server.Close()
@@ -130,6 +133,9 @@ func TestFetchHealthMonitorDetailReturnsSummaryAttributes(t *testing.T) {
 		"type": "HTTP", "delay": "5", "timeout": "3",
 		"max_retries": "2", "max_retries_down": "3", "admin_state_up": "true",
 		"http_method": "GET", "url_path": "/health", "expected_codes": "200",
+		"project_id": "project-1", "created_at": "2026-07-18T10:15:30Z",
+		"updated_at": "2026-07-19T11:20:45Z", "tags": "api, blue",
+		"http_version": "1.1", "domain_name": "api.example.test",
 	}
 	for key, value := range want {
 		if result.Attrs[key] != value {

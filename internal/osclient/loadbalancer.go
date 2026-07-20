@@ -417,10 +417,25 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if err != nil {
 			return res, err
 		}
+		res.Attrs["name"] = m.Name
 		res.Attrs["address"] = m.Address
 		res.Attrs["port"] = fmt.Sprintf("%d", m.ProtocolPort)
 		res.Attrs["weight"] = fmt.Sprintf("%d", m.Weight)
 		res.Attrs["backup"] = boolStr(m.Backup)
+		res.Attrs["admin_state_up"] = boolStr(m.AdminStateUp)
+		res.Attrs["project_id"] = m.ProjectID
+		res.Attrs["subnet_id"] = m.SubnetID
+		if m.MonitorAddress != "" {
+			res.Attrs["monitor_address"] = m.MonitorAddress
+		}
+		if m.MonitorPort != 0 {
+			res.Attrs["monitor_port"] = fmt.Sprintf("%d", m.MonitorPort)
+		}
+		if len(m.Tags) > 0 {
+			res.Attrs["tags"] = strings.Join(m.Tags, ", ")
+		}
+		res.Attrs["created_at"] = formatAPITime(m.CreatedAt)
+		res.Attrs["updated_at"] = formatAPITime(m.UpdatedAt)
 		res.Raw = innerRaw(r.Body, "member")
 
 	case model.TypeHealthMonitor:

@@ -181,6 +181,8 @@ func (m Model) visibleRows() int {
 		_, h = m.vipOverviewParts(h)
 	} else if m.isPoolOverview() {
 		_, h = m.poolOverviewParts(h)
+	} else if m.isMemberOverview() {
+		_, h = m.memberOverviewParts(h)
 	} else if m.isHealthMonitorOverview() {
 		_, h = m.healthMonitorOverviewParts(h)
 	}
@@ -206,6 +208,9 @@ func (m Model) bodyLines() []string {
 	}
 	if m.isPoolOverview() {
 		return m.poolOverviewLines(h)
+	}
+	if m.isMemberOverview() {
+		return m.memberOverviewLines(h)
 	}
 	if m.isHealthMonitorOverview() {
 		return m.healthMonitorOverviewLines(h)
@@ -291,6 +296,10 @@ func (m Model) isPoolOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypePool
 }
 
+func (m Model) isMemberOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeMember
+}
+
 func (m Model) isHealthMonitorOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor
 }
@@ -300,7 +309,7 @@ func (m Model) isStatsOverview() bool {
 }
 
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isHealthMonitorOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isHealthMonitorOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -357,7 +366,7 @@ func (m Model) vipOverviewSummary(budget int) []string {
 	}
 	n := m.loc.node
 	loading := m.lbDetailLoading[n.ID] || m.lbFIPLoading[n.OwningLBID]
-	title := m.overviewPanelTitle("DETAILS", loading, m.lbDetailErr[n.ID], time.Time{}, false)
+	title := m.overviewPanelTitle("VIP DETAILS", loading, m.lbDetailErr[n.ID], time.Time{}, false)
 	groups := m.vipDetailGroups()
 	lines := []string{m.clip(title)}
 	if m.width >= 96 {
@@ -443,7 +452,7 @@ func (m Model) poolOverviewSummary(budget int) []string {
 	}
 	n := m.loc.node
 	title := m.overviewPanelTitle(
-		"DETAILS",
+		"POOL DETAILS",
 		!m.refreshing && m.lbDetailLoading[n.ID],
 		m.lbDetailErr[n.ID],
 		m.updatedAt(n.ID, sectionDetails),
@@ -525,53 +534,129 @@ func (m Model) poolDetailGroups() []overviewGroup {
 		configFields = append(configFields, overviewField{label: "Tags", value: tags})
 	}
 	return []overviewGroup{
-		{title: "POOL", fields: poolFields},
+		{fields: poolFields},
 		{title: "CONFIGURATION", fields: configFields},
 	}
 }
 
-func (m Model) healthMonitorOverviewParts(h int) (summary []string, relatedHeight int) {
-	const fixedChrome = 3
-	if h <= fixedChrome {
-		return nil, 0
+func (m Model) memberOverviewParts(h int) (summary []string, relatedHeight int) {
+	if h <= 1 {
+		return m.memberOverviewSummary(h), 0
 	}
-	minRelated := 1
-	if len(m.entries) > 0 {
-		// Keep the pool group heading and its selectable row visible when the
-		// terminal has enough room for both.
-		minRelated = 2
-	}
-	if minRelated > h-fixedChrome {
-		minRelated = h - fixedChrome
-	}
-	summary = m.healthMonitorOverviewSummary(h - fixedChrome - minRelated)
-	relatedHeight = h - len(summary) - fixedChrome
-	if relatedHeight < 0 {
-		relatedHeight = 0
-	}
-	return summary, relatedHeight
+	return m.memberOverviewSummary(h - 1), 0 // permanent gap below the subtitle
 }
 
-func (m Model) healthMonitorOverviewLines(h int) []string {
-	summary, relatedHeight := m.healthMonitorOverviewParts(h)
+func (m Model) memberOverviewLines(h int) []string {
+	summary, _ := m.memberOverviewParts(h)
+	if h <= 1 {
+		return summary
+	}
 	lines := make([]string, 0, h)
-	lines = append(lines, "")
-	lines = append(lines, summary...)
 	if len(lines) < h {
 		lines = append(lines, "")
 	}
-	if len(lines) < h {
-		visibleCount := selectableEntryCount(m.entries)
-		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
-		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
-		}
-		rendered := m.st.title.Render(title)
-		errors, degraded := relatedIssueCounts(m.entries)
-		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+	lines = append(lines, summary...)
+	for len(lines) < h {
+		lines = append(lines, "")
 	}
-	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) memberOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	title := m.overviewPanelTitle(
+		"MEMBER DETAILS",
+		!m.refreshing && m.lbDetailLoading[n.ID],
+		m.lbDetailErr[n.ID],
+		m.updatedAt(n.ID, sectionDetails),
+		m.lbDetailErr[n.ID] != "",
+	)
+	if budget == 1 {
+		return []string{m.clip(title)}
+	}
+	return limitLines(strings.Split(m.renderOverviewPanel(title, m.memberDetailFields(), m.width, budget-1), "\n"), budget)
+}
+
+func (m Model) memberDetailFields() []overviewField {
+	n := m.loc.node
+	name := strings.TrimSpace(n.Attrs["name"])
+	if name == "" {
+		name = n.Name
+	}
+	if name == "" {
+		name = shortID(n.ID)
+	}
+	projectID, projectName := n.Attrs["project_id"], ""
+	if m.loc.tree != nil {
+		if projectID == "" {
+			projectID = m.loc.tree.Meta.ProjectID
+		}
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	fields := []overviewField{
+		{label: "Name", value: name},
+		{label: "ID", value: n.ID},
+		{label: "Project name", value: displayValue(projectName)},
+		{label: "Project ID", value: displayValue(projectID)},
+		{label: "Address", value: displayValue(n.Attrs["address"])},
+		{label: "Protocol port", value: displayValue(n.Attrs["port"])},
+		{label: "Subnet ID", value: displayValue(n.Attrs["subnet_id"])},
+		{label: "Weight", value: displayValue(n.Attrs["weight"])},
+		{label: "Backup", value: yesNoValue(n.Attrs["backup"])},
+	}
+	if address := strings.TrimSpace(n.Attrs["monitor_address"]); address != "" {
+		fields = append(fields, overviewField{label: "Monitor address", value: address})
+	}
+	if port := strings.TrimSpace(n.Attrs["monitor_port"]); port != "" {
+		fields = append(fields, overviewField{label: "Monitor port", value: port})
+	}
+	fields = append(fields,
+		overviewField{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		overviewField{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		overviewField{label: "Admin state", value: adminStateLabel(n.Attrs["admin_state_up"]), status: true},
+	)
+	if tags := strings.TrimSpace(n.Attrs["tags"]); tags != "" {
+		fields = append(fields, overviewField{label: "Tags", value: tags})
+	}
+	fields = append(fields,
+		overviewField{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+		overviewField{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+	)
+	return fields
+}
+
+func yesNoValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes":
+		return "Yes"
+	case "false", "no":
+		return "No"
+	default:
+		return displayValue(value)
+	}
+}
+
+func (m Model) healthMonitorOverviewParts(h int) (summary []string, relatedHeight int) {
+	if h <= 1 {
+		return m.healthMonitorOverviewSummary(h), 0
+	}
+	return m.healthMonitorOverviewSummary(h - 1), 0
+}
+
+func (m Model) healthMonitorOverviewLines(h int) []string {
+	summary, _ := m.healthMonitorOverviewParts(h)
+	if h <= 1 {
+		return summary
+	}
+	lines := make([]string, 0, h)
+	lines = append(lines, "")
+	lines = append(lines, summary...)
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
@@ -587,7 +672,7 @@ func (m Model) healthMonitorOverviewSummary(budget int) []string {
 	}
 	n := m.loc.node
 	title := m.overviewPanelTitle(
-		"DETAILS",
+		"HEALTH MONITOR DETAILS",
 		!m.refreshing && m.lbDetailLoading[n.ID],
 		m.lbDetailErr[n.ID],
 		m.updatedAt(n.ID, sectionDetails),
@@ -669,7 +754,7 @@ func (m Model) healthMonitorDetailGroups() []overviewGroup {
 		}
 	}
 	return []overviewGroup{
-		{title: "HEALTH MONITOR", fields: monitorFields},
+		{fields: monitorFields},
 		{title: "CONFIGURATION", fields: configFields},
 	}
 }
@@ -691,11 +776,11 @@ func (m Model) vipDetailGroups() []overviewGroup {
 		projectName = m.loc.tree.Meta.ProjectName
 	}
 	return []overviewGroup{
-		{title: "VIP", fields: []overviewField{
+		{fields: []overviewField{
 			{label: "Type", value: kind},
 			{label: "Address", value: displayValue(n.Attrs["address"])},
 			{label: "Floating IP", value: displayValue(n.Attrs["floating_ip"])},
-			{label: "Project name", value: displayValue(projectName), breakBefore: true},
+			{label: "Project name", value: displayValue(projectName), breakBefore: true, subheading: "PROJECT"},
 			{label: "Project ID", value: displayValue(projectID)},
 		}},
 		{title: "PORT", fields: []overviewField{
@@ -736,10 +821,16 @@ func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
 	if cap := (width - 2) / 2; labelWidth > cap {
 		labelWidth = cap
 	}
-	lines := []string{m.st.groupHeading.Render(group.title)}
+	lines := make([]string, 0, len(group.fields)+1)
+	if group.title != "" {
+		lines = append(lines, m.st.groupHeading.Render(group.title))
+	}
 	for _, field := range group.fields {
 		if field.breakBefore {
 			lines = append(lines, "")
+		}
+		if field.subheading != "" {
+			lines = append(lines, m.st.groupHeading.Render(field.subheading))
 		}
 		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
 		value := field.value
@@ -825,6 +916,7 @@ type overviewField struct {
 	status      bool
 	color       lipgloss.Color
 	breakBefore bool
+	subheading  string
 }
 
 func (m Model) listenerOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -893,7 +985,7 @@ func (m Model) listenerOverviewSummary(budget int) []string {
 		return nil
 	}
 	n := m.loc.node
-	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[n.ID], m.lbDetailErr[n.ID], m.updatedAt(n.ID, sectionDetails), m.lbDetailErr[n.ID] != "")
+	detailTitle := m.overviewPanelTitle("LISTENER DETAILS", !m.refreshing && m.lbDetailLoading[n.ID], m.lbDetailErr[n.ID], m.updatedAt(n.ID, sectionDetails), m.lbDetailErr[n.ID] != "")
 	statsTitle := m.statsPanelTitle(n.ID)
 	details := m.listenerDetailFields()
 	stats := m.lbStatFields()
@@ -911,7 +1003,7 @@ func (m Model) listenerOverviewSummary(budget int) []string {
 		return limitLines(strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right), "\n"), budget)
 	}
 	if budget == 1 {
-		return []string{m.clip(m.st.title.Render("DETAILS · STATS"))}
+		return []string{m.clip(m.st.title.Render("LISTENER DETAILS · STATS"))}
 	}
 	if budget == 2 {
 		return []string{m.clip(detailTitle), ""}
@@ -1053,7 +1145,7 @@ func (m Model) lbOverviewSummary(budget int) []string {
 	// committed panel values visible. Per-panel loading labels would duplicate
 	// that status and make the retained values look unavailable.
 	lbID := m.loc.node.ID
-	detailTitle := m.overviewPanelTitle("DETAILS", !m.refreshing && m.lbDetailLoading[lbID], m.lbDetailErr[lbID], m.updatedAt(lbID, sectionDetails), m.lbDetailErr[lbID] != "")
+	detailTitle := m.overviewPanelTitle("LOAD BALANCER DETAILS", !m.refreshing && m.lbDetailLoading[lbID], m.lbDetailErr[lbID], m.updatedAt(lbID, sectionDetails), m.lbDetailErr[lbID] != "")
 	statsTitle := m.statsPanelTitle(lbID)
 
 	if m.width >= 90 {
@@ -1074,7 +1166,7 @@ func (m Model) lbOverviewSummary(budget int) []string {
 	// Narrow terminals stack the panels. Divide the available field rows between
 	// them, prioritizing the first few identity and traffic values.
 	if budget == 1 {
-		return []string{m.clip(m.st.title.Render("DETAILS · STATS"))}
+		return []string{m.clip(m.st.title.Render("LOAD BALANCER DETAILS · STATS"))}
 	}
 	if budget == 2 {
 		return []string{m.clip(detailTitle), ""}

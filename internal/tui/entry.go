@@ -210,7 +210,8 @@ func nodeEntries(n *model.Node) []entry {
 
 // locationEntries adapts the graph to a resource-specific related-object
 // surface. A VIP's floating IP is rendered as a detail field, leaving its
-// owning load balancer as the sole navigable related object.
+// owning load balancer as the sole navigable related object. Members and health
+// monitors are details-only: their owning pool is already in the breadcrumb.
 func locationEntries(n *model.Node) []entry {
 	if n == nil {
 		return nil
@@ -273,15 +274,10 @@ func locationEntries(n *model.Node) []entry {
 		return append(entries, related...)
 	}
 	if n.Type == model.TypeHealthMonitor {
-		if n.Parent == nil || n.Parent.Type != model.TypePool {
-			return nil
-		}
-		pool := n.Parent
-		return []entry{{
-			kind: entRelated, node: pool, label: pool.Label(),
-			oper: pool.OperatingStatus, prov: pool.ProvisioningStatus,
-			extra: inlineAttrs(pool),
-		}}
+		return nil
+	}
+	if n.Type == model.TypeMember {
+		return nil
 	}
 	return nodeEntries(n)
 }
@@ -369,8 +365,13 @@ func relatedObjectGroup(e entry) (key, title string) {
 		}
 		return "other", "OTHER"
 	case entRef:
-		if e.edge != nil && e.edge.TargetType == model.TypePool {
-			return "pools", "POOLS"
+		if e.edge != nil {
+			switch e.edge.TargetType {
+			case model.TypePool:
+				return "pools", "POOLS"
+			case model.TypeInstance:
+				return "instances", "INSTANCES"
+			}
 		}
 		return "references", "REFERENCES"
 	case entBackRef:

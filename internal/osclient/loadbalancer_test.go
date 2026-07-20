@@ -101,6 +101,49 @@ func TestFetchPoolDetailReturnsOverviewAttributes(t *testing.T) {
 	}
 }
 
+func TestFetchMemberDetailReturnsOverviewAttributes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/lbaas/pools/pool-1/members/member-1" {
+			t.Errorf("request path = %q, want member detail endpoint", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"member":{
+			"id":"member-1","name":"api-1","project_id":"project-1",
+			"subnet_id":"subnet-1","address":"10.0.0.5","protocol_port":8080,
+			"weight":10,"backup":true,"admin_state_up":true,
+			"monitor_address":"10.0.1.5","monitor_port":8081,"tags":["api","blue"],
+			"created_at":"2026-07-18T10:15:30","updated_at":"2026-07-19T11:20:45"
+		}}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{lb: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2/",
+	}}
+	c := &Clients{services: sc, activeServices: sc}
+	pool := model.NewNode(model.TypePool, "pool-1", "web")
+	node := model.NewNode(model.TypeMember, "member-1", "api-1")
+	node.OwningLBID = "lb-1"
+	node.Parent = pool
+	result, err := c.FetchDetail(context.Background(), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"name": "api-1", "project_id": "project-1", "subnet_id": "subnet-1",
+		"address": "10.0.0.5", "port": "8080", "weight": "10", "backup": "true",
+		"admin_state_up": "true", "monitor_address": "10.0.1.5", "monitor_port": "8081",
+		"tags": "api, blue", "created_at": "2026-07-18T10:15:30Z",
+		"updated_at": "2026-07-19T11:20:45Z",
+	}
+	for key, value := range want {
+		if result.Attrs[key] != value {
+			t.Errorf("member attribute %s = %q, want %q", key, result.Attrs[key], value)
+		}
+	}
+}
+
 func TestFetchHealthMonitorDetailReturnsSummaryAttributes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/lbaas/healthmonitors/hm-1" {

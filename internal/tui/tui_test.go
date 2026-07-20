@@ -129,6 +129,20 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["tls_enabled"] = "false"
 		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
 		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+	case model.TypeMember:
+		res.Attrs["name"] = "api-1"
+		res.Attrs["project_id"] = "p1"
+		res.Attrs["subnet_id"] = "subnet-1"
+		res.Attrs["address"] = "10.0.0.5"
+		res.Attrs["port"] = "80"
+		res.Attrs["weight"] = "10"
+		res.Attrs["backup"] = "false"
+		res.Attrs["admin_state_up"] = "true"
+		res.Attrs["monitor_address"] = "10.0.1.5"
+		res.Attrs["monitor_port"] = "8080"
+		res.Attrs["tags"] = "api, blue"
+		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
+		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
 	case model.TypeHealthMonitor:
 		res.Attrs["type"] = "HTTP"
 		res.Attrs["delay"] = "5"
@@ -991,7 +1005,7 @@ func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
 	m = upd(t, m, listenerStatsMsg{lbID: n.OwningLBID, listenerID: n.ID, stats: stats, sampledAt: m.clock()})
 	plain := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"DETAILS", "STATS", "HTTPS (TLS termination)", "Total connections", "80",
+		"LISTENER DETAILS", "STATS", "HTTPS (TLS termination)", "Total connections", "80",
 		"Certificate", "api.example.test", "Expires", "13d remaining",
 		"RELATED OBJECTS", "LOAD BALANCERS 1", "POOLS 1", "● Pool", "L7 POLICIES 1",
 	} {
@@ -1120,7 +1134,7 @@ func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T)
 
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"DETAILS", "POOL", "CONFIGURATION", "web", "pool-1",
+		"POOL DETAILS", "CONFIGURATION", "web", "pool-1",
 		"Web application backends", "HTTP", "ROUND_ROBIN", "HTTP_COOKIE",
 		"RELATED OBJECTS 4", "LOAD BALANCERS 1", "LISTENERS 1",
 		"HEALTH MONITORS 1", "MEMBERS 1", "hm", "10.0.0.5:80",
@@ -1137,8 +1151,13 @@ func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T)
 			t.Fatalf("pool configuration should not render %q", field.label)
 		}
 	}
-	if line := lineContaining(view, "POOL"); !strings.Contains(line, "CONFIGURATION") {
-		t.Fatalf("wide pool details should use paired columns: %q\n%s", line, view)
+	if line := lineContaining(view, "CONFIGURATION"); !strings.Contains(line, "Name") {
+		t.Fatalf("pool configuration heading should align with the first ungrouped detail field: %q\n%s", line, view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.TrimSpace(line) == "POOL" {
+			t.Fatalf("pool details should not repeat a POOL subheader:\n%s", view)
+		}
 	}
 	if line := lineContaining(view, "● Health monitor"); !strings.Contains(line, "hm") ||
 		!strings.Contains(line, "HTTP · every 5s · timeout 3s · up/down 2/3 · GET /health → 200") {
@@ -1153,7 +1172,7 @@ func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T)
 	}
 }
 
-func TestHealthMonitorOverviewShowsTwoColumnDetailsAndOwningPool(t *testing.T) {
+func TestHealthMonitorOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4"))
 	m = updExec(t, m, press("enter"))
@@ -1192,11 +1211,9 @@ func TestHealthMonitorOverviewShowsTwoColumnDetailsAndOwningPool(t *testing.T) {
 
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"DETAILS", "HEALTH MONITOR", "CONFIGURATION", "hm", "hm-1",
+		"HEALTH MONITOR DETAILS", "CONFIGURATION", "hm", "hm-1",
 		"alpha", "p1", "HTTP", "5 s", "3 s", "GET", "/health", "200",
 		"1.1", "api.example.test", "api, blue", "2026-07-18 10:15:30 UTC",
-		"RELATED OBJECTS 1", "POOLS 1", "● Pool", "web",
-		"HTTP · round robin · 1 member · 1 listener", "[DEGRADED]",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("health-monitor overview missing %q:\n%s", want, view)
@@ -1205,8 +1222,16 @@ func TestHealthMonitorOverviewShowsTwoColumnDetailsAndOwningPool(t *testing.T) {
 	if strings.Contains(view, "STATS") {
 		t.Fatalf("health-monitor overview should not render a stats panel:\n%s", view)
 	}
-	if line := lineContaining(view, "HEALTH MONITOR"); !strings.Contains(line, "CONFIGURATION") {
-		t.Fatalf("wide health-monitor details should use paired columns: %q\n%s", line, view)
+	if strings.Contains(view, "RELATED OBJECTS") || len(m.entries) != 0 {
+		t.Fatalf("health-monitor overview should not repeat its owning pool:\n%s", view)
+	}
+	if line := lineContaining(view, "CONFIGURATION"); !strings.Contains(line, "Name") {
+		t.Fatalf("health-monitor configuration heading should align with the first ungrouped detail field: %q\n%s", line, view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.TrimSpace(line) == "HEALTH MONITOR" {
+			t.Fatalf("health-monitor details should not repeat a HEALTH MONITOR subheader:\n%s", view)
+		}
 	}
 
 	next, cmd := m.Update(press("r"))
@@ -1232,6 +1257,71 @@ func TestHealthMonitorOverviewShowsTwoColumnDetailsAndOwningPool(t *testing.T) {
 	})
 	if m.refreshing || m.loading {
 		t.Fatal("health-monitor refresh did not complete after detail response")
+	}
+}
+
+func TestMemberOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	if i, ok := m.selectLabel("pool:web"); ok {
+		m.cursor = i
+	} else {
+		t.Fatal("missing pool row")
+	}
+	m = updExec(t, m, press("enter"))
+	if i, ok := m.selectLabel("10.0.0.5"); ok {
+		m.cursor = i
+	} else {
+		t.Fatalf("pool should list a member; entries=%v", labels(m))
+	}
+	m = updExec(t, m, press("enter"))
+	member := m.loc.node
+	if member == nil || member.Type != model.TypeMember || !member.DetailLoaded {
+		t.Fatalf("expected loaded member overview, got %+v", member)
+	}
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"MEMBER DETAILS", "api-1", "mem-1", "Project name", "alpha", "Project ID", "p1",
+		"Address", "10.0.0.5", "Protocol port", "80", "Subnet ID", "subnet-1",
+		"Weight", "10", "Backup", "No", "Monitor address", "10.0.1.5", "Monitor port", "8080",
+		"Operating", "ERROR", "Provisioning", "ACTIVE", "Admin state", "ENABLED",
+		"Tags", "api, blue", "2026-07-18 10:15:30 UTC", "2026-07-19 11:20:45 UTC",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("member overview missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "RELATED OBJECTS") || len(m.entries) != 0 {
+		t.Fatalf("member overview should be details-only:\n%s", view)
+	}
+	if !strings.Contains(ansiRE.ReplaceAllString(m.breadcrumbLine(), ""), "pool:web › member:10.0.0.5:80") {
+		t.Fatalf("member breadcrumb should retain its owning pool context: %q", ansiRE.ReplaceAllString(m.breadcrumbLine(), ""))
+	}
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("member refresh did not request a fresh status tree")
+	}
+	m = upd(t, m, treeMsg{lbID: member.OwningLBID, tree: newTree()})
+	refreshedMember := m.loc.node
+	if refreshedMember == nil || refreshedMember.Type != model.TypeMember || !refreshedMember.DetailLoaded {
+		t.Fatal("tree refresh discarded loaded member details")
+	}
+	if !m.lbDetailLoading[refreshedMember.ID] {
+		t.Fatal("member refresh did not request fresh member details")
+	}
+	result, err := m.backend.FetchDetail(context.Background(), refreshedMember)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedMember.ID, lbID: refreshedMember.OwningLBID,
+		res: result, intent: intentOverview, refresh: true,
+	})
+	if m.refreshing || m.loading {
+		t.Fatal("member refresh did not complete after its detail response")
 	}
 }
 
@@ -1461,7 +1551,7 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 	// The LB view embeds independently-loaded details and stats above the
 	// selectable related-object list.
 	view := m.View()
-	for _, section := range []string{"DETAILS", "STATS", "RELATED OBJECTS"} {
+	for _, section := range []string{"LOAD BALANCER DETAILS", "STATS", "RELATED OBJECTS"} {
 		if !strings.Contains(view, section) {
 			t.Errorf("LB overview missing %q:\n%s", section, view)
 		}
@@ -1948,7 +2038,7 @@ func TestLBOverviewResponsiveLayout(t *testing.T) {
 			t.Fatalf("LB details should identify owner %q:\n%s", owner, wide)
 		}
 	}
-	wideHeading := lineContaining(wide, "DETAILS")
+	wideHeading := lineContaining(wide, "LOAD BALANCER DETAILS")
 	if !strings.Contains(wideHeading, "STATS") {
 		t.Fatalf("wide overview should place details and stats side-by-side: %q", wideHeading)
 	}
@@ -2369,34 +2459,6 @@ func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {
 	m = next.(Model)
 	if cmd == nil || m.overlay != overlayNone || m.allProjects {
 		t.Fatal("first visible project was not selectable at row zero")
-	}
-}
-
-func TestFollowUnresolvedInstanceEdge(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("enter")) // LB
-	if i, ok := m.selectLabel("pool:web"); ok {
-		m.cursor = i
-	}
-	m = updExec(t, m, press("enter")) // pool
-	if i, ok := m.selectLabel("10.0.0.5"); ok {
-		m.cursor = i
-	} else {
-		t.Fatalf("pool should list a member; entries=%v", labels(m))
-	}
-	m = updExec(t, m, press("enter")) // member
-	if m.loc.node == nil || m.loc.node.Type != model.TypeMember {
-		t.Fatalf("expected member location, got %+v", m.loc.node)
-	}
-	// Follow the unresolved instance edge -> resolves to a Nova server.
-	if i, ok := m.selectLabel("instance"); ok {
-		m.cursor = i
-	} else {
-		t.Fatalf("member should offer an instance edge; entries=%v", labels(m))
-	}
-	m = updExec(t, m, press("enter"))
-	if m.loc.node == nil || m.loc.node.Type != model.TypeInstance {
-		t.Fatalf("following the instance edge should land on the Nova server, got %+v", m.loc.node)
 	}
 }
 

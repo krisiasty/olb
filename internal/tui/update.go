@@ -264,6 +264,9 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			if m.loc.node != nil && m.loc.node.Type == model.TypePool {
 				return m, m.reloadPoolOverview()
 			}
+			if m.loc.node != nil && m.loc.node.Type == model.TypeMember {
+				return m, m.reloadMemberOverview()
+			}
 			if m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor {
 				return m, m.reloadHealthMonitorOverview()
 			}
@@ -307,6 +310,8 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 				return m, m.commitListenerRefresh()
 			case model.TypePool:
 				return m, m.commitPoolRefresh()
+			case model.TypeMember:
+				return m, m.commitMemberRefresh()
 			case model.TypeHealthMonitor:
 				return m, m.commitHealthMonitorRefresh()
 			default:
@@ -336,7 +341,7 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.intent == intentOverview {
-		if node.Type == model.TypeLoadBalancer || node.Type == model.TypeListener || node.Type == model.TypePool || node.Type == model.TypeHealthMonitor {
+		if node.Type == model.TypeLoadBalancer || node.Type == model.TypeListener || node.Type == model.TypePool || node.Type == model.TypeMember || node.Type == model.TypeHealthMonitor {
 			m.markFresh(node.ID, sectionDetails)
 		}
 		if node.Type == model.TypeHealthMonitor && m.loc.node != nil && node.Parent == m.loc.node && m.loc.node.Type == model.TypePool {
@@ -391,6 +396,15 @@ func (m *Model) applyDetailResult(msg detailMsg) *model.Node {
 			"member_count", "listener_count", "healthmonitor_id", "subnet_id",
 			"session_persistence", "persistence_cookie", "tls_enabled", "tls_versions",
 			"alpn_protocols", "tls_ciphers", "tags", "created_at", "updated_at",
+		} {
+			delete(node.Attrs, key)
+		}
+	}
+	if node.Type == model.TypeMember {
+		for _, key := range []string{
+			"name", "project_id", "subnet_id", "address", "port", "weight",
+			"backup", "admin_state_up", "monitor_address", "monitor_port",
+			"tags", "created_at", "updated_at",
 		} {
 			delete(node.Attrs, key)
 		}
@@ -565,6 +579,9 @@ func (m *Model) loadLBOverview() tea.Cmd {
 	if m.isPoolOverview() {
 		return m.loadPoolOverview(false)
 	}
+	if m.isMemberOverview() {
+		return m.loadMemberOverview(false)
+	}
 	if m.isHealthMonitorOverview() {
 		return m.loadHealthMonitorOverview(false)
 	}
@@ -577,6 +594,10 @@ func (m *Model) reloadListenerOverview() tea.Cmd {
 
 func (m *Model) reloadPoolOverview() tea.Cmd {
 	return m.loadPoolOverview(true)
+}
+
+func (m *Model) reloadMemberOverview() tea.Cmd {
+	return m.loadMemberOverview(true)
 }
 
 func (m *Model) reloadHealthMonitorOverview() tea.Cmd {
@@ -689,6 +710,24 @@ func poolHealthMonitor(pool *model.Node) *model.Node {
 		}
 	}
 	return nil
+}
+
+func (m *Model) loadMemberOverview(refresh bool) tea.Cmd {
+	n := m.loc.node
+	if n == nil || n.Type != model.TypeMember {
+		return nil
+	}
+	if refresh {
+		m.refreshDetail = nil
+		m.lbDetailLoading[n.ID] = true
+		return m.refreshDetailCmd(n)
+	}
+	if n.DetailLoaded || m.lbDetailLoading[n.ID] {
+		return nil
+	}
+	m.lbDetailLoading[n.ID] = true
+	delete(m.lbDetailErr, n.ID)
+	return m.fetchDetailCmd(n, intentOverview)
 }
 
 func (m *Model) loadHealthMonitorOverview(refresh bool) tea.Cmd {
@@ -928,6 +967,7 @@ func (m *Model) preserveLBOverview(lbID string, fresh *model.Tree) {
 					replacement.Raw = child.Raw
 				}
 				preservePoolHealthMonitor(child, fresh)
+				preservePoolMembers(child, fresh)
 			}
 		}
 	}
@@ -962,6 +1002,23 @@ func preservePoolHealthMonitor(oldPool *model.Node, fresh *model.Tree) {
 	}
 	replacement.DetailLoaded = true
 	replacement.Raw = oldMonitor.Raw
+}
+
+func preservePoolMembers(oldPool *model.Node, fresh *model.Tree) {
+	for _, oldMember := range oldPool.Children {
+		if oldMember.Type != model.TypeMember || !oldMember.DetailLoaded {
+			continue
+		}
+		replacement := fresh.Node(oldMember.ID)
+		if replacement == nil || replacement.Type != model.TypeMember {
+			continue
+		}
+		for key, value := range oldMember.Attrs {
+			replacement.SetAttr(key, value)
+		}
+		replacement.DetailLoaded = true
+		replacement.Raw = oldMember.Raw
+	}
 }
 
 // commitLBRefresh atomically publishes the detail and stats responses. Failed
@@ -1183,6 +1240,24 @@ func (m *Model) commitPoolRefresh() tea.Cmd {
 	if len(failures) > 0 {
 		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
 	}
+	return m.finishRefresh("")
+}
+
+func (m *Model) commitMemberRefresh() tea.Cmd {
+	if m.refreshDetail == nil {
+		return nil
+	}
+	detail := *m.refreshDetail
+	resourceID := detail.nodeID
+	delete(m.lbDetailLoading, resourceID)
+	if detail.err != nil {
+		m.lbDetailErr[resourceID] = detail.err.Error()
+		return m.finishRefresh("refresh incomplete (details: " + detail.err.Error() + ")")
+	}
+	delete(m.lbDetailErr, resourceID)
+	m.applyDetailResult(detail)
+	m.markFresh(resourceID, sectionDetails)
+	m.markFresh(resourceID, sectionRelated)
 	return m.finishRefresh("")
 }
 
@@ -1658,6 +1733,12 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 		delete(m.lbRelatedErr, id.ID)
 		delete(m.lbFreshness, id.ID)
 	}
+	if id.Type == model.TypeMember {
+		delete(m.lbDetailLoading, id.ID)
+		delete(m.lbDetailErr, id.ID)
+		delete(m.lbRelatedErr, id.ID)
+		delete(m.lbFreshness, id.ID)
+	}
 	if id.Type == model.TypeHealthMonitor {
 		delete(m.lbDetailLoading, id.ID)
 		delete(m.lbDetailErr, id.ID)
@@ -1778,7 +1859,7 @@ func (m *Model) applyFilters() {
 		}
 		res = append(res, e)
 	}
-	if m.isLBOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isHealthMonitorOverview() {
+	if m.isLBOverview() || m.isListenerOverview() || m.isPoolOverview() {
 		res = withRelatedGroupHeadings(res)
 	}
 	m.entries = res

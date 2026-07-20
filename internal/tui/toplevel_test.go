@@ -422,7 +422,7 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"DETAILS", "Primary VIP", "203.0.113.9", "198.51.100.7",
+		"VIP DETAILS", "Primary VIP", "203.0.113.9", "198.51.100.7", "PROJECT",
 		"octavia-vip-port", "port-9", "public-subnet", "subnet-9",
 		"public-network", "network-9", "sg-1, sg-2", "RELATED OBJECTS 1",
 	} {
@@ -430,31 +430,36 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 			t.Errorf("VIP detail missing %q:\n%s", want, view)
 		}
 	}
-	var firstGroupRow, secondGroupRow string
+	var portGroupRow, secondGroupRow string
 	for _, line := range strings.Split(view, "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case strings.HasPrefix(trimmed, "VIP") && strings.Contains(trimmed, "PORT"):
-			firstGroupRow = trimmed
+		case strings.Contains(trimmed, "Type") && strings.Contains(trimmed, "PORT"):
+			portGroupRow = trimmed
 		case strings.HasPrefix(trimmed, "SUBNET") && strings.Contains(trimmed, "NETWORK"):
 			secondGroupRow = trimmed
+		case trimmed == "VIP":
+			t.Fatalf("VIP details should not repeat a VIP subheader:\n%s", view)
 		}
 	}
-	if firstGroupRow == "" || secondGroupRow == "" {
+	if portGroupRow == "" || secondGroupRow == "" {
 		t.Fatalf("wide VIP details should use paired grouped columns:\n%s", view)
 	}
 	lines := strings.Split(view, "\n")
-	floatingAt, projectAt := -1, -1
+	floatingAt, projectHeadingAt, projectAt := -1, -1, -1
 	for i, line := range lines {
 		if strings.Contains(line, "Floating IP") {
 			floatingAt = i
+		}
+		if strings.TrimSpace(line) == "PROJECT" {
+			projectHeadingAt = i
 		}
 		if strings.Contains(line, "Project name") {
 			projectAt = i
 		}
 	}
-	if floatingAt < 0 || projectAt != floatingAt+2 || strings.TrimSpace(lines[floatingAt+1]) != "" {
-		t.Fatalf("project ownership should be separated from VIP addresses by a blank line:\n%s", view)
+	if floatingAt < 0 || projectHeadingAt != floatingAt+2 || projectAt != projectHeadingAt+1 {
+		t.Fatalf("project ownership should have its own subheader after the VIP addresses:\n%s", view)
 	}
 	if len(m.entries) != 1 || m.entries[0].kind != entRelated || m.entries[0].node.ID != "lb-1" {
 		t.Fatalf("VIP related rows = %+v, want only owning load balancer", m.entries)

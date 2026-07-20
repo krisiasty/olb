@@ -21,6 +21,7 @@ type styles struct {
 	refreshPaused lipgloss.Style
 	flash         lipgloss.Style
 	flashErr      lipgloss.Style
+	filterPrompt  lipgloss.Style
 	help          lipgloss.Style
 	helpKey       lipgloss.Style
 	overlay       lipgloss.Style
@@ -54,6 +55,7 @@ func newStyles() styles {
 		refreshPaused: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
 		flash:         lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 		flashErr:      lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		filterPrompt:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
 		help:          lipgloss.NewStyle().Foreground(subtle),
 		helpKey:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 		overlay:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1),

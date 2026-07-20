@@ -485,6 +485,10 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) openProject() (tea.Model, tea.Cmd) {
 	m.overlay = overlayProject
+	m.search.Prompt = "filter: "
+	m.search.PromptStyle = m.st.filterPrompt
+	m.search.SetValue("")
+	m.search.Blur()
 	if !m.backend.SwitchCapability().CanSwitch {
 		m.projects = nil
 		return m, nil
@@ -500,6 +504,26 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// Project filtering follows the same modal behavior as the main list: slash
+	// starts editing, Enter keeps the query, and Esc clears it. Navigation keys
+	// continue to operate on the project list whenever the input is inactive.
+	if m.search.Focused() {
+		switch {
+		case key.Matches(msg, m.keys.Cancel):
+			m.search.SetValue("")
+			m.search.Blur()
+			m.projCursor = m.firstProjectCursor()
+			return m, nil
+		case key.Matches(msg, m.keys.Accept):
+			m.search.Blur()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		m.projCursor = m.firstProjectCursor()
+		return m, cmd
+	}
+
 	fp := m.filteredProjects()
 	hasAllProjects := m.hasAllProjectsRow()
 	total := len(fp)
@@ -508,9 +532,21 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
+		if m.search.Value() != "" {
+			m.search.SetValue("")
+			m.projCursor = m.firstProjectCursor()
+			return m, nil
+		}
 		m.overlay = overlayNone
 		m.search.Blur()
 		return m, nil
+	case key.Matches(msg, m.keys.Quit):
+		m.overlay = overlayNone
+		m.search.Blur()
+		return m, nil
+	case key.Matches(msg, m.keys.Filter):
+		m.search.Focus()
+		return m, textinput.Blink
 	case key.Matches(msg, m.keys.Up):
 		if m.projCursor > 0 {
 			m.projCursor--
@@ -519,6 +555,30 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Down):
 		if m.projCursor < total-1 {
 			m.projCursor++
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.PageUp):
+		m.projCursor -= m.projectPageSize()
+		if m.projCursor < 0 {
+			m.projCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.PageDown):
+		m.projCursor += m.projectPageSize()
+		if m.projCursor >= total {
+			m.projCursor = total - 1
+		}
+		if m.projCursor < 0 {
+			m.projCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Home):
+		m.projCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.End):
+		m.projCursor = total - 1
+		if m.projCursor < 0 {
+			m.projCursor = 0
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Accept):
@@ -543,10 +603,7 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading, m.loadingWhat = true, "switching project"
 		return m, m.switchProjectCmd(fp[idx])
 	}
-	var cmd tea.Cmd
-	m.search, cmd = m.search.Update(msg)
-	m.projCursor = m.firstProjectCursor()
-	return m, cmd
+	return m, nil
 }
 
 func (m Model) openPicker() (tea.Model, tea.Cmd) {
@@ -554,6 +611,8 @@ func (m Model) openPicker() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.overlay = overlayPicker
+	m.search.Prompt = "search: "
+	m.search.PromptStyle = m.st.normal
 	m.search.SetValue("")
 	m.pickCursor = 0
 	for i, item := range m.pickerItems() {

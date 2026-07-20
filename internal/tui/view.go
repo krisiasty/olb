@@ -75,6 +75,35 @@ func (m Model) breadcrumbLine() string {
 		}
 		parts = append(parts, m.st.crumbSep.Render(marker)+rendered)
 	}
+	if m.filtering {
+		separator := m.st.crumbSep.Render("  ")
+		fullWidth := m.width
+		inputReserve := fullWidth / 2
+		if inputReserve < 12 {
+			inputReserve = 12
+		}
+		if inputReserve > 40 {
+			inputReserve = 40
+		}
+		breadcrumbWidth := fullWidth - lipgloss.Width(separator) - inputReserve
+		promptWidth := lipgloss.Width(m.filter.Prompt)
+		if breadcrumbWidth < 1 {
+			m.filter.Width = fullWidth - promptWidth
+			if m.filter.Width < 1 {
+				m.filter.Width = 1
+			}
+			return m.clip(m.filter.View())
+		}
+		m.width = breadcrumbWidth
+		breadcrumb := m.fitBreadcrumb(parts)
+		m.filter.Width = fullWidth - lipgloss.Width(breadcrumb) - lipgloss.Width(separator) - promptWidth
+		if m.filter.Width < 1 {
+			m.filter.Width = 1
+		}
+		line := breadcrumb + separator + m.filter.View()
+		m.width = fullWidth
+		return m.clip(line)
+	}
 	return m.fitBreadcrumb(parts)
 }
 
@@ -128,7 +157,7 @@ func (m Model) subtitleLine() string {
 		parts = append(parts, m.st.statusBar.Render("status="+m.status.String()))
 	}
 	if v := m.filter.Value(); v != "" && !m.filtering {
-		parts = append(parts, m.st.statusBar.Render("/"+v))
+		parts = append(parts, m.st.statusBar.Render("filter: "+v))
 	}
 	if !m.backend.SwitchCapability().CanSwitch {
 		parts = append(parts, m.st.statusBar.Render("project-switch: disabled"))
@@ -1561,7 +1590,7 @@ func (m Model) flashLine() string {
 
 func (m Model) hintLine() string {
 	if m.filtering {
-		return m.clip(m.filter.View())
+		return m.clip(m.st.help.Render("type to filter · enter apply · esc clear"))
 	}
 	parts := []string{
 		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n/o copy",
@@ -1621,7 +1650,7 @@ func (m Model) rawView() string {
 }
 
 func (m Model) projectView() string {
-	title := m.st.overlayTitle.Render("Switch project")
+	title := m.projectTitleLine()
 	cap := m.backend.SwitchCapability()
 	if !cap.CanSwitch {
 		body := m.st.flashErr.Render(cap.Reason) + "\n\n" + m.st.help.Render(cap.Suggest)
@@ -1655,15 +1684,8 @@ func (m Model) projectView() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(title + "\n")
-	b.WriteString(m.search.View() + "\n\n")
-	maxRows := m.height - 7
-	if !cap.GlobalAdmin {
-		maxRows--
-	}
-	if maxRows < 1 {
-		maxRows = 1
-	}
+	b.WriteString(title + "\n\n")
+	maxRows := m.projectPageSize()
 	start := 0
 	if m.projCursor >= maxRows {
 		start = m.projCursor - maxRows + 1
@@ -1698,8 +1720,42 @@ func (m Model) projectView() string {
 	if !cap.GlobalAdmin {
 		b.WriteString("\n" + m.st.help.Render("global view: restart with --global-admin"))
 	}
-	b.WriteString("\n" + m.st.help.Render("enter select · ↑/↓ move · type to filter · esc cancel"))
+	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
+	if m.search.Focused() {
+		footer = "type to filter · enter apply · esc clear"
+	}
+	b.WriteString("\n" + m.st.help.Render(footer))
 	return b.String()
+}
+
+func (m Model) projectTitleLine() string {
+	title := m.st.overlayTitle.Render("Switch project")
+	query := m.search.Value()
+	if !m.search.Focused() && query == "" {
+		return m.clip(title)
+	}
+
+	separator := m.st.crumbSep.Render("  ")
+	if m.search.Focused() {
+		inputWidth := m.width - lipgloss.Width(title) - lipgloss.Width(separator) - lipgloss.Width(m.search.Prompt)
+		if inputWidth < 1 {
+			inputWidth = 1
+		}
+		m.search.Width = inputWidth
+		return m.clip(title + separator + m.search.View())
+	}
+	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
+}
+
+func (m Model) projectPageSize() int {
+	rows := m.height - 6
+	if !m.backend.SwitchCapability().GlobalAdmin {
+		rows--
+	}
+	if rows < 1 {
+		return 1
+	}
+	return rows
 }
 
 func (m Model) allProjectsSelectable() bool {

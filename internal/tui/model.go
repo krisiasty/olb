@@ -212,9 +212,11 @@ func New(backend Backend, cfg Config) Model {
 		Frames: []string{"∙∙∙∙", "●∙∙∙", "∙●∙∙", "∙∙●∙", "∙∙∙●"},
 		FPS:    time.Second,
 	}
+	st := newStyles()
 
 	fi := textinput.New()
-	fi.Prompt = "/"
+	fi.Prompt = "filter: "
+	fi.PromptStyle = st.filterPrompt
 	fi.CharLimit = 128
 
 	se := textinput.New()
@@ -224,7 +226,7 @@ func New(backend Backend, cfg Config) Model {
 	m := Model{
 		backend:                backend,
 		keys:                   defaultKeys(),
-		st:                     newStyles(),
+		st:                     st,
 		cfg:                    cfg,
 		spinner:                sp,
 		statsSpinner:           statsSpinner,

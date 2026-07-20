@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/krisiasty/olb/internal/cache"
@@ -1166,12 +1165,14 @@ func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
 		m.overlay = overlayNone
 		return m, m.setFlash(msg.err.Error(), true)
 	}
+	m.search.Prompt = "filter: "
+	m.search.PromptStyle = m.st.filterPrompt
+	m.search.SetValue("")
+	m.search.Blur()
 	m.projects = msg.projects
 	m.projCursor = m.firstProjectCursor()
 	m.overlay = overlayProject
-	m.search.SetValue("")
-	m.search.Focus()
-	return m, textinput.Blink
+	return m, nil
 }
 
 func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {

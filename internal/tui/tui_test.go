@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1619,9 +1620,28 @@ func TestFilterAndStatus(t *testing.T) {
 	if !m.filtering {
 		t.Fatal("/ should focus the filter")
 	}
+	top := m.breadcrumbLine()
+	plainTop := ansiRE.ReplaceAllString(top, "")
+	if !strings.Contains(plainTop, "load balancers  filter: ") {
+		t.Fatalf("focused filter missing from top line: %q", plainTop)
+	}
+	if !strings.Contains(top, m.st.filterPrompt.Render("filter: ")) {
+		t.Fatalf("filter prompt is not rendered with the yellow prompt style: %q", top)
+	}
+	if hint := ansiRE.ReplaceAllString(m.hintLine(), ""); !strings.Contains(hint, "type to filter · enter apply · esc clear") {
+		t.Fatalf("focused filter help = %q", hint)
+	}
 	m = upd(t, m, press("lb2"))
 	if len(m.entries) != 1 || m.entries[0].lb.ID != "lb-2" {
 		t.Errorf("filter lb2 should leave one match; got %v", labels(m))
+	}
+	if top := ansiRE.ReplaceAllString(m.breadcrumbLine(), ""); !strings.Contains(top, "filter: lb2") {
+		t.Fatalf("typed filter missing from top line: %q", top)
+	}
+	narrow := m
+	narrow.width = 24
+	if top := narrow.breadcrumbLine(); !strings.Contains(ansiRE.ReplaceAllString(top, ""), "filter:") || lipgloss.Width(top) > narrow.width {
+		t.Fatalf("narrow filter line is missing or too wide: %q", ansiRE.ReplaceAllString(top, ""))
 	}
 	m = upd(t, m, press("esc")) // esc clears the filter
 	if m.filtering || m.filter.Value() != "" {
@@ -1658,8 +1678,90 @@ func TestProjectSwitcherEnabled(t *testing.T) {
 	if m.overlay != overlayProject || len(m.projects) != 2 {
 		t.Fatalf("p should load projects, got overlay=%v projects=%d", m.overlay, len(m.projects))
 	}
-	m = upd(t, m, press("down"))
+	if m.search.Focused() {
+		t.Fatal("project filtering should be inactive until / is pressed")
+	}
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	if first := strings.Split(plain, "\n")[0]; first != "Switch project" {
+		t.Fatalf("inactive project title = %q, want no filter prompt", first)
+	}
+	if strings.Contains(plain, "search:") {
+		t.Fatalf("project selector should not render a search prompt:\n%s", plain)
+	}
+	m = upd(t, m, press("ignored"))
+	if m.search.Value() != "" || m.projCursor != 0 {
+		t.Fatalf("ordinary key changed inactive project filter or cursor: query=%q cursor=%d", m.search.Value(), m.projCursor)
+	}
+
+	m = upd(t, m, press("/"))
+	if !m.search.Focused() {
+		t.Fatal("/ should activate project filtering")
+	}
+	view := m.View()
+	first := strings.Split(view, "\n")[0]
+	if plainFirst := ansiRE.ReplaceAllString(first, ""); !strings.Contains(plainFirst, "Switch project  filter: ") {
+		t.Fatalf("focused project filter missing from title: %q", plainFirst)
+	}
+	if !strings.Contains(first, m.st.filterPrompt.Render("filter: ")) {
+		t.Fatalf("project filter prompt is not yellow: %q", first)
+	}
+	m = upd(t, m, press("beta"))
+	if got := len(m.filteredProjects()); got != 1 {
+		t.Fatalf("filtered project count = %d, want 1", got)
+	}
+	m = upd(t, m, press("enter"))
+	if m.search.Focused() || m.search.Value() != "beta" || m.overlay != overlayProject {
+		t.Fatalf("enter should apply and retain project filter: focused=%v query=%q overlay=%v", m.search.Focused(), m.search.Value(), m.overlay)
+	}
 	m = upd(t, m, press("esc"))
+	if m.search.Value() != "" || m.overlay != overlayProject {
+		t.Fatalf("first esc should clear retained project filter: query=%q overlay=%v", m.search.Value(), m.overlay)
+	}
+	m = upd(t, m, press("esc"))
+	if m.overlay != overlayNone {
+		t.Fatalf("second esc should close project selector, overlay=%v", m.overlay)
+	}
+}
+
+func TestProjectSwitcherPageAndBoundaryNavigation(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m.height = 12 // five project rows are visible without the global-admin hint
+	m = updExec(t, m, press("p"))
+	m.projects = make([]osclient.ProjectInfo, 13)
+	for i := range m.projects {
+		m.projects[i] = osclient.ProjectInfo{ID: fmt.Sprintf("p-%02d", i), Name: fmt.Sprintf("project-%02d", i)}
+	}
+	m.projCursor = 0
+	last := len(m.projects) - 1
+
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.projCursor != 5 {
+		t.Fatalf("page down cursor = %d, want 5", m.projCursor)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.projCursor != last {
+		t.Fatalf("page down past end cursor = %d, want %d", m.projCursor, last)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if want := last - 5; m.projCursor != want {
+		t.Fatalf("page up cursor = %d, want %d", m.projCursor, want)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})
+	if m.projCursor != 0 {
+		t.Fatalf("home cursor = %d, want 0", m.projCursor)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.projCursor != last {
+		t.Fatalf("end cursor = %d, want %d", m.projCursor, last)
+	}
+
+	m = upd(t, m, press("/"))
+	m = upd(t, m, press("project-10"))
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	if m.search.Position() != 0 || m.projCursor != m.firstProjectCursor() {
+		t.Fatalf("home should edit focused filter, position=%d project cursor=%d", m.search.Position(), m.projCursor)
+	}
 }
 
 func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {

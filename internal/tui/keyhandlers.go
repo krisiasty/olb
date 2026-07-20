@@ -260,9 +260,11 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	}
 	m.refreshLBID = lbID
 	m.refreshDetail = nil
+	m.refreshHealthMonitor = nil
+	m.refreshMonitorExpected = false
 	m.refreshStats = nil
 	m.refreshListenerStats = nil
-	return m, m.getTreeCmd(lbID, m.loc.id, false)
+	return m, m.refreshTreeCmd(lbID, m.loc.id)
 }
 
 func (m *Model) moveCursor(delta int) {

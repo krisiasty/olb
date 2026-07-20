@@ -10,6 +10,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/v2/openstack/networking/v2/extensions/layer3/floatingips"
+	"github.com/krisiasty/olb/internal/model"
 )
 
 func TestListLoadBalancersSendsSelectedProjectFilterToOctavia(t *testing.T) {
@@ -49,6 +50,91 @@ func TestFormatAPITimeUsesUTCAndOmitsZeroValue(t *testing.T) {
 	value := time.Date(2026, time.July, 19, 13, 20, 45, 987_000_000, time.FixedZone("CEST", 2*60*60))
 	if got, want := formatAPITime(value), "2026-07-19T11:20:45Z"; got != want {
 		t.Fatalf("formatted API time = %q, want %q", got, want)
+	}
+}
+
+func TestFetchPoolDetailReturnsOverviewAttributes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/lbaas/pools/pool-1" {
+			t.Errorf("request path = %q, want pool detail endpoint", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"pool":{
+			"id":"pool-1","name":"web","project_id":"project-1",
+			"description":"Web backends","protocol":"HTTP","lb_algorithm":"ROUND_ROBIN",
+			"admin_state_up":true,"members":[{"id":"member-1"}],
+			"listeners":[{"id":"listener-1"}],"healthmonitor_id":"monitor-1",
+			"subnet_id":"subnet-1","session_persistence":{"type":"APP_COOKIE","cookie_name":"SESSION"},
+			"tls_enabled":true,"tls_versions":["TLSv1.2","TLSv1.3"],
+			"alpn_protocols":["h2","http/1.1"],"tls_ciphers":"cipher-list",
+			"tags":["blue","api"],"created_at":"2026-07-18T10:15:30Z",
+			"updated_at":"2026-07-19T11:20:45Z"
+		}}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{lb: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2/",
+	}}
+	c := &Clients{services: sc, activeServices: sc}
+	node := model.NewNode(model.TypePool, "pool-1", "web")
+	node.OwningLBID = "lb-1"
+	result, err := c.FetchDetail(context.Background(), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"project_id": "project-1", "description": "Web backends",
+		"protocol": "HTTP", "lb_algorithm": "ROUND_ROBIN", "admin_state_up": "true",
+		"member_count": "1", "listener_count": "1", "healthmonitor_id": "monitor-1",
+		"subnet_id": "subnet-1", "session_persistence": "APP_COOKIE",
+		"persistence_cookie": "SESSION", "tls_enabled": "true",
+		"tls_versions": "TLSv1.2, TLSv1.3", "alpn_protocols": "h2, http/1.1",
+		"tls_ciphers": "cipher-list", "tags": "blue, api",
+		"created_at": "2026-07-18T10:15:30Z", "updated_at": "2026-07-19T11:20:45Z",
+	}
+	for key, value := range want {
+		if result.Attrs[key] != value {
+			t.Errorf("pool attribute %s = %q, want %q", key, result.Attrs[key], value)
+		}
+	}
+}
+
+func TestFetchHealthMonitorDetailReturnsSummaryAttributes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/lbaas/healthmonitors/hm-1" {
+			t.Errorf("request path = %q, want health-monitor detail endpoint", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"healthmonitor":{
+			"id":"hm-1","name":"api-health","type":"HTTP","delay":5,"timeout":3,
+			"max_retries":2,"max_retries_down":3,"admin_state_up":true,
+			"http_method":"GET","url_path":"/health","expected_codes":"200"
+		}}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{lb: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2/",
+	}}
+	c := &Clients{services: sc, activeServices: sc}
+	node := model.NewNode(model.TypeHealthMonitor, "hm-1", "api-health")
+	node.OwningLBID = "lb-1"
+	result, err := c.FetchDetail(context.Background(), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"type": "HTTP", "delay": "5", "timeout": "3",
+		"max_retries": "2", "max_retries_down": "3", "admin_state_up": "true",
+		"http_method": "GET", "url_path": "/health", "expected_codes": "200",
+	}
+	for key, value := range want {
+		if result.Attrs[key] != value {
+			t.Errorf("health-monitor attribute %s = %q, want %q", key, result.Attrs[key], value)
+		}
 	}
 }
 

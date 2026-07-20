@@ -368,12 +368,44 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		if err != nil {
 			return res, err
 		}
+		raw := innerRaw(r.Body, "pool")
 		res.Attrs["lb_algorithm"] = p.LBMethod
 		res.Attrs["protocol"] = p.Protocol
+		res.Attrs["admin_state_up"] = boolStr(p.AdminStateUp)
+		res.Attrs["project_id"] = p.ProjectID
+		res.Attrs["member_count"] = fmt.Sprintf("%d", len(p.Members))
+		res.Attrs["listener_count"] = fmt.Sprintf("%d", len(p.Listeners))
+		res.Attrs["healthmonitor_id"] = p.MonitorID
+		res.Attrs["subnet_id"] = p.SubnetID
+		res.Attrs["tls_enabled"] = boolStr(p.TLSEnabled)
+		if description := strings.TrimSpace(p.Description); description != "" {
+			res.Attrs["description"] = description
+		}
 		if p.Persistence.Type != "" {
 			res.Attrs["session_persistence"] = p.Persistence.Type
 		}
-		res.Raw = innerRaw(r.Body, "pool")
+		if p.Persistence.CookieName != "" {
+			res.Attrs["persistence_cookie"] = p.Persistence.CookieName
+		}
+		if len(p.TLSVersions) > 0 {
+			res.Attrs["tls_versions"] = strings.Join(p.TLSVersions, ", ")
+		}
+		if len(p.ALPNProtocols) > 0 {
+			res.Attrs["alpn_protocols"] = strings.Join(p.ALPNProtocols, ", ")
+		}
+		if p.TLSCiphers != "" {
+			res.Attrs["tls_ciphers"] = p.TLSCiphers
+		}
+		if len(p.Tags) > 0 {
+			res.Attrs["tags"] = strings.Join(p.Tags, ", ")
+		}
+		if created := rawString(raw, "created_at"); created != "" {
+			res.Attrs["created_at"] = created
+		}
+		if updated := rawString(raw, "updated_at"); updated != "" {
+			res.Attrs["updated_at"] = updated
+		}
+		res.Raw = raw
 
 	case model.TypeMember:
 		poolID := parentID(n)
@@ -401,6 +433,17 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 		res.Attrs["delay"] = fmt.Sprintf("%d", m.Delay)
 		res.Attrs["timeout"] = fmt.Sprintf("%d", m.Timeout)
 		res.Attrs["max_retries"] = fmt.Sprintf("%d", m.MaxRetries)
+		res.Attrs["max_retries_down"] = fmt.Sprintf("%d", m.MaxRetriesDown)
+		res.Attrs["admin_state_up"] = boolStr(m.AdminStateUp)
+		if m.HTTPMethod != "" {
+			res.Attrs["http_method"] = m.HTTPMethod
+		}
+		if m.URLPath != "" {
+			res.Attrs["url_path"] = m.URLPath
+		}
+		if m.ExpectedCodes != "" {
+			res.Attrs["expected_codes"] = m.ExpectedCodes
+		}
 		res.Raw = innerRaw(r.Body, "healthmonitor")
 
 	case model.TypeL7Policy:

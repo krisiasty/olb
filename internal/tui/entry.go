@@ -252,11 +252,49 @@ func locationEntries(n *model.Node) []entry {
 		}
 		return append(entries, related...)
 	}
+	if n.Type == model.TypePool {
+		entries := make([]entry, 0, len(n.Children)+len(n.Refs)+len(n.BackRefs)+1)
+		if n.Parent != nil && n.Parent.Type == model.TypeLoadBalancer {
+			lb := n.Parent
+			entries = append(entries, entry{
+				kind: entRelated, node: lb, label: lb.Label(),
+				oper: lb.OperatingStatus, prov: lb.ProvisioningStatus, extra: inlineAttrs(lb),
+			})
+		}
+		related := nodeEntries(n)
+		for i := range related {
+			if related[i].kind == entBackRef && related[i].node != nil && related[i].node.Type == model.TypeListener {
+				related[i].kind = entRelated
+			}
+		}
+		sort.SliceStable(related, func(i, j int) bool {
+			return poolRelatedObjectRank(related[i]) < poolRelatedObjectRank(related[j])
+		})
+		return append(entries, related...)
+	}
 	return nodeEntries(n)
 }
 
-// withRelatedGroupHeadings adds compact, non-selectable boundaries to the LB
-// overview after filtering, so each count reflects only the visible rows.
+func poolRelatedObjectRank(e entry) int {
+	if e.node == nil {
+		return 5
+	}
+	switch e.node.Type {
+	case model.TypeListener:
+		return 0
+	case model.TypeL7Policy:
+		return 1
+	case model.TypeHealthMonitor:
+		return 2
+	case model.TypeMember:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// withRelatedGroupHeadings adds compact, non-selectable boundaries to overview
+// related-object lists after filtering, so each count reflects visible rows.
 func withRelatedGroupHeadings(entries []entry) []entry {
 	if len(entries) == 0 {
 		return nil
@@ -289,9 +327,13 @@ func relatedObjectGroup(e entry) (key, title string) {
 		if e.node != nil {
 			switch e.node.Type {
 			case model.TypeLoadBalancer:
-				return "load-balancer", "LOAD BALANCER"
+				return "load-balancers", "LOAD BALANCERS"
+			case model.TypeListener:
+				return "listeners", "LISTENERS"
 			case model.TypePool:
 				return "pools", "POOLS"
+			case model.TypeL7Policy:
+				return "l7-policies", "L7 POLICIES"
 			}
 		}
 		return "related", "RELATED"
@@ -308,6 +350,10 @@ func relatedObjectGroup(e entry) (key, title string) {
 				return "amphorae", "AMPHORAE"
 			case model.TypeL7Policy:
 				return "l7-policies", "L7 POLICIES"
+			case model.TypeHealthMonitor:
+				return "health-monitors", "HEALTH MONITORS"
+			case model.TypeMember:
+				return "members", "MEMBERS"
 			}
 		}
 		return "other", "OTHER"
@@ -317,6 +363,14 @@ func relatedObjectGroup(e entry) (key, title string) {
 		}
 		return "references", "REFERENCES"
 	case entBackRef:
+		if e.node != nil {
+			switch e.node.Type {
+			case model.TypeListener:
+				return "listeners", "LISTENERS"
+			case model.TypeL7Policy:
+				return "l7-policies", "L7 POLICIES"
+			}
+		}
 		return "referenced-by", "REFERENCED BY"
 	default:
 		return "other", "OTHER"
@@ -463,7 +517,7 @@ func inlineAttrs(n *model.Node) string {
 	case model.TypeMember:
 		return joinAttrs(n, "address", "port")
 	case model.TypeHealthMonitor:
-		return joinAttrs(n, "type")
+		return healthMonitorSummary(n)
 	case model.TypeL7Policy:
 		return joinAttrs(n, "action")
 	case model.TypeL7Rule:
@@ -471,6 +525,37 @@ func inlineAttrs(n *model.Node) string {
 	default:
 		return ""
 	}
+}
+
+func healthMonitorSummary(n *model.Node) string {
+	parts := make([]string, 0, 6)
+	monitorType := strings.TrimSpace(n.Attrs["type"])
+	if monitorType != "" {
+		parts = append(parts, monitorType)
+	}
+	if delay := strings.TrimSpace(n.Attrs["delay"]); delay != "" {
+		parts = append(parts, "every "+delay+"s")
+	}
+	if timeout := strings.TrimSpace(n.Attrs["timeout"]); timeout != "" {
+		parts = append(parts, "timeout "+timeout+"s")
+	}
+	up, down := strings.TrimSpace(n.Attrs["max_retries"]), strings.TrimSpace(n.Attrs["max_retries_down"])
+	if up != "" && down != "" {
+		parts = append(parts, "up/down "+up+"/"+down)
+	}
+	if strings.EqualFold(monitorType, "HTTP") || strings.EqualFold(monitorType, "HTTPS") {
+		request := strings.TrimSpace(strings.TrimSpace(n.Attrs["http_method"]) + " " + strings.TrimSpace(n.Attrs["url_path"]))
+		if expected := strings.TrimSpace(n.Attrs["expected_codes"]); request != "" && expected != "" {
+			request += " → " + expected
+		}
+		if request != "" {
+			parts = append(parts, request)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(n.Attrs["admin_state_up"]), "false") {
+		parts = append(parts, "disabled")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func loadBalancerSummary(n *model.Node) string {

@@ -36,10 +36,11 @@ const sampleStatus = `
 }}}`
 
 type fakeBackend struct {
-	cap         osclient.SwitchCapability
-	all         bool
-	telemetry   *telemetry.Collector
-	amphoraeErr error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
+	cap          osclient.SwitchCapability
+	all          bool
+	telemetry    *telemetry.Collector
+	amphoraeErr  error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
+	lastTreeHint *model.LBMeta
 }
 
 func newTree() *model.Tree {
@@ -77,7 +78,8 @@ func (f *fakeBackend) ListLoadBalancers(context.Context) ([]osclient.LB, error) 
 	return lbs, nil
 }
 
-func (f *fakeBackend) GetTree(_ context.Context, lbID string, _ *model.LBMeta) (*model.Tree, error) {
+func (f *fakeBackend) GetTree(_ context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error) {
+	f.lastTreeHint = hint
 	return newTree(), nil
 }
 
@@ -114,6 +116,29 @@ func (f *fakeBackend) FetchDetail(_ context.Context, n *model.Node) (osclient.De
 		res.Attrs["certificate_not_before"] = "2026-06-01T00:00:00Z"
 		res.Attrs["certificate_not_after"] = "2026-08-01T00:00:00Z"
 		res.Attrs["sni_certificate_count"] = "0"
+	case model.TypePool:
+		res.Attrs["protocol"] = "HTTP"
+		res.Attrs["lb_algorithm"] = "ROUND_ROBIN"
+		res.Attrs["admin_state_up"] = "true"
+		res.Attrs["project_id"] = "p1"
+		res.Attrs["description"] = "Web application backends"
+		res.Attrs["member_count"] = "1"
+		res.Attrs["listener_count"] = "1"
+		res.Attrs["healthmonitor_id"] = "hm-1"
+		res.Attrs["session_persistence"] = "HTTP_COOKIE"
+		res.Attrs["tls_enabled"] = "false"
+		res.Attrs["created_at"] = "2026-07-18T10:15:30Z"
+		res.Attrs["updated_at"] = "2026-07-19T11:20:45Z"
+	case model.TypeHealthMonitor:
+		res.Attrs["type"] = "HTTP"
+		res.Attrs["delay"] = "5"
+		res.Attrs["timeout"] = "3"
+		res.Attrs["max_retries"] = "2"
+		res.Attrs["max_retries_down"] = "3"
+		res.Attrs["admin_state_up"] = "true"
+		res.Attrs["http_method"] = "GET"
+		res.Attrs["url_path"] = "/health"
+		res.Attrs["expected_codes"] = "200"
 	case model.TypeL7Policy:
 		res.IsL7Policy = true
 		res.L7Action = "REDIRECT_TO_POOL"
@@ -560,6 +585,23 @@ func TestAutomaticFullRefreshAvoidsOverlapAndCompletesSilently(t *testing.T) {
 	}
 }
 
+func TestRefreshTreeDoesNotReusePotentiallyStaleListMetadata(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	backend := m.backend.(*fakeBackend)
+	if msg := m.getTreeCmd("lb-1", model.Identity{}, false)(); msg == nil {
+		t.Fatal("initial tree command returned no message")
+	}
+	if backend.lastTreeHint == nil {
+		t.Fatal("initial tree load should reuse current list metadata")
+	}
+	if msg := m.refreshTreeCmd("lb-1", model.Identity{})(); msg == nil {
+		t.Fatal("refresh tree command returned no message")
+	}
+	if backend.lastTreeHint != nil {
+		t.Fatal("refresh tree reused stale list metadata instead of fetching current LB facts")
+	}
+}
+
 func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
 	root := model.NewNode(model.TypeLoadBalancer, "lb-1", "lb")
 	root.Children = []*model.Node{
@@ -732,15 +774,16 @@ func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 		t.Fatalf("expected pool location, got %+v", m.loc.node)
 	}
 
-	// Standing on the pool, a back-reference answers "who points at me?".
-	var hasBackref bool
+	// Standing on the pool, the incoming listener association is presented like
+	// the regular listener row in the load-balancer overview.
+	var hasRelatedListener bool
 	for _, e := range m.entries {
-		if e.kind == entBackRef {
-			hasBackref = true
+		if e.kind == entRelated && e.node != nil && e.node.Type == model.TypeListener {
+			hasRelatedListener = true
 		}
 	}
-	if !hasBackref {
-		t.Errorf("pool should show a back-reference; entries=%v", labels(m))
+	if !hasRelatedListener {
+		t.Errorf("pool should show a related listener; entries=%v", labels(m))
 	}
 }
 
@@ -877,11 +920,329 @@ func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
 	for _, want := range []string{
 		"DETAILS", "STATS", "HTTPS (TLS termination)", "Total connections", "80",
 		"Certificate", "api.example.test", "Expires", "13d remaining",
-		"RELATED OBJECTS", "LOAD BALANCER 1", "POOLS 1", "● Pool", "L7 POLICIES 1",
+		"RELATED OBJECTS", "LOAD BALANCERS 1", "POOLS 1", "● Pool", "L7 POLICIES 1",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("listener overview missing %q:\n%s", want, plain)
 		}
+	}
+}
+
+func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("3"))
+	m = updExec(t, m, press("enter"))
+	listener := m.loc.node
+	if listener == nil || listener.Type != model.TypeListener {
+		t.Fatalf("expected listener overview, got %+v", listener)
+	}
+	detail, err := m.backend.FetchDetail(context.Background(), listener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: listener.ID, lbID: listener.OwningLBID,
+		res: detail, intent: intentOverview,
+	})
+	stats, err := m.backend.ListenerStats(context.Background(), listener.OwningLBID, listener.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerStatsMsg{
+		lbID: listener.OwningLBID, listenerID: listener.ID,
+		stats: stats, sampledAt: m.clock(),
+	})
+	pools, err := m.backend.ListPoolSummaries(context.Background(), listener.OwningLBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, poolSummariesMsg{lbID: listener.OwningLBID, items: pools})
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("listener refresh did not request a fresh status tree")
+	}
+	m = upd(t, m, treeMsg{lbID: listener.OwningLBID, tree: newTree()})
+	refreshedListener := m.loc.node
+	if !m.refreshPoolsExpected || !m.lbPoolsLoading[refreshedListener.OwningLBID] {
+		t.Fatal("listener refresh did not request related pool summaries")
+	}
+	refreshedDetail, err := m.backend.FetchDetail(context.Background(), refreshedListener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedStats, err := m.backend.ListenerStats(context.Background(), refreshedListener.OwningLBID, refreshedListener.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedListener.ID, lbID: refreshedListener.OwningLBID,
+		res: refreshedDetail, intent: intentOverview, refresh: true,
+	})
+	m = upd(t, m, listenerStatsMsg{
+		lbID: refreshedListener.OwningLBID, listenerID: refreshedListener.ID,
+		stats: refreshedStats, sampledAt: m.clock(), refresh: true,
+	})
+	if !m.refreshing {
+		t.Fatal("listener refresh completed before related pool summaries arrived")
+	}
+	m = upd(t, m, poolSummariesMsg{
+		lbID: refreshedListener.OwningLBID, refresh: true,
+		items: map[string]osclient.PoolSummary{
+			"pool-1": {
+				ID: "pool-1", Name: "web", Protocol: "TCP", LBMethod: "LEAST_CONNECTIONS",
+				MemberCount: 4, ListenerIDs: []string{"lsn-1"},
+				ProvisioningStatus: "ACTIVE", OperatingStatus: "ONLINE",
+			},
+		},
+	})
+
+	line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "● Pool")
+	for _, want := range []string{"TCP", "least connections", "4 members"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("refreshed listener pool row missing %q: %q", want, line)
+		}
+	}
+	if m.refreshing || m.loading {
+		t.Fatal("listener refresh did not complete after pool summaries arrived")
+	}
+}
+
+func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("4"))
+	m = updExec(t, m, press("enter"))
+	if m.loc.node == nil || m.loc.node.Type != model.TypePool {
+		t.Fatalf("expected pool detail location, got %+v", m.loc.node)
+	}
+	if !m.lbDetailLoading[m.loc.node.ID] {
+		t.Fatal("opening a pool should load its full details")
+	}
+	monitor := poolHealthMonitor(m.loc.node)
+	if monitor == nil || !m.lbDetailLoading[monitor.ID] {
+		t.Fatal("opening a pool should load its health-monitor summary")
+	}
+	result, err := m.backend.FetchDetail(context.Background(), m.loc.node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: m.loc.node.ID, lbID: m.loc.node.OwningLBID,
+		res: result, intent: intentOverview,
+	})
+	monitorResult, err := m.backend.FetchDetail(context.Background(), monitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: monitor.ID, lbID: monitor.OwningLBID,
+		res: monitorResult, intent: intentOverview,
+	})
+	listeners, err := m.backend.ListListenerSummaries(context.Background(), m.loc.node.OwningLBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: m.loc.node.OwningLBID, items: listeners})
+
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{
+		"DETAILS", "POOL", "CONFIGURATION", "web", "pool-1",
+		"Web application backends", "HTTP", "ROUND_ROBIN", "HTTP_COOKIE",
+		"RELATED OBJECTS 4", "LOAD BALANCERS 1", "LISTENERS 1",
+		"HEALTH MONITORS 1", "MEMBERS 1", "hm", "10.0.0.5:80",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("pool overview missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "STATS") {
+		t.Fatalf("pool overview should not render a stats panel:\n%s", view)
+	}
+	for _, field := range m.poolDetailGroups()[1].fields {
+		if field.label == "Health monitor" || field.label == "Member subnet" {
+			t.Fatalf("pool configuration should not render %q", field.label)
+		}
+	}
+	if line := lineContaining(view, "POOL"); !strings.Contains(line, "CONFIGURATION") {
+		t.Fatalf("wide pool details should use paired columns: %q\n%s", line, view)
+	}
+	if line := lineContaining(view, "● Health monitor"); !strings.Contains(line, "hm") ||
+		!strings.Contains(line, "HTTP · every 5s · timeout 3s · up/down 2/3 · GET /health → 200") {
+		t.Fatalf("health-monitor row should show its name and key configuration: %q\n%s", line, view)
+	}
+	if line := lineContaining(view, "● Member"); !strings.Contains(line, "10.0.0.5:80") {
+		t.Fatalf("member row should show its name and endpoint: %q\n%s", line, view)
+	}
+	if line := lineContaining(view, "● Listener"); !strings.Contains(line, "http") ||
+		!strings.Contains(line, "HTTPS/8443") || strings.Contains(line, "listener:") || strings.Contains(line, "←") {
+		t.Fatalf("pool listener should use the load-balancer overview format: %q\n%s", line, view)
+	}
+}
+
+func TestPoolRefreshReloadsAllEnrichedRelatedData(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("4"))
+	m = updExec(t, m, press("enter"))
+	pool := m.loc.node
+	if pool == nil {
+		t.Fatal("expected pool")
+	}
+	monitor := poolHealthMonitor(pool)
+	if monitor == nil {
+		t.Fatal("expected pool and health monitor")
+	}
+
+	poolResult, err := m.backend.FetchDetail(context.Background(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: pool.ID, lbID: pool.OwningLBID,
+		res: poolResult, intent: intentOverview,
+	})
+	monitorResult, err := m.backend.FetchDetail(context.Background(), monitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: monitor.ID, lbID: monitor.OwningLBID,
+		res: monitorResult, intent: intentOverview,
+	})
+	listeners, err := m.backend.ListListenerSummaries(context.Background(), pool.OwningLBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: pool.OwningLBID, items: listeners})
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("pool refresh did not request a fresh status tree")
+	}
+	m = upd(t, m, treeMsg{lbID: pool.OwningLBID, tree: newTree()})
+	refreshedPool := m.loc.node
+	refreshedMonitor := poolHealthMonitor(refreshedPool)
+	if refreshedMonitor == nil || !refreshedMonitor.DetailLoaded {
+		t.Fatal("tree refresh discarded loaded health-monitor detail")
+	}
+	if !m.refreshMonitorExpected || !m.refreshListenersExpected ||
+		!m.lbDetailLoading[refreshedMonitor.ID] || !m.lbListenersLoading[pool.OwningLBID] {
+		t.Fatal("pool refresh did not request health-monitor detail and listener summaries")
+	}
+	oldLine := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "● Health monitor")
+	if !strings.Contains(oldLine, "every 5s") {
+		t.Fatalf("pool refresh did not retain old monitor data while loading: %q", oldLine)
+	}
+	refreshedPoolResult, err := m.backend.FetchDetail(context.Background(), refreshedPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedPool.ID, lbID: refreshedPool.OwningLBID,
+		res: refreshedPoolResult, intent: intentOverview, refresh: true,
+	})
+	if !m.refreshing {
+		t.Fatal("pool refresh completed before health-monitor and listener data arrived")
+	}
+	refreshedMonitorResult, err := m.backend.FetchDetail(context.Background(), refreshedMonitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedMonitorResult.Attrs["delay"] = "10"
+	refreshedMonitorResult.Attrs["timeout"] = "4"
+	refreshedMonitorResult.Attrs["max_retries"] = "2"
+	refreshedMonitorResult.Attrs["max_retries_down"] = "5"
+	refreshedMonitorResult.Attrs["url_path"] = "/ready"
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedMonitor.ID, lbID: refreshedMonitor.OwningLBID,
+		res: refreshedMonitorResult, intent: intentOverview, refresh: true,
+	})
+	if !m.refreshing {
+		t.Fatal("pool refresh completed before listener summaries arrived")
+	}
+	m = upd(t, m, listenerSummariesMsg{
+		lbID: refreshedPool.OwningLBID, refresh: true,
+		items: map[string]osclient.ListenerSummary{
+			"lsn-1": {ID: "lsn-1", Protocol: "TCP", ProtocolPort: 9090},
+		},
+	})
+
+	line := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "● Health monitor")
+	want := "HTTP · every 10s · timeout 4s · up/down 2/5 · GET /ready → 200"
+	if !strings.Contains(line, want) {
+		t.Fatalf("health-monitor summary after refresh = %q, want %q", line, want)
+	}
+	listenerLine := lineContaining(ansiRE.ReplaceAllString(m.View(), ""), "● Listener")
+	if !strings.Contains(listenerLine, "TCP/9090") {
+		t.Fatalf("listener summary after pool refresh = %q, want refreshed endpoint", listenerLine)
+	}
+	if m.refreshing || m.loading {
+		t.Fatal("pool refresh did not complete after all required responses arrived")
+	}
+}
+
+func TestAutomaticPoolRefreshUsesCompleteRefreshTransaction(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("4"))
+	m = updExec(t, m, press("enter"))
+	pool := m.loc.node
+	if pool == nil {
+		t.Fatal("expected pool")
+	}
+	monitor := poolHealthMonitor(pool)
+	if monitor == nil {
+		t.Fatal("expected pool and health monitor")
+	}
+	poolResult, err := m.backend.FetchDetail(context.Background(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{nodeID: pool.ID, lbID: pool.OwningLBID, res: poolResult, intent: intentOverview})
+	monitorResult, err := m.backend.FetchDetail(context.Background(), monitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{nodeID: monitor.ID, lbID: monitor.OwningLBID, res: monitorResult, intent: intentOverview})
+	listeners, err := m.backend.ListListenerSummaries(context.Background(), pool.OwningLBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: pool.OwningLBID, items: listeners})
+
+	next, cmd := m.Update(autoFullTickMsg{generation: m.autoGeneration})
+	m = next.(Model)
+	if cmd == nil || !m.refreshing || !m.refreshAutomatic {
+		t.Fatal("automatic full tick did not start a pool refresh")
+	}
+	m = upd(t, m, treeMsg{lbID: pool.OwningLBID, tree: newTree()})
+	refreshedPool := m.loc.node
+	refreshedMonitor := poolHealthMonitor(refreshedPool)
+	if !m.refreshMonitorExpected || !m.refreshListenersExpected {
+		t.Fatal("automatic pool refresh omitted enriched related data")
+	}
+	refreshedPoolResult, err := m.backend.FetchDetail(context.Background(), refreshedPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshedMonitorResult, err := m.backend.FetchDetail(context.Background(), refreshedMonitor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedPool.ID, lbID: refreshedPool.OwningLBID,
+		res: refreshedPoolResult, intent: intentOverview, refresh: true,
+	})
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedMonitor.ID, lbID: refreshedMonitor.OwningLBID,
+		res: refreshedMonitorResult, intent: intentOverview, refresh: true,
+	})
+	m = upd(t, m, listenerSummariesMsg{lbID: refreshedPool.OwningLBID, items: listeners, refresh: true})
+	if m.refreshing || m.refreshAutomatic {
+		t.Fatal("automatic pool refresh did not complete")
+	}
+	if m.flash == "refreshed" {
+		t.Fatal("successful automatic pool refresh should remain silent")
 	}
 }
 
@@ -1723,6 +2084,17 @@ func TestProjectSwitcherEnabled(t *testing.T) {
 	}
 }
 
+func TestProjectSwitcherStartsAtCurrentProject(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = upd(t, m, projectsMsg{projects: []osclient.ProjectInfo{
+		{ID: "p2", Name: "beta"},
+		{ID: "p1", Name: "alpha"},
+	}})
+	if m.projCursor != 1 {
+		t.Fatalf("initial project cursor = %d, want current project row 1", m.projCursor)
+	}
+}
+
 func TestProjectSwitcherPageAndBoundaryNavigation(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m.height = 12 // five project rows are visible without the global-admin hint
@@ -1940,9 +2312,10 @@ func TestAllProjectsMode(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{
 		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
 	})
-	m = updExec(t, m, press("p")) // open switcher, load projects (cursor on ALL row)
+	m = updExec(t, m, press("p")) // open switcher, load projects (cursor on current project)
 
-	// Select the "all projects" row (index 0).
+	// Move to and select the "all projects" row (index 0).
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})
 	nm, cmd := m.Update(press("enter"))
 	m = nm.(Model)
 	if cmd == nil {

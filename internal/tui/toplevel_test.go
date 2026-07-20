@@ -491,6 +491,80 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 	}
 }
 
+func TestVIPRefreshReloadsNeutronDetailAndFloatingIP(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("2"))
+	m = updExec(t, m, press("enter"))
+	vip := m.loc.node
+	if vip == nil || vip.Type != model.TypeVIP {
+		t.Fatalf("expected VIP overview, got %+v", vip)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: vip.ID, lbID: vip.OwningLBID, intent: intentOverview,
+		res: osclient.DetailResult{Attrs: map[string]string{
+			"port_name": "old-port", "port_id": "port-9",
+			"subnet_name": "old-subnet", "subnet_id": "subnet-9",
+			"network_name": "old-network", "network_id": "network-9",
+			"security_group_ids": "sg-old",
+		}},
+	})
+	m = upd(t, m, lbFloatingIPMsg{lbID: vip.OwningLBID, nodes: map[string]*model.Node{
+		"203.0.113.9": newFloatingIP("198.51.100.7"),
+	}})
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("VIP refresh did not request a fresh status tree")
+	}
+	m = upd(t, m, treeMsg{lbID: vip.OwningLBID, tree: newTree()})
+	refreshedVIP := m.loc.node
+	if !m.refreshFIPExpected || !m.lbDetailLoading[refreshedVIP.ID] || !m.lbFIPLoading[refreshedVIP.OwningLBID] {
+		t.Fatal("VIP refresh did not request Neutron detail and floating-IP data")
+	}
+	view := ansiRE.ReplaceAllString(m.View(), "")
+	for _, oldValue := range []string{"old-network", "sg-old", "198.51.100.7"} {
+		if !strings.Contains(view, oldValue) {
+			t.Fatalf("VIP refresh did not retain %q while loading:\n%s", oldValue, view)
+		}
+	}
+
+	m = upd(t, m, detailMsg{
+		nodeID: refreshedVIP.ID, lbID: refreshedVIP.OwningLBID,
+		intent: intentOverview, refresh: true,
+		res: osclient.DetailResult{Attrs: map[string]string{
+			"port_name": "new-port", "port_id": "port-9",
+			"subnet_name": "new-subnet", "subnet_id": "subnet-9",
+			"network_name": "new-network", "network_id": "network-9",
+			"security_group_ids": "sg-new",
+		}},
+	})
+	if !m.refreshing {
+		t.Fatal("VIP refresh completed before floating-IP data arrived")
+	}
+	m = upd(t, m, lbFloatingIPMsg{
+		lbID: refreshedVIP.OwningLBID, refresh: true,
+		nodes: map[string]*model.Node{
+			"203.0.113.9": newFloatingIP("198.51.100.8"),
+		},
+	})
+
+	view = ansiRE.ReplaceAllString(m.View(), "")
+	for _, want := range []string{"new-port", "new-subnet", "new-network", "sg-new", "198.51.100.8"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("refreshed VIP overview missing %q:\n%s", want, view)
+		}
+	}
+	for _, stale := range []string{"old-port", "old-subnet", "old-network", "sg-old", "198.51.100.7"} {
+		if strings.Contains(view, stale) {
+			t.Errorf("refreshed VIP overview retained stale value %q:\n%s", stale, view)
+		}
+	}
+	if m.refreshing || m.loading {
+		t.Fatal("VIP refresh did not complete after all required responses arrived")
+	}
+}
+
 func TestTopLevelDrillIn(t *testing.T) {
 	// Listener drills into its own node; the breadcrumb keeps the listeners root.
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})

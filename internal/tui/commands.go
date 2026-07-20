@@ -184,13 +184,23 @@ func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
 }
 
 func (m Model) getTreeCmd(lbID string, forID model.Identity, background bool) tea.Cmd {
+	return m.treeCmd(lbID, forID, background, true)
+}
+
+func (m Model) refreshTreeCmd(lbID string, forID model.Identity) tea.Cmd {
+	return m.treeCmd(lbID, forID, false, false)
+}
+
+func (m Model) treeCmd(lbID string, forID model.Identity, background, useListHint bool) tea.Cmd {
 	b := m.backend
 	var hint *model.LBMeta
-	for _, lb := range m.lbs {
-		if lb.ID == lbID {
-			h := lb.Meta()
-			hint = &h
-			break
+	if useListHint {
+		for _, lb := range m.lbs {
+			if lb.ID == lbID {
+				h := lb.Meta()
+				hint = &h
+				break
+			}
 		}
 	}
 	return func() tea.Msg {

@@ -164,12 +164,14 @@ type Model struct {
 	flashErr    bool
 	flashToken  int
 
-	// An explicit refresh keeps the currently-rendered data in place. For an LB
-	// overview, detail, stats, floating IP, listener/pool summaries, and amphora
-	// VMs are staged and committed together so no field or row jumps ahead.
+	// An explicit or automatic full refresh keeps the rendered data in place.
+	// Every API result required by the current overview is staged and committed
+	// together so no field or related-object row jumps ahead.
 	refreshing               bool
 	refreshLBID              string
 	refreshDetail            *detailMsg
+	refreshHealthMonitor     *detailMsg
+	refreshMonitorExpected   bool
 	refreshStats             *statsMsg
 	refreshListenerStats     *listenerStatsMsg
 	refreshFIP               *lbFloatingIPMsg

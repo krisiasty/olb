@@ -179,6 +179,8 @@ func (m Model) visibleRows() int {
 		_, h = m.listenerOverviewParts(h)
 	} else if m.isVIPOverview() {
 		_, h = m.vipOverviewParts(h)
+	} else if m.isPoolOverview() {
+		_, h = m.poolOverviewParts(h)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -199,6 +201,9 @@ func (m Model) bodyLines() []string {
 	}
 	if m.isVIPOverview() {
 		return m.vipOverviewLines(h)
+	}
+	if m.isPoolOverview() {
+		return m.poolOverviewLines(h)
 	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
@@ -277,12 +282,16 @@ func (m Model) isListenerOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeListener
 }
 
+func (m Model) isPoolOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypePool
+}
+
 func (m Model) isStatsOverview() bool {
 	return m.isLBOverview() || m.isListenerOverview()
 }
 
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -361,6 +370,157 @@ func (m Model) vipOverviewSummary(budget int) []string {
 	return limitLines(lines, budget)
 }
 
+func (m Model) poolOverviewParts(h int) (summary []string, relatedHeight int) {
+	const fixedChrome = 3
+	if h <= fixedChrome {
+		return nil, 0
+	}
+	minRelated := 1
+	if len(m.entries) > 0 {
+		selectable := 0
+		for i, entry := range m.entries {
+			if entry.selectable() {
+				selectable++
+			}
+			minRelated = i + 1
+			if selectable == 3 {
+				break
+			}
+		}
+	}
+	if minRelated > h-fixedChrome {
+		minRelated = h - fixedChrome
+	}
+	summary = m.poolOverviewSummary(h - fixedChrome - minRelated)
+	relatedHeight = h - len(summary) - fixedChrome
+	if relatedHeight < 0 {
+		relatedHeight = 0
+	}
+	return summary, relatedHeight
+}
+
+func (m Model) poolOverviewLines(h int) []string {
+	summary, relatedHeight := m.poolOverviewParts(h)
+	lines := make([]string, 0, h)
+	lines = append(lines, "")
+	lines = append(lines, summary...)
+	if len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) < h {
+		visibleCount := selectableEntryCount(m.entries)
+		allCount := selectableEntryCount(m.allEntries)
+		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
+		if visibleCount != allCount {
+			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
+		}
+		rendered := m.st.title.Render(title)
+		errors, degraded := relatedIssueCounts(m.entries)
+		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+	}
+	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+func (m Model) poolOverviewSummary(budget int) []string {
+	if budget <= 0 || m.loc.node == nil {
+		return nil
+	}
+	n := m.loc.node
+	title := m.overviewPanelTitle(
+		"DETAILS",
+		!m.refreshing && m.lbDetailLoading[n.ID],
+		m.lbDetailErr[n.ID],
+		m.updatedAt(n.ID, sectionDetails),
+		m.lbDetailErr[n.ID] != "",
+	)
+	groups := m.poolDetailGroups()
+	lines := []string{m.clip(title)}
+	if m.width >= 90 {
+		gap := 3
+		available := m.width - gap
+		leftWidth := available / 2
+		rightWidth := available - leftWidth
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		return limitLines(lines, budget)
+	}
+	for i, group := range groups {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+	}
+	return limitLines(lines, budget)
+}
+
+func (m Model) poolDetailGroups() []overviewGroup {
+	n := m.loc.node
+	projectID, projectName := n.Attrs["project_id"], ""
+	if m.loc.tree != nil {
+		if projectID == "" {
+			projectID = m.loc.tree.Meta.ProjectID
+		}
+		projectName = m.loc.tree.Meta.ProjectName
+	}
+	name := n.Name
+	if name == "" {
+		name = shortID(n.ID)
+	}
+	poolFields := []overviewField{
+		{label: "Name", value: name},
+		{label: "ID", value: n.ID},
+		{label: "Project name", value: displayValue(projectName)},
+		{label: "Project ID", value: displayValue(projectID)},
+	}
+	if description := strings.TrimSpace(n.Attrs["description"]); description != "" {
+		poolFields = append(poolFields, overviewField{label: "Description", value: description})
+	}
+	poolFields = append(poolFields,
+		overviewField{label: "Operating", value: displayValue(n.OperatingStatus), status: true},
+		overviewField{label: "Provisioning", value: displayValue(n.ProvisioningStatus), status: true},
+		overviewField{label: "Admin state", value: adminStateLabel(n.Attrs["admin_state_up"]), status: true},
+		overviewField{label: "Created", value: displayTimestamp(n.Attrs["created_at"])},
+		overviewField{label: "Updated", value: displayTimestamp(n.Attrs["updated_at"])},
+	)
+
+	persistence := n.Attrs["session_persistence"]
+	if persistence == "" {
+		persistence = "none"
+	}
+	configFields := []overviewField{
+		{label: "Protocol", value: displayValue(n.Attrs["protocol"])},
+		{label: "Algorithm", value: displayValue(n.Attrs["lb_algorithm"])},
+		{label: "Session persistence", value: persistence},
+	}
+	if cookie := strings.TrimSpace(n.Attrs["persistence_cookie"]); cookie != "" {
+		configFields = append(configFields, overviewField{label: "Cookie name", value: cookie})
+	}
+	configFields = append(configFields,
+		overviewField{label: "Members", value: displayValue(n.Attrs["member_count"])},
+		overviewField{label: "Listeners", value: displayValue(n.Attrs["listener_count"])},
+		overviewField{label: "Backend TLS", value: adminStateLabel(n.Attrs["tls_enabled"])},
+	)
+	if versions := strings.TrimSpace(n.Attrs["tls_versions"]); versions != "" {
+		configFields = append(configFields, overviewField{label: "TLS versions", value: versions})
+	}
+	if protocols := strings.TrimSpace(n.Attrs["alpn_protocols"]); protocols != "" {
+		configFields = append(configFields, overviewField{label: "ALPN", value: protocols})
+	}
+	if tags := strings.TrimSpace(n.Attrs["tags"]); tags != "" {
+		configFields = append(configFields, overviewField{label: "Tags", value: tags})
+	}
+	return []overviewGroup{
+		{title: "POOL", fields: poolFields},
+		{title: "CONFIGURATION", fields: configFields},
+	}
+}
+
 type overviewGroup struct {
 	title  string
 	fields []overviewField
@@ -429,7 +589,13 @@ func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
 			lines = append(lines, "")
 		}
 		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
-		line := "  " + label + "  " + field.value
+		value := field.value
+		if field.status && value != "—" {
+			value = lipgloss.NewStyle().Foreground(statusColor(value)).Render(value)
+		} else if field.color != lipgloss.Color("") && value != "—" {
+			value = lipgloss.NewStyle().Foreground(field.color).Render(value)
+		}
+		line := "  " + label + "  " + value
 		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
@@ -1772,6 +1938,22 @@ func (m Model) firstProjectCursor() int {
 		return 1
 	}
 	return 0
+}
+
+func (m Model) currentProjectCursor() int {
+	offset := 0
+	if m.hasAllProjectsRow() {
+		if m.allProjects {
+			return 0
+		}
+		offset = 1
+	}
+	for i, project := range m.filteredProjects() {
+		if project.ID != "" && project.ID == m.project.ID {
+			return offset + i
+		}
+	}
+	return m.firstProjectCursor()
 }
 
 type pickItem struct {

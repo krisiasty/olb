@@ -243,7 +243,7 @@ func TestResourceNavigationRows(t *testing.T) {
 	}
 }
 
-func TestListenerPoolsUseRelatedPoolRepresentationAndBackRefsShowDirection(t *testing.T) {
+func TestListenerPoolsAndPoolListenersUseRelatedRepresentations(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // load balancer
 	i, ok := m.selectLabel("listener:http")
@@ -265,10 +265,16 @@ func TestListenerPoolsUseRelatedPoolRepresentationAndBackRefsShowDirection(t *te
 	}
 	m.cursor = i
 	m = updExec(t, m, press("enter")) // pool
+	items, err := m.backend.ListListenerSummaries(context.Background(), m.loc.node.OwningLBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, listenerSummariesMsg{lbID: m.loc.node.OwningLBID, items: items})
 	view = ansiRE.ReplaceAllString(m.View(), "")
-	backRefLine := lineContaining(view, "←")
-	if !strings.Contains(backRefLine, "listener:http") || !strings.Contains(backRefLine, "Pool") {
-		t.Errorf("incoming resource link should show its direction and relationship: %q", backRefLine)
+	listenerLine := lineContaining(view, "● Listener")
+	if !strings.Contains(listenerLine, "http") || !strings.Contains(listenerLine, "HTTPS/8443") ||
+		strings.Contains(listenerLine, "listener:") || strings.Contains(listenerLine, "←") {
+		t.Errorf("pool listener should use the load-balancer overview format: %q", listenerLine)
 	}
 }
 

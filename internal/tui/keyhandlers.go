@@ -104,9 +104,6 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.CopyNm):
 		cmd := m.copyName()
 		return m, cmd
-	case key.Matches(msg, m.keys.CopyRaw):
-		cmd := m.copyRaw()
-		return m, cmd
 
 	case key.Matches(msg, m.keys.Filter):
 		m.filtering = true
@@ -416,8 +413,7 @@ func (m *Model) copyName() tea.Cmd {
 	return m.copyValue("name", name)
 }
 
-// copyRaw copies the displayed raw object; a no-op with a hint when neither y
-// nor j has been pressed for the current object.
+// copyRaw copies the object displayed in the raw YAML/JSON overlay.
 func (m *Model) copyRaw() tea.Cmd {
 	if m.rawContent == "" || m.rawFormat == "" {
 		return m.setFlash("no raw object shown — press y or j first", false)

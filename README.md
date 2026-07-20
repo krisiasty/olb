@@ -108,7 +108,8 @@ list because previous objects may not exist in the new view.
 | | `ctrl+home` | Jump to the active view's pinned root history entry |
 | | `h` | History picker overlay |
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
-| | `i` / `n` / `o` | Copy id / name / displayed raw object |
+| | `i` / `n` | Copy id / name |
+| | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter current list (substring) |
 | | `s` | Cycle status filter — all / error / degraded |
 | Global | `p` `r` `a` `+`/`-` `t` `?` `q` | Project · refresh · auto-refresh toggle/interval · API telemetry · help · quit (back out, then exit) |

@@ -1912,7 +1912,7 @@ func (m Model) hintLine() string {
 		return m.clip(m.st.help.Render("type to filter · enter apply · esc clear"))
 	}
 	parts := []string{
-		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n/o copy",
+		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n copy",
 	}
 	if m.loc.isTopLevelList() {
 		parts = append(parts, "d names/ids")
@@ -1964,7 +1964,10 @@ func (m Model) rawView() string {
 		}
 		title = "raw " + strings.ToUpper(m.rawFormat) + " — " + obj
 	}
-	footer := m.st.help.Render("esc/q close · o copy · ↑/↓ scroll")
+	footer := m.flashLine()
+	if footer == "" {
+		footer = m.st.help.Render("esc/q close · c copy · ↑/↓ scroll")
+	}
 	return m.st.overlayTitle.Render(m.clip(title)) + "\n" + m.vp.View() + "\n" + m.clip(footer)
 }
 
@@ -2280,7 +2283,7 @@ Inspect
   j                show raw API object as JSON
   i                copy object id to clipboard (OSC 52)
   n                copy object name to clipboard
-  o                copy the displayed raw object (after y or j)
+  c                copy the displayed raw object (inside the YAML/JSON view)
 
 List
 {{name_id_toggle}}  /                filter current list (substring)

@@ -23,7 +23,7 @@ type keyMap struct {
 	JSON    key.Binding // j
 	CopyID  key.Binding // i
 	CopyNm  key.Binding // n
-	CopyRaw key.Binding // o
+	CopyRaw key.Binding // c (raw YAML/JSON overlay only)
 
 	Filter  key.Binding // /
 	Status  key.Binding // s
@@ -64,7 +64,7 @@ func defaultKeys() keyMap {
 		JSON:    key.NewBinding(key.WithKeys("j"), key.WithHelp("j", "JSON")),
 		CopyID:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "copy id")),
 		CopyNm:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "copy name")),
-		CopyRaw: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "copy raw")),
+		CopyRaw: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy raw")),
 
 		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Status:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),

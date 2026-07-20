@@ -1482,12 +1482,28 @@ func TestInspectCopyAndOverlays(t *testing.T) {
 		t.Fatal("detail views should not advertise the name/ID toggle")
 	}
 
-	// y -> raw YAML overlay; then o copies (print mode shows it).
+	// Raw-object copy is unavailable from the details view.
+	m = upd(t, m, press("c"))
+	if m.overlay != overlayNone || m.flash != "" {
+		t.Fatalf("c should be inactive outside the raw overlay: overlay=%v flash=%q", m.overlay, m.flash)
+	}
+
+	// y -> raw YAML overlay; then c copies (print mode shows it).
 	m = updExec(t, m, press("y"))
 	if m.overlay != overlayRaw || m.rawFormat != "yaml" {
 		t.Fatalf("y should show raw YAML, overlay=%v fmt=%q", m.overlay, m.rawFormat)
 	}
-	m = upd(t, m, press("o")) // copy displayed raw (print mode)
+	if !strings.Contains(m.rawView(), "c copy") {
+		t.Fatal("raw overlay should advertise c copy")
+	}
+	m = upd(t, m, press("o"))
+	if m.rawTitle != "" {
+		t.Fatalf("legacy o key should not copy raw content, title=%q", m.rawTitle)
+	}
+	m = upd(t, m, press("c")) // copy displayed raw (print mode)
+	if !strings.Contains(m.rawTitle, "copy raw yaml") {
+		t.Fatalf("c did not invoke raw-object copy, title=%q", m.rawTitle)
+	}
 	m = upd(t, m, press("esc"))
 
 	// j -> raw JSON.
@@ -1516,6 +1532,46 @@ func TestDisplayTimestampIsHumanReadableUTC(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := displayTimestamp(tc.value); got != tc.want {
 				t.Fatalf("displayTimestamp(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCopyRawShowsConfirmationInOverlayFooter(t *testing.T) {
+	for _, format := range []string{"yaml", "json"} {
+		t.Run(format, func(t *testing.T) {
+			m := start(t, osclient.SwitchCapability{CanSwitch: true})
+			var clipboardOutput strings.Builder
+			m.cfg.PrintMode = false
+			m.cfg.Stdout = &clipboardOutput
+			m.overlay = overlayRaw
+			m.rawContent = "id: lb-1"
+			m.rawFormat = format
+			m.setupRawViewport()
+
+			next, clearCmd := m.Update(press("c"))
+			m = next.(Model)
+			want := "copied raw " + format + " to clipboard (OSC 52)"
+			if m.flash != want {
+				t.Fatalf("copy confirmation = %q, want %q", m.flash, want)
+			}
+			if clearCmd == nil {
+				t.Fatal("copy confirmation should schedule its removal")
+			}
+			plain := ansiRE.ReplaceAllString(m.rawView(), "")
+			if !strings.Contains(plain, want) {
+				t.Fatalf("raw overlay does not display copy confirmation %q:\n%s", want, plain)
+			}
+			if strings.Contains(plain, "c copy") {
+				t.Fatalf("raw overlay should temporarily replace its key hints with the confirmation:\n%s", plain)
+			}
+			if clipboardOutput.Len() == 0 {
+				t.Fatal("copy did not emit a clipboard sequence")
+			}
+
+			m = upd(t, m, flashClearMsg{token: m.flashToken})
+			if !strings.Contains(ansiRE.ReplaceAllString(m.rawView(), ""), "c copy") {
+				t.Fatal("raw overlay key hints did not return after the confirmation cleared")
 			}
 		})
 	}

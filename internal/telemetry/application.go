@@ -12,7 +12,7 @@ var applicationStartedAt = time.Now()
 var applicationHighWater struct {
 	sync.Mutex
 	goroutines  int
-	threads     int
+	threads     uint64
 	heapAlloc   uint64
 	heapInuse   uint64
 	heapObjects uint64
@@ -28,8 +28,8 @@ type ApplicationSnapshot struct {
 	Uptime        time.Duration
 	Goroutines    int
 	MaxGoroutines int
-	Threads       int
-	MaxThreads    int
+	Threads       uint64
+	MaxThreads    uint64
 	GOMAXPROCS    int
 	LogicalCPUs   int
 
@@ -77,11 +77,11 @@ func CaptureApplicationSnapshot() ApplicationSnapshot {
 	}
 }
 
-func runtimeThreadCount() int {
+func runtimeThreadCount() uint64 {
 	samples := []metrics.Sample{{Name: "/sched/threads/total:threads"}}
 	metrics.Read(samples)
 	if samples[0].Value.Kind() != metrics.KindUint64 {
 		return 0
 	}
-	return int(samples[0].Value.Uint64())
+	return samples[0].Value.Uint64()
 }

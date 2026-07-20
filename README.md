@@ -100,7 +100,7 @@ list because previous objects may not exist in the new view.
 ### Keybindings
 
 | Group | Keys | Action |
-|---|---|---|
+| --- | --- | --- |
 | Move | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move / page / jump selection |
 | Navigate | `enter` | Open selected — drill into a child **or** follow a reference edge (the only "go in" key) |
 | | `←` / `esc` / `⌫` | Back (history) |
@@ -112,7 +112,7 @@ list because previous objects may not exist in the new view.
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
-| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh toggle · telemetry · help · quit (back out, then exit) |
+| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit (back out, then exit) |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 

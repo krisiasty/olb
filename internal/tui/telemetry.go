@@ -239,7 +239,10 @@ func (m Model) applicationTelemetryContent() string {
 	return strings.TrimRight(m.renderOverviewGroup(group, m.width), " \n")
 }
 
-func currentAndMax(current, maximum int) string {
+// currentAndMax formats a "current (max N)" pair. It is generic so it serves
+// both the int counters (goroutines) and the uint64 ones (OS threads, straight
+// from runtime/metrics) without lossy conversions.
+func currentAndMax[T ~int | ~uint64](current, maximum T) string {
 	return fmt.Sprintf("%d (max %d)", current, maximum)
 }
 

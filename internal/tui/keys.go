@@ -75,7 +75,7 @@ func defaultKeys() keyMap {
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
 		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),
 		IntervalDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "shorter interval")),
-		Telemetry:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "API telemetry")),
+		Telemetry:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "telemetry")),
 		Reset:        key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "reset")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),

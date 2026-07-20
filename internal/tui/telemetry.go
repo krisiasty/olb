@@ -101,6 +101,7 @@ func (m Model) changeTelemetryInterval(delta int) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) refreshTelemetryContent(gotoTop bool) {
+	m.applicationTelemetry = telemetry.CaptureApplicationSnapshot()
 	backend, ok := m.telemetryBackend()
 	if ok {
 		m.telemetrySnapshot = backend.TelemetrySnapshot()
@@ -136,24 +137,46 @@ func (m Model) telemetryRefreshLabel() string {
 }
 
 func (m Model) telemetryView() string {
-	title := m.st.overlayTitle.Render("API telemetry") + " · " + m.telemetryRefreshLabel()
+	title := m.st.overlayTitle.Render("Telemetry") + " · " + m.telemetryRefreshLabel()
 	if freshness := m.freshnessLabel(m.telemetryUpdatedAt); freshness != "" {
 		title += " · " + m.st.disabled.Render(freshness)
 	}
 	if threshold := m.telemetrySnapshot.SlowThreshold; threshold > 0 {
 		title += " · " + m.st.disabled.Render("slow ≥"+formatTelemetryDuration(threshold))
 	}
-	footer := m.st.help.Render("r refresh · a auto/manual · +/- interval · z reset · ↑/↓ scroll · esc/t/q close")
+	footer := m.st.help.Render("r refresh · a auto/manual · +/- interval · z reset API · ↑/↓ scroll · esc/t/q close")
 	return m.clip(title) + "\n" + m.vp.View() + "\n" + m.clip(footer)
 }
 
 func (m Model) telemetryContent(available bool) string {
-	if !available {
-		return "\n  " + m.st.disabled.Render("API telemetry is unavailable for this backend.")
+	application := m.applicationTelemetryContent()
+	api := m.apiTelemetryContent(available)
+	if m.width >= 110 {
+		const gap = 3
+		leftWidth := (m.width - gap) * 2 / 5
+		if leftWidth > 52 {
+			leftWidth = 52
+		}
+		rightWidth := m.width - gap - leftWidth
+		return "\n" + lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(application),
+			strings.Repeat(" ", gap),
+			lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(api),
+		)
 	}
+	return "\n" + application + "\n\n" + api
+}
+
+func (m Model) apiTelemetryContent(available bool) string {
 	snapshot := m.telemetrySnapshot
 	var b strings.Builder
+	b.WriteString(m.st.groupHeading.Render("API REQUESTS"))
 	b.WriteString("\n")
+	if !available {
+		b.WriteString("\n  " + m.st.disabled.Render("— API telemetry is unavailable for this backend —"))
+		return b.String()
+	}
 	b.WriteString(m.st.title.Render(fmt.Sprintf("TOTAL %d", snapshot.Calls)))
 	b.WriteString(m.st.statusBar.Render(" · "))
 	b.WriteString(telemetryMetric("SUCCESS", snapshot.Successes, statusColor("ONLINE")))
@@ -199,6 +222,44 @@ func (m Model) telemetryContent(available bool) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m Model) applicationTelemetryContent() string {
+	snapshot := m.applicationTelemetry
+	group := overviewGroup{title: "APPLICATION", fields: []overviewField{
+		{label: "Uptime", value: formatTelemetryUptime(snapshot.Uptime), subheading: "RUNTIME"},
+		{label: "Goroutines", value: currentAndMax(snapshot.Goroutines, snapshot.MaxGoroutines)},
+		{label: "OS threads", value: currentAndMax(snapshot.Threads, snapshot.MaxThreads)},
+		{label: "GOMAXPROCS", value: fmt.Sprint(snapshot.GOMAXPROCS)},
+		{label: "Logical CPUs", value: fmt.Sprint(snapshot.LogicalCPUs)},
+		{label: "Heap allocated", value: bytesCurrentAndMax(snapshot.HeapAlloc, snapshot.MaxHeapAlloc), breakBefore: true, subheading: "MEMORY"},
+		{label: "Heap in use", value: bytesCurrentAndMax(snapshot.HeapInuse, snapshot.MaxHeapInuse)},
+		{label: "Stack in use", value: bytesCurrentAndMax(snapshot.StackInuse, snapshot.MaxStackInuse)},
+		{label: "Runtime reserved", value: bytesCurrentAndMax(snapshot.RuntimeSys, snapshot.MaxRuntimeSys)},
+		{label: "Live heap objects", value: countCurrentAndMax(snapshot.HeapObjects, snapshot.MaxHeapObjects)},
+	}}
+	return strings.TrimRight(m.renderOverviewGroup(group, m.width), " \n")
+}
+
+func currentAndMax(current, maximum int) string {
+	return fmt.Sprintf("%d (max %d)", current, maximum)
+}
+
+func bytesCurrentAndMax(current, maximum uint64) string {
+	return fmt.Sprintf("%s (max %s)",
+		formatTelemetryFraction(formatIEC(float64(current))),
+		formatTelemetryFraction(formatIEC(float64(maximum))))
+}
+
+func countCurrentAndMax(current, maximum uint64) string {
+	return fmt.Sprintf("%s (max %s)", formatStatCount(current), formatStatCount(maximum))
+}
+
+func formatTelemetryUptime(uptime time.Duration) string {
+	if uptime < time.Second {
+		return "0s"
+	}
+	return uptime.Truncate(time.Second).String()
+}
+
 func telemetryTimeoutColor() lipgloss.Color {
 	return lipgloss.Color("135") // violet, distinct from red errors
 }
@@ -228,12 +289,29 @@ func formatTelemetryDuration(duration time.Duration) string {
 	if duration <= 0 {
 		return "0"
 	}
+	var formatted string
 	switch {
 	case duration < time.Millisecond:
-		return duration.Round(10 * time.Microsecond).String()
+		formatted = duration.Round(10 * time.Microsecond).String()
 	case duration < time.Second:
-		return duration.Round(time.Millisecond).String()
+		formatted = duration.Round(time.Millisecond).String()
 	default:
-		return duration.Round(100 * time.Millisecond).String()
+		formatted = duration.Round(100 * time.Millisecond).String()
 	}
+	return formatTelemetryFraction(formatted)
+}
+
+func formatTelemetryFraction(value string) string {
+	dot := strings.LastIndexByte(value, '.')
+	if dot < 0 {
+		return value
+	}
+	end := dot + 1
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end-dot == 2 {
+		return value[:end] + "0" + value[end:]
+	}
+	return value
 }

@@ -2511,7 +2511,7 @@ Inspect
   p                project switcher
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
-{{stats_interval_controls}}  t                API telemetry overlay
+{{stats_interval_controls}}  t                application and API telemetry
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
 
@@ -2539,9 +2539,9 @@ Notes
     1/2/5/10/30/60-second intervals
     (5 seconds by default) and refreshes lists/details/related objects every
     30 seconds. It pauses while overlays or text filters are active.
-  • API telemetry is process-local and records endpoint labels, outcomes, and
-    timings only—never bodies, credentials, query values, or full UUIDs. Its
-    overlay does not pause the application's normal API auto-refresh.
+  • Telemetry is process-local. API metrics record endpoint labels, outcomes,
+    and timings only—never bodies, credentials, query values, or full UUIDs.
+    The overlay does not pause the application's normal API auto-refresh.
 `, "\n")
 	var listControls []string
 	if showNameIDToggle {

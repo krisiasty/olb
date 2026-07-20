@@ -1872,15 +1872,33 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	}
 	plain := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"API telemetry", "refresh: auto (5s)", "slow ≥1s",
+		"Telemetry", "refresh: auto (5s)", "slow ≥1s",
+		"APPLICATION", "RUNTIME", "Uptime", "Goroutines", "OS threads", "GOMAXPROCS", "Logical CPUs",
+		"MEMORY", "Heap allocated", "Heap in use", "Stack in use", "Runtime reserved", "Live heap objects",
+		"(max ", "API REQUESTS",
 		"TOTAL 3", "SUCCESS 2", "SLOW 2", "TIMEOUT 1", "ERROR 0",
 		"GET octavia /v2/lbaas/loadbalancers",
 		"calls 2 · success 2 · slow 1 · timeout 0 · error 0",
-		"latency min 100ms · avg 1.1s · median 1.1s · p95 2s · p99 2s · max 2s",
+		"latency min 100ms · avg 1.10s · median 1.10s · p95 2s · p99 2s",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("telemetry overlay missing %q:\n%s", want, plain)
 		}
+	}
+	for _, removed := range []string{"GARBAGE COLLECTION", "Last pause", "Total pause", "Next target"} {
+		if strings.Contains(plain, removed) {
+			t.Errorf("telemetry overlay still contains removed GC metric %q:\n%s", removed, plain)
+		}
+	}
+	if line := lineContaining(plain, "APPLICATION"); !strings.Contains(line, "API REQUESTS") {
+		t.Fatalf("wide telemetry view should place application and API telemetry side by side:\n%s", plain)
+	}
+	narrow := m
+	narrow.width = 80
+	narrowContent := ansiRE.ReplaceAllString(narrow.telemetryContent(true), "")
+	if strings.Contains(lineContaining(narrowContent, "APPLICATION"), "API REQUESTS") ||
+		strings.Index(narrowContent, "API REQUESTS") < strings.Index(narrowContent, "APPLICATION") {
+		t.Fatalf("narrow telemetry view should stack application before API telemetry:\n%s", narrowContent)
 	}
 	content := m.telemetryContent(true)
 	for description, want := range map[string]string{
@@ -1958,6 +1976,24 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	next, cmd = m.Update(telemetryTickMsg{generation: generation})
 	if cmd != nil || next.(Model).overlay != overlayNone {
 		t.Fatal("stale telemetry timer remained active after closing overlay")
+	}
+}
+
+func TestTelemetryFractionsUseTwoDigits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "fractional duration", got: formatTelemetryDuration(1600 * time.Millisecond), want: "1.60s"},
+		{name: "whole duration", got: formatTelemetryDuration(2 * time.Second), want: "2s"},
+		{name: "memory values", got: bytesCurrentAndMax(1536, 11776), want: "1.50 KiB (max 11.50 KiB)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Fatalf("got %q, want %q", tc.got, tc.want)
+			}
+		})
 	}
 }
 

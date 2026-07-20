@@ -112,7 +112,7 @@ list because previous objects may not exist in the new view.
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
-| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh toggle · API telemetry · help · quit (back out, then exit) |
+| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh toggle · telemetry · help · quit (back out, then exit) |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
@@ -159,10 +159,12 @@ counts throughout the TUI.
   the exact increase since the previous successful sample. Large counters use
   digit grouping. Counter resets become a new baseline instead of producing a
   negative rate or delta.
-- **Local API telemetry.** Every OpenStack HTTP request is timed and classified
-  as successful, timed out, or failed; calls taking at least one second also
-  count as slow. Press `t` for totals and per-endpoint min/average/median/p95/
-  p99/max latency. The snapshot display defaults to five-second auto-refresh,
+- **Application and API telemetry.** Press `t` for Go runtime health including
+  uptime, CPU concurrency, and current/max-observed goroutines, OS threads, and
+  memory usage, alongside OpenStack request totals and per-endpoint
+  min/average/median/p95/p99/max latency. Requests are classified as successful,
+  timed out, or failed; calls taking at least one second also count as slow. The
+  snapshot display defaults to five-second auto-refresh,
   with `r`, `a`, `+`/`-` (`=` is `+`), and `z` providing manual refresh, cadence,
   and reset controls. The overlay does not pause normal API auto-refresh.
   Telemetry collection itself is in-memory only and never stores or exports

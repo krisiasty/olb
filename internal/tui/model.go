@@ -142,9 +142,11 @@ type Model struct {
 	autoGeneration     uint64
 	autoStatsLoading   map[string]bool
 
-	// API telemetry is collected continuously by the OpenStack HTTP transport.
-	// The overlay snapshots it at an independently-controlled display cadence.
+	// API telemetry is collected continuously by the OpenStack HTTP transport;
+	// application telemetry is sampled when the overlay refreshes. The overlay
+	// uses an independently-controlled display cadence for both.
 	telemetrySnapshot      telemetry.Snapshot
+	applicationTelemetry   telemetry.ApplicationSnapshot
 	telemetryUpdatedAt     time.Time
 	telemetryAutoEnabled   bool
 	telemetryIntervalIndex int

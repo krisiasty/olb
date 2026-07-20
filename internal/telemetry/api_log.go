@@ -37,6 +37,7 @@ type APILogger struct {
 	includeBodies bool
 	maxBodyBytes  int64
 	now           func() time.Time
+	lastTimestamp time.Time
 	writeErr      error
 	closed        bool
 }
@@ -157,8 +158,7 @@ func (l *APILogger) baseEvent(request *http.Request, callID, event, endpoint str
 		}
 	}
 	return apiLogEvent{
-		Timestamp: l.now().UTC().Format(time.RFC3339Nano),
-		CallID:    callID, Event: event, Endpoint: endpoint,
+		CallID: callID, Event: event, Endpoint: endpoint,
 		Service: service, Method: method,
 	}
 }
@@ -169,6 +169,16 @@ func (l *APILogger) record(event apiLogEvent) {
 	if l.closed || l.writeErr != nil {
 		return
 	}
+	// Timestamp under the same lock as Encode so concurrent body sanitization
+	// cannot produce JSONL records whose timestamps run backwards. The one
+	// nanosecond bump also keeps ordering stable if the wall clock is adjusted
+	// backwards or a test clock returns the same instant repeatedly.
+	timestamp := l.now().UTC()
+	if !timestamp.After(l.lastTimestamp) {
+		timestamp = l.lastTimestamp.Add(time.Nanosecond)
+	}
+	l.lastTimestamp = timestamp
+	event.Timestamp = timestamp.Format(time.RFC3339Nano)
 	if err := l.encoder.Encode(event); err != nil {
 		l.writeErr = fmt.Errorf("writing API log: %w", err)
 	}

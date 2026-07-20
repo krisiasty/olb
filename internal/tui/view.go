@@ -59,7 +59,7 @@ func (m Model) listView() string {
 
 func (m Model) breadcrumbLine() string {
 	trail := m.hist.trail()
-	out := m.st.breadcrumb.Render(listKindOf(m.hist.rootIdentity()).rootLabel())
+	parts := []string{m.st.breadcrumb.Render(listKindOf(m.hist.rootIdentity()).rootLabel())}
 	for _, e := range trail {
 		marker := " › "
 		if e.viaRef {
@@ -73,9 +73,36 @@ func (m Model) breadcrumbLine() string {
 		if e.dead {
 			rendered = m.st.dead.Render(label)
 		}
-		out += m.st.crumbSep.Render(marker) + rendered
+		parts = append(parts, m.st.crumbSep.Render(marker)+rendered)
 	}
-	return m.clip(out)
+	return m.fitBreadcrumb(parts)
+}
+
+// fitBreadcrumb drops the oldest path components first, preserving the
+// rightmost component that identifies the object currently on screen.
+func (m Model) fitBreadcrumb(parts []string) string {
+	out := strings.Join(parts, "")
+	if m.width <= 0 || lipgloss.Width(out) <= m.width {
+		return out
+	}
+	prefix := m.st.crumbSep.Render("…")
+	available := m.width - lipgloss.Width(prefix)
+	if available <= 0 {
+		return m.clip(prefix)
+	}
+
+	suffix := parts[len(parts)-1]
+	if lipgloss.Width(suffix) > available {
+		return prefix + lipgloss.NewStyle().MaxWidth(available).Render(suffix)
+	}
+	for i := len(parts) - 2; i >= 0; i-- {
+		candidate := parts[i] + suffix
+		if lipgloss.Width(candidate) > available {
+			break
+		}
+		suffix = candidate
+	}
+	return prefix + suffix
 }
 
 func (m Model) subtitleLine() string {
@@ -1702,11 +1729,14 @@ func (m Model) pickerView() string {
 	items := m.pickerItems()
 	var b strings.Builder
 	b.WriteString(title + "\n")
-	b.WriteString(m.search.View() + "\n\n")
-	maxRows := m.height - 7
-	if maxRows < 1 {
-		maxRows = 1
+	searchLine := ""
+	if m.search.Focused() {
+		searchLine = m.search.View()
+	} else if query := m.search.Value(); query != "" {
+		searchLine = m.st.statusBar.Render("filter: " + query)
 	}
+	b.WriteString(searchLine + "\n\n")
+	maxRows := m.pickerPageSize()
 	start := 0
 	if m.pickCursor >= maxRows {
 		start = m.pickCursor - maxRows + 1
@@ -1739,8 +1769,20 @@ func (m Model) pickerView() string {
 			b.WriteString("  " + m.clip(label) + "\n")
 		}
 	}
-	b.WriteString("\n" + m.st.help.Render("enter jump · ↑/↓ move · type to filter · esc cancel"))
+	footer := "enter jump · arrows/page/home/end move · / filter · esc cancel"
+	if m.search.Focused() {
+		footer = "enter apply · esc clear · type to filter"
+	}
+	b.WriteString("\n" + m.st.help.Render(footer))
 	return b.String()
+}
+
+func (m Model) pickerPageSize() int {
+	rows := m.height - 7
+	if rows < 1 {
+		return 1
+	}
+	return rows
 }
 
 func (m Model) filteredProjects() []osclient.ProjectInfo {

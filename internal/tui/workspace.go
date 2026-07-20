@@ -103,6 +103,33 @@ func (m *Model) prepareWorkspacePosition() {
 	m.workspaceResume = position
 }
 
+// saveHistoryPosition snapshots the current list selection before leaving a
+// history location. The selection identity survives row reordering; cursor is
+// retained as a fallback when the selected object no longer exists.
+func (m *Model) saveHistoryPosition() {
+	current, ok := m.hist.current()
+	if !ok || !m.loc.id.Equal(current.id) {
+		return
+	}
+	position := workspacePosition{valid: true, at: current.id, cursor: m.cursor, top: m.top}
+	if m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].selectable() {
+		position.selection = m.entries[m.cursor].selection()
+		position.selectionOK = true
+	}
+	m.hist.saveCurrentPosition(position)
+}
+
+func (m *Model) prepareHistoryPosition(entry histEntry) {
+	m.workspaceResume = workspacePosition{}
+	if !entry.positionSet {
+		return
+	}
+	position := entry.position
+	position.valid = true
+	position.at = entry.id
+	m.workspaceResume = position
+}
+
 func (m *Model) restoreWorkspacePosition() {
 	position := m.workspaceResume
 	if !position.valid || !m.loc.id.Equal(position.at) {

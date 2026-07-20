@@ -279,7 +279,9 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 	if msg.refresh {
 		if m.refreshing && m.refreshLBID == msg.lbID {
 			m.refreshDetail = &msg
-			if m.loc.node != nil && m.loc.node.Type == model.TypeListener && m.loc.node.ID == msg.nodeID {
+			// The transaction remains tied to the resource whose detail request
+			// was issued, even if history navigation has since changed m.loc.
+			if msg.nodeID != msg.lbID {
 				return m, m.commitListenerRefresh()
 			}
 			return m, m.commitLBRefresh()
@@ -394,7 +396,7 @@ func (m Model) onListenerStats(msg listenerStatsMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if msg.refresh {
-		if m.refreshing && m.refreshLBID == msg.lbID && m.loc.node != nil && m.loc.node.ID == resourceID {
+		if m.refreshing && m.refreshLBID == msg.lbID {
 			m.refreshListenerStats = &msg
 			return m, m.commitListenerRefresh()
 		}
@@ -1021,6 +1023,7 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 		src.ResolveEdge(msg.label, msg.node)
 	}
 	if active {
+		m.saveHistoryPosition()
 		m.hist.navigate(histEntry{id: msg.node.Identity(), viaRef: true})
 		m.clearFilter()
 		return m, m.render()

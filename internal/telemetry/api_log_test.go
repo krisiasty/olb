@@ -124,6 +124,48 @@ func TestAPILoggerWritesSanitizedCorrelatedTransactions(t *testing.T) {
 	}
 }
 
+func TestAPILoggerWritesMonotonicTimestamps(t *testing.T) {
+	path := t.TempDir() + "/api.jsonl"
+	logger, err := OpenAPILogger(path, APILogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	times := []time.Time{base, base.Add(-time.Second), base}
+	logger.now = func() time.Time {
+		next := times[0]
+		times = times[1:]
+		return next
+	}
+	for _, callID := range []string{"first", "second", "third"} {
+		logger.record(apiLogEvent{CallID: callID, Event: "request"})
+	}
+	if err = logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// #nosec G304 -- path is an isolated t.TempDir test fixture.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := decodeAPILogEvents(t, raw)
+	if len(events) != 3 {
+		t.Fatalf("API log events = %d, want 3", len(events))
+	}
+	var previous time.Time
+	for i, event := range events {
+		timestamp, parseErr := time.Parse(time.RFC3339Nano, event.Timestamp)
+		if parseErr != nil {
+			t.Fatalf("event %d timestamp %q: %v", i, event.Timestamp, parseErr)
+		}
+		if i > 0 && !timestamp.After(previous) {
+			t.Fatalf("event %d timestamp %s is not after %s", i, timestamp, previous)
+		}
+		previous = timestamp
+	}
+}
+
 func TestAPILoggerLabelsBarbicanService(t *testing.T) {
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 		"https://key-manager.example/v1/secrets/123e4567-e89b-12d3-a456-426614174000/payload", nil)

@@ -161,7 +161,9 @@ func (m Model) toggleIDs() (tea.Model, tea.Cmd) {
 // --- navigation actions ---------------------------------------------------
 
 func (m Model) goBack() (tea.Model, tea.Cmd) {
+	m.saveHistoryPosition()
 	if e, ok := m.hist.back(); ok {
+		m.prepareHistoryPosition(e)
 		m.clearFilter()
 		cmd := m.showIdentity(e.id)
 		return m, cmd
@@ -170,7 +172,9 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) goForward() (tea.Model, tea.Cmd) {
+	m.saveHistoryPosition()
 	if e, ok := m.hist.forward(); ok {
+		m.prepareHistoryPosition(e)
 		m.clearFilter()
 		cmd := m.showIdentity(e.id)
 		return m, cmd
@@ -179,9 +183,12 @@ func (m Model) goForward() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) goWorkspaceRoot() (tea.Model, tea.Cmd) {
-	if _, ok := m.hist.toRoot(); !ok {
+	m.saveHistoryPosition()
+	e, ok := m.hist.toRoot()
+	if !ok {
 		return m, nil
 	}
+	m.prepareHistoryPosition(e)
 	m.clearFilter()
 	cmd := m.render()
 	return m, cmd
@@ -316,6 +323,7 @@ func (m *Model) openSelected() tea.Cmd {
 	if unresolved || (id.ID == "" && !id.IsLBList()) {
 		return m.setFlash("nothing to open here", false)
 	}
+	m.saveHistoryPosition()
 	m.hist.navigate(histEntry{id: id, viaRef: viaRef})
 	m.clearFilter()
 	return m.render()
@@ -552,17 +560,46 @@ func (m Model) openPicker() (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	m.search.Focus()
-	return m, textinput.Blink
+	m.search.Blur()
+	return m, nil
 }
 
 func (m Model) onPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// History search follows the same modal behavior as the main list filter:
+	// slash starts editing, Enter keeps the query, and Esc clears it. While the
+	// input is inactive, ordinary key presses must not silently change it or
+	// reset the history cursor.
+	if m.search.Focused() {
+		switch {
+		case key.Matches(msg, m.keys.Cancel):
+			m.search.SetValue("")
+			m.search.Blur()
+			m.pickCursor = 0
+			return m, nil
+		case key.Matches(msg, m.keys.Accept):
+			m.search.Blur()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		m.pickCursor = 0
+		return m, cmd
+	}
+
 	items := m.pickerItems()
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
+		if m.search.Value() != "" {
+			m.search.SetValue("")
+			m.pickCursor = 0
+			return m, nil
+		}
 		m.overlay = overlayNone
 		m.search.Blur()
 		return m, nil
+	case key.Matches(msg, m.keys.Filter):
+		m.search.Focus()
+		return m, textinput.Blink
 	case key.Matches(msg, m.keys.Up):
 		if m.pickCursor > 0 {
 			m.pickCursor--
@@ -573,6 +610,30 @@ func (m Model) onPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.pickCursor++
 		}
 		return m, nil
+	case key.Matches(msg, m.keys.PageUp):
+		m.pickCursor -= m.pickerPageSize()
+		if m.pickCursor < 0 {
+			m.pickCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.PageDown):
+		m.pickCursor += m.pickerPageSize()
+		if m.pickCursor >= len(items) {
+			m.pickCursor = len(items) - 1
+		}
+		if m.pickCursor < 0 {
+			m.pickCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Home):
+		m.pickCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.End):
+		m.pickCursor = len(items) - 1
+		if m.pickCursor < 0 {
+			m.pickCursor = 0
+		}
+		return m, nil
 	case key.Matches(msg, m.keys.Accept):
 		if len(items) == 0 {
 			return m, nil
@@ -580,15 +641,14 @@ func (m Model) onPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := items[m.pickCursor].index
 		m.overlay = overlayNone
 		m.search.Blur()
+		m.saveHistoryPosition()
 		if e, ok := m.hist.moveTo(idx); ok {
+			m.prepareHistoryPosition(e)
 			m.clearFilter()
 			cmd := m.showIdentity(e.id)
 			return m, cmd
 		}
 		return m, nil
 	}
-	var cmd tea.Cmd
-	m.search, cmd = m.search.Update(msg)
-	m.pickCursor = 0
-	return m, cmd
+	return m, nil
 }

@@ -50,8 +50,8 @@ func defaultKeys() keyMap {
 		Down:     key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down")),
 		PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("PgUp", "page up")),
 		PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("PgDn", "page down")),
-		Home:     key.NewBinding(key.WithKeys("home"), key.WithHelp("Home", "top")),
-		End:      key.NewBinding(key.WithKeys("end"), key.WithHelp("End", "bottom")),
+		Home:     key.NewBinding(key.WithKeys("home", "ctrl+a"), key.WithHelp("Home", "top")),
+		End:      key.NewBinding(key.WithKeys("end", "ctrl+e"), key.WithHelp("End", "bottom")),
 
 		Open:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 		Back:     key.NewBinding(key.WithKeys("left", "esc", "backspace"), key.WithHelp("←/esc", "back")),

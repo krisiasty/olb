@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -197,6 +198,78 @@ func TestActiveTopLevelKeyIsNoOpAndCtrlHomeUsesWorkspaceRoot(t *testing.T) {
 		t.Fatalf("history picker does not identify active workspace:\n%s", view)
 	} else if !strings.Contains(view, "(here)") {
 		t.Fatalf("selected current history row is not marked as here:\n%s", view)
+	}
+}
+
+func TestHistoryPickerPageAndBoundaryNavigation(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m.height = 12 // five history rows are visible in the picker
+	for i := 0; i < 11; i++ {
+		m.hist.navigate(histEntry{id: model.Identity{
+			Type:       model.TypeListener,
+			ID:         fmt.Sprintf("listener-%02d", i),
+			OwningLBID: "lb-1",
+			Label:      fmt.Sprintf("listener:%02d", i),
+		}})
+	}
+
+	m = upd(t, m, press("h"))
+	last := len(m.pickerItems()) - 1
+	if m.pickCursor != last {
+		t.Fatalf("initial picker cursor = %d, want current entry %d", m.pickCursor, last)
+	}
+	if m.search.Focused() {
+		t.Fatal("history search should be inactive until / is pressed")
+	}
+	m = upd(t, m, press("ignored"))
+	if m.search.Value() != "" || m.pickCursor != last {
+		t.Fatalf("ordinary key changed inactive history search or cursor: query=%q cursor=%d", m.search.Value(), m.pickCursor)
+	}
+
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	if m.pickCursor != 0 {
+		t.Fatalf("ctrl+a/home cursor = %d, want 0", m.pickCursor)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.pickCursor != 5 {
+		t.Fatalf("page down cursor = %d, want 5", m.pickCursor)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.pickCursor != last {
+		t.Fatalf("page down past end cursor = %d, want %d", m.pickCursor, last)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if want := last - 5; m.pickCursor != want {
+		t.Fatalf("page up cursor = %d, want %d", m.pickCursor, want)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if m.pickCursor != last {
+		t.Fatalf("ctrl+e/end cursor = %d, want %d", m.pickCursor, last)
+	}
+	m = upd(t, m, press("/"))
+	if !m.search.Focused() {
+		t.Fatal("/ should activate history search")
+	}
+	m = upd(t, m, press("listener:10"))
+	if got := len(m.pickerItems()); got != 1 {
+		t.Fatalf("filtered history has %d items, want 1", got)
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	if m.search.Position() != 0 {
+		t.Fatalf("ctrl+a/home should move the active search cursor to the beginning, got %d", m.search.Position())
+	}
+	m = upd(t, m, press("enter"))
+	if m.search.Focused() || m.search.Value() != "listener:10" {
+		t.Fatalf("enter should retain and leave history filter: focused=%v query=%q", m.search.Focused(), m.search.Value())
+	}
+	m = upd(t, m, press("esc"))
+	if m.overlay != overlayPicker || m.search.Value() != "" {
+		t.Fatalf("first esc should clear retained filter and keep picker open: overlay=%v query=%q", m.overlay, m.search.Value())
+	}
+	m = upd(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.pickCursor != last {
+		t.Fatalf("physical end cursor = %d, want %d", m.pickCursor, last)
 	}
 }
 

@@ -743,6 +743,114 @@ func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 	}
 }
 
+func TestHistoryNavigationRestoresSelectedRelatedObject(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter")) // LB overview
+
+	listenerIndex, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("missing listener row")
+	}
+	m.cursor = listenerIndex
+	listenerSelection := m.entries[m.cursor].selection()
+	m = updExec(t, m, press("enter")) // listener overview
+
+	poolIndex, ok := m.selectLabel("pool:web")
+	if !ok {
+		t.Fatal("missing listener pool row")
+	}
+	m.cursor = poolIndex
+	poolSelection := m.entries[m.cursor].selection()
+	m = updExec(t, m, press("enter")) // pool
+
+	m = updExec(t, m, press("esc")) // listener
+	if m.loc.node == nil || m.loc.node.Type != model.TypeListener ||
+		!m.entries[m.cursor].selection().equal(poolSelection) {
+		t.Fatalf("Back did not restore listener selection: loc=%+v cursor=%d entries=%v", m.loc.node, m.cursor, labels(m))
+	}
+
+	m = updExec(t, m, press("esc")) // LB
+	if m.loc.node == nil || m.loc.node.Type != model.TypeLoadBalancer ||
+		!m.entries[m.cursor].selection().equal(listenerSelection) {
+		t.Fatalf("Back did not restore LB selection: loc=%+v cursor=%d entries=%v", m.loc.node, m.cursor, labels(m))
+	}
+
+	m = updExec(t, m, press("right")) // listener again
+	if m.loc.node == nil || m.loc.node.Type != model.TypeListener ||
+		!m.entries[m.cursor].selection().equal(poolSelection) {
+		t.Fatalf("Forward did not restore listener selection: loc=%+v cursor=%d entries=%v", m.loc.node, m.cursor, labels(m))
+	}
+}
+
+func TestListenerRefreshCompletesAfterNavigatingBackToLoadBalancer(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("enter"))
+	listenerIndex, ok := m.selectLabel("listener:http")
+	if !ok {
+		t.Fatal("missing listener row")
+	}
+	m.cursor = listenerIndex
+	m = updExec(t, m, press("enter"))
+	listener := m.loc.node
+	if listener == nil || listener.Type != model.TypeListener {
+		t.Fatalf("listener location = %+v", listener)
+	}
+	m = updExec(t, m, press("esc")) // navigate away before responses arrive
+
+	m.refreshing = true
+	m.refreshLBID = listener.OwningLBID
+	m.loading = true
+	m.lbDetailLoading[listener.ID] = true
+	m.lbStatsLoading[listener.ID] = true
+	detail, err := m.backend.FetchDetail(context.Background(), listener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := m.backend.ListenerStats(context.Background(), listener.OwningLBID, listener.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = upd(t, m, detailMsg{
+		nodeID: listener.ID, lbID: listener.OwningLBID, res: detail,
+		intent: intentOverview, refresh: true,
+	})
+	if !m.refreshing {
+		t.Fatal("refresh completed before listener stats arrived")
+	}
+	m = upd(t, m, listenerStatsMsg{
+		lbID: listener.OwningLBID, listenerID: listener.ID,
+		stats: stats, sampledAt: time.Now(), refresh: true,
+	})
+	if m.refreshing || m.loading || m.lbDetailLoading[listener.ID] || m.lbStatsLoading[listener.ID] {
+		t.Fatalf("listener refresh remained stuck after navigation: refreshing=%v loading=%v detail=%v stats=%v",
+			m.refreshing, m.loading, m.lbDetailLoading[listener.ID], m.lbStatsLoading[listener.ID])
+	}
+}
+
+func TestBreadcrumbTruncationPreservesCurrentObject(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m.width = 38
+	m.hist = newHistory(50)
+	m.hist.root = model.LBListIdentity
+	m.hist.navigate(histEntry{id: model.LBListIdentity})
+	m.hist.navigate(histEntry{id: model.Identity{
+		Type: model.TypeLoadBalancer, ID: "lb-1", OwningLBID: "lb-1",
+		Label: "lb:a-very-long-load-balancer-name",
+	}})
+	m.hist.navigate(histEntry{id: model.Identity{
+		Type: model.TypeListener, ID: "listener-1", OwningLBID: "lb-1",
+		Label: "listener:https",
+	}})
+
+	line := ansiRE.ReplaceAllString(m.breadcrumbLine(), "")
+	if !strings.HasPrefix(line, "… › ") || !strings.HasSuffix(line, "listener:https") {
+		t.Fatalf("breadcrumb did not preserve current object: %q", line)
+	}
+	if lipgloss.Width(m.breadcrumbLine()) > m.width {
+		t.Fatalf("breadcrumb width exceeds terminal: %q", line)
+	}
+}
+
 func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m.clock = func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) }

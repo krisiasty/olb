@@ -2,14 +2,16 @@ package tui
 
 import "github.com/krisiasty/olb/internal/model"
 
-// histEntry is one visited location. Entries are identities, not pointers or
-// snapshots: they are re-resolved against live (or cached) state on every
-// revisit, so a back-press can cost a round trip and can land on a since-deleted
-// object (marked dead).
+// histEntry is one visited location. Object data is stored as an identity, not
+// a pointer or snapshot: it is re-resolved against live (or cached) state on
+// every revisit. The lightweight position snapshot only restores which related
+// row was selected and where its list was scrolled.
 type histEntry struct {
-	id     model.Identity
-	viaRef bool // reached by following a reference / back-reference edge (breadcrumb ↦)
-	dead   bool // object was gone at last resolution
+	id          model.Identity
+	viaRef      bool // reached by following a reference / back-reference edge (breadcrumb ↦)
+	dead        bool // object was gone at last resolution
+	position    workspacePosition
+	positionSet bool
 }
 
 // history is one workspace's browser-style ordered list plus a cursor.
@@ -40,6 +42,14 @@ func (h *history) current() (histEntry, bool) {
 		return histEntry{}, false
 	}
 	return h.entries[h.cursor], true
+}
+
+func (h *history) saveCurrentPosition(position workspacePosition) {
+	if h.cursor < 0 || h.cursor >= len(h.entries) {
+		return
+	}
+	h.entries[h.cursor].position = position
+	h.entries[h.cursor].positionSet = position.valid
 }
 
 // navigate performs new navigation: truncate the forward portion, append, and

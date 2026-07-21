@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"gopkg.in/yaml.v3"
 
 	"github.com/krisiasty/olb/internal/model"
@@ -971,8 +972,7 @@ func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
 		} else if field.color != lipgloss.Color("") && value != "—" {
 			value = lipgloss.NewStyle().Foreground(field.color).Render(value)
 		}
-		line := "  " + label + "  " + value
-		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
+		lines = append(lines, wrapOverviewValue("  "+label+"  ", value, width)...)
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
@@ -1498,10 +1498,30 @@ func (m Model) renderOverviewPanel(title string, fields []overviewField, width, 
 		} else if field.color != lipgloss.Color("") && value != "—" {
 			value = lipgloss.NewStyle().Foreground(field.color).Render(value)
 		}
-		line := label + "  " + value
-		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(line))
+		lines = append(lines, wrapOverviewValue(label+"  ", value, width)...)
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+// wrapOverviewValue wraps values inside the upper details area and aligns
+// continuation lines with the first value cell. Related-object rows use their
+// own single-line renderer and intentionally remain clipped.
+func wrapOverviewValue(prefix, value string, width int) []string {
+	prefixWidth := lipgloss.Width(prefix)
+	valueWidth := width - prefixWidth
+	if valueWidth < 1 {
+		return []string{lipgloss.NewStyle().MaxWidth(width).Render(prefix + value)}
+	}
+	wrapped := strings.Split(ansi.Wrap(value, valueWidth, " "), "\n")
+	lines := make([]string, 0, len(wrapped))
+	for i, part := range wrapped {
+		linePrefix := strings.Repeat(" ", prefixWidth)
+		if i == 0 {
+			linePrefix = prefix
+		}
+		lines = append(lines, lipgloss.NewStyle().MaxWidth(width).Render(linePrefix+part))
+	}
+	return lines
 }
 
 func displayValue(value string) string {

@@ -64,6 +64,10 @@ type Model struct {
 	width, height int
 
 	spinner spinner.Model
+	// coeSpinner is independent because slow Magnum enrichment must animate
+	// without marking the responsive Octavia UI as globally loading.
+	coeSpinner        spinner.Model
+	coeSpinnerRunning bool
 	// statsSpinner is a cadence indicator, not a loading indicator: while the
 	// latest automatic stats sample is still within its expected interval, the
 	// moving point shows that another sample is scheduled.
@@ -137,6 +141,11 @@ type Model struct {
 	lbListenersLoaded  map[string]bool
 	lbPoolsLoading     map[string]bool
 	lbPoolsLoaded      map[string]bool
+	coeClusters        []osclient.COECluster
+	coeClustersLoaded  bool
+	coeClustersLoading bool
+	coeClustersErr     string
+	coeClustersAt      time.Time
 
 	// Automatic refresh uses a fast, user-selectable cadence for stats and a
 	// slower fixed cadence for the full list/status graph. Generations make old
@@ -217,6 +226,8 @@ func New(backend Backend, cfg Config) Model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
+	coeSpinner := spinner.New()
+	coeSpinner.Spinner = spinner.Dot
 	statsSpinner := spinner.New()
 	statsSpinner.Spinner = spinner.Spinner{
 		Frames: []string{"∙∙∙∙", "●∙∙∙", "∙●∙∙", "∙∙●∙", "∙∙∙●"},
@@ -239,6 +250,7 @@ func New(backend Backend, cfg Config) Model {
 		st:                     st,
 		cfg:                    cfg,
 		spinner:                sp,
+		coeSpinner:             coeSpinner,
 		statsSpinner:           statsSpinner,
 		filter:                 fi,
 		search:                 se,

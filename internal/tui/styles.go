@@ -81,7 +81,7 @@ func newStyles() styles {
 // for the list's provisioning column.
 func statusColor(status string) lipgloss.Color {
 	switch status {
-	case "ONLINE", "ACTIVE", "ENABLED", "ALLOCATED", "READY":
+	case "ONLINE", "ACTIVE", "ENABLED", "ALLOCATED", "READY", "HEALTHY":
 		return lipgloss.Color("42") // green
 	case "DEGRADED", "DRAINING", "BOOTING":
 		return lipgloss.Color("214") // amber

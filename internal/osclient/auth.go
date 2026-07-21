@@ -1,5 +1,5 @@
 // Package osclient wires OpenStack authentication and the Octavia / Neutron /
-// Nova / Keystone service clients, and exposes the data operations the TUI
+// Nova / Keystone / Magnum service clients, and exposes the data operations the TUI
 // needs (list load balancers, fetch a status tree, load per-object detail,
 // and list selectable projects).
 //
@@ -117,6 +117,7 @@ type serviceClients struct {
 	network    *gophercloud.ServiceClient // Neutron (optional; floating IPs)
 	compute    *gophercloud.ServiceClient // Nova (optional; member instances)
 	keyManager *gophercloud.ServiceClient // Barbican (optional; TLS certificates)
+	container  *gophercloud.ServiceClient // Magnum (optional; Kubernetes relations)
 	project    ProjectInfo
 }
 
@@ -263,11 +264,12 @@ func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoi
 	if sc.identity, err = openstack.NewIdentityV3(provider, endpoint); err != nil {
 		return nil, fmt.Errorf("no Keystone (identity) endpoint in the service catalog: %w", err)
 	}
-	// Neutron and Nova are optional: their absence degrades the floating-IP and
-	// member-instance edges gracefully rather than being fatal.
+	// Cross-service clients are optional: their absence degrades the associated
+	// related objects gracefully rather than being fatal.
 	sc.network, _ = openstack.NewNetworkV2(provider, endpoint)
 	sc.compute, _ = openstack.NewComputeV2(provider, endpoint)
 	sc.keyManager, _ = openstack.NewKeyManagerV1(provider, endpoint)
+	sc.container, _ = openstack.NewContainerInfraV1(provider, endpoint)
 
 	sc.project = currentProject(provider)
 	return sc, nil

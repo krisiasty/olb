@@ -41,6 +41,10 @@ type fakeBackend struct {
 	telemetry    *telemetry.Collector
 	amphoraeErr  error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
 	lastTreeHint *model.LBMeta
+	coeClusters  []osclient.COECluster
+	coeErr       error
+	coeCalls     int
+	coeDeadline  time.Duration
 }
 
 func newTree() *model.Tree {
@@ -204,6 +208,14 @@ func (f *fakeBackend) ListFloatingIPMappings(context.Context) ([]osclient.Floati
 		{PortID: "port-9", FixedIP: "203.0.113.9", FloatingIP: "198.51.100.7"},
 		{PortID: "port-9", FixedIP: "203.0.114.9", FloatingIP: "198.51.100.17"},
 	}, nil
+}
+
+func (f *fakeBackend) ListCOEClusters(ctx context.Context) ([]osclient.COECluster, error) {
+	f.coeCalls++
+	if deadline, ok := ctx.Deadline(); ok {
+		f.coeDeadline = time.Until(deadline)
+	}
+	return f.coeClusters, f.coeErr
 }
 
 func (f *fakeBackend) ResolveFloatingIPs(context.Context, string, string) (map[string]*model.Node, error) {
@@ -2456,6 +2468,18 @@ func TestProjectSwitcherDisabled(t *testing.T) {
 	m = upd(t, m, press("esc"))
 }
 
+func TestProjectSwitcherKeyAliases(t *testing.T) {
+	for _, alias := range []string{"p", "0"} {
+		t.Run(alias, func(t *testing.T) {
+			m := start(t, osclient.SwitchCapability{CanSwitch: true})
+			m = updExec(t, m, press(alias))
+			if m.overlay != overlayProject || len(m.projects) != 2 {
+				t.Fatalf("%s should open and load the project selector; overlay=%v projects=%d", alias, m.overlay, len(m.projects))
+			}
+		})
+	}
+}
+
 func TestProjectSwitcherEnabled(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("p")) // loads projects
@@ -2576,11 +2600,41 @@ func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {
 	if !strings.Contains(plain, "global view: restart with --global-admin") {
 		t.Fatalf("global-admin hint missing:\n%s", plain)
 	}
+	if strings.Contains(plain, "a all projects") {
+		t.Fatalf("non-global selector should not advertise the all-projects shortcut:\n%s", plain)
+	}
+
+	next, shortcutCmd := m.Update(press("a"))
+	m = next.(Model)
+	if shortcutCmd != nil || m.overlay != overlayProject || m.allProjects {
+		t.Fatal("a should not select all projects without global-admin mode")
+	}
 
 	next, cmd := m.Update(press("enter"))
 	m = next.(Model)
 	if cmd == nil || m.overlay != overlayNone || m.allProjects {
 		t.Fatal("first visible project was not selectable at row zero")
+	}
+}
+
+func TestProjectSwitcherAllProjectsShortcut(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{
+		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
+	})
+	m = updExec(t, m, press("0"))
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	if !strings.Contains(plain, "a all projects") {
+		t.Fatalf("global-admin selector should advertise the all-projects shortcut:\n%s", plain)
+	}
+
+	next, cmd := m.Update(press("a"))
+	m = next.(Model)
+	if cmd == nil || m.overlay != overlayNone || m.loadingWhat != "all projects" {
+		t.Fatalf("a shortcut did not start all-projects selection: overlay=%v loading=%q cmd=%v", m.overlay, m.loadingWhat, cmd != nil)
+	}
+	m = upd(t, m, cmd())
+	if !m.allProjects {
+		t.Fatal("a shortcut should enter all-projects scope")
 	}
 }
 

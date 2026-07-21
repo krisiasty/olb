@@ -78,7 +78,7 @@ func (l LB) Meta() model.LBMeta {
 }
 
 // ErrUnavailable marks a feature that cannot be served because a required
-// service client (Neutron/Nova) is absent from the catalog.
+// service client (for example Neutron, Nova, or Magnum) is absent from the catalog.
 var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).

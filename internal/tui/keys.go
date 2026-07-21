@@ -30,6 +30,7 @@ type keyMap struct {
 	ShowIDs key.Binding // d
 
 	Project      key.Binding // p
+	ProjectAll   key.Binding // a inside the project selector
 	Refresh      key.Binding // r
 	AutoRefresh  key.Binding // a
 	IntervalUp   key.Binding // + / =
@@ -70,7 +71,8 @@ func defaultKeys() keyMap {
 		Status:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
 		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
 
-		Project:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
+		Project:      key.NewBinding(key.WithKeys("p", "0"), key.WithHelp("p/0", "project")),
+		ProjectAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all projects")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
 		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),

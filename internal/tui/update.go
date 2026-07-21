@@ -40,6 +40,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
+		case m.coeSpinner.ID():
+			if !m.coeClustersLoading {
+				m.coeSpinnerRunning = false
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.coeSpinner, cmd = m.coeSpinner.Update(msg)
+			return m, cmd
 		case m.statsSpinner.ID():
 			updated := m.updatedAt(m.currentStatsID(), sectionStats)
 			if !m.isStatsOverview() || !m.statsWithinAutoInterval(updated) {
@@ -76,6 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onListenerSummaries(msg)
 	case poolSummariesMsg:
 		return m.onPoolSummaries(msg)
+	case coeClustersMsg:
+		return m.onCOEClusters(msg)
 	case refResolveMsg:
 		return m.onRefResolve(msg)
 	case amphoraeMsg:
@@ -319,6 +329,7 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 		delete(m.lbRelatedErr, msg.lbID)
 		m.markFresh(msg.lbID, sectionRelated)
 	}
+	m.applyKubernetesRelations(msg.tree)
 	if msg.attach != nil && msg.tree != nil {
 		attachAmphora(msg.tree, msg.attach)
 	}
@@ -344,6 +355,9 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			}
 			if m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor {
 				return m, m.reloadHealthMonitorOverview()
+			}
+			if m.loc.node != nil && (m.loc.node.Type == model.TypeCOECluster || m.loc.node.Type == model.TypeKubeService) {
+				return m, tea.Batch(m.ensureCOEClustersCmd(!m.refreshAutomatic), m.finishRefresh(""))
 			}
 			delete(m.lbRelatedErr, msg.lbID)
 			m.markFresh(msg.lbID, sectionRelated)
@@ -674,6 +688,9 @@ func (m *Model) loadLBOverview() tea.Cmd {
 	if m.isHealthMonitorOverview() {
 		return m.loadHealthMonitorOverview(false)
 	}
+	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		return m.ensureCOEClustersCmd(false)
+	}
 	return m.startLBOverview(false)
 }
 
@@ -954,6 +971,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 		m.refreshPoolsExpected = true
 		m.lbPoolsLoading[n.ID] = true
 		cmds = append(cmds, m.poolSummariesCmd(n.ID, true))
+		if cmd := m.ensureCOEClustersCmd(!m.refreshAutomatic); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return tea.Batch(cmds...)
 	}
 	var cmds []tea.Cmd
@@ -984,6 +1004,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 	if !m.lbPoolsLoaded[n.ID] && !m.lbPoolsLoading[n.ID] {
 		m.lbPoolsLoading[n.ID] = true
 		cmds = append(cmds, m.poolSummariesCmd(n.ID, false))
+	}
+	if cmd := m.ensureCOEClustersCmd(false); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	if cmd := m.ensureStatsSpinner(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -1612,6 +1635,44 @@ func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) onCOEClusters(msg coeClustersMsg) (tea.Model, tea.Cmd) {
+	if msg.projectID != m.project.ID || msg.all != m.allProjects {
+		return m, nil
+	}
+	m.coeClustersLoading = false
+	m.coeSpinnerRunning = false
+	m.coeClustersLoaded = true
+	m.coeClustersAt = m.clock()
+	if msg.err != nil {
+		m.coeClustersErr = msg.err.Error()
+	} else {
+		m.coeClusters = msg.items
+		m.coeClustersErr = ""
+	}
+	if m.loc.tree == nil || m.loc.tree.Root == nil {
+		return m, nil
+	}
+	if inferKubernetesLB(m.loc.tree.Root.Name).kind == kubernetesLBNone {
+		return m, nil
+	}
+	m.applyKubernetesRelations(m.loc.tree)
+	if m.loc.node == m.loc.tree.Root {
+		m.allEntries = locationEntries(m.loc.node)
+		m.applyFilters()
+	} else if m.loc.node != nil && (m.loc.node.Type == model.TypeCOECluster || m.loc.node.Type == model.TypeKubeService) {
+		if replacement := m.loc.tree.Node(m.loc.id.ID); replacement != nil {
+			m.loc.node = replacement
+			m.allEntries = locationEntries(replacement)
+			m.applyFilters()
+		}
+	}
+	if m.loc.node != nil {
+		m.markFresh(m.loc.node.ID, sectionDetails)
+	}
+	m.markFresh(m.loc.tree.Root.ID, sectionRelated)
+	return m, nil
+}
+
 func (m *Model) applyAmphorae(lbID string, nodes []*model.Node) {
 	var tree *model.Tree
 	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
@@ -1790,6 +1851,12 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbListenersLoaded = map[string]bool{}
 	m.lbPoolsLoading = map[string]bool{}
 	m.lbPoolsLoaded = map[string]bool{}
+	m.coeClusters = nil
+	m.coeClustersLoaded = false
+	m.coeClustersLoading = false
+	m.coeSpinnerRunning = false
+	m.coeClustersErr = ""
+	m.coeClustersAt = time.Time{}
 	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
 	m.vipFloatingIPs = nil
@@ -1874,6 +1941,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	}
 	entry, fresh := m.cache.Get(id.OwningLBID)
 	if entry.Tree != nil && fresh {
+		m.applyKubernetesRelations(entry.Tree)
 		m.buildNodeLocation(id, entry.Tree)
 		return m.loadLBOverview()
 	}

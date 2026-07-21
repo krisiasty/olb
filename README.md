@@ -121,7 +121,7 @@ jq 'select(.event == "response" and (.slow or .outcome != "success"))' api.jsonl
 Press `p` to change the active project without leaving the tool. Regular mode
 populates the selector from Keystone `GET /v3/auth/projects`. A selection
 exchanges the startup token for a fresh project-scoped token and creates
-matching Octavia, Neutron, Nova, and Barbican clients.
+matching Octavia, Neutron, Nova, Barbican, and optional Magnum clients.
 
 Pass `--global-admin` to explicitly treat the startup credentials as globally
 privileged. This mode validates administrative Keystone project enumeration and
@@ -152,7 +152,7 @@ list because previous objects may not exist in the new view.
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
-| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit (back out, then exit) |
+| Global | `p`/`0` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit (back out, then exit) |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
@@ -188,10 +188,20 @@ counts throughout the TUI.
   member and listener-attachment counts, for example
   `HTTP · round robin · 4 members · 2 listeners`; duplicate sibling names gain
   a short ID suffix. A zero-listener count makes unattached pools explicit.
-  Non-selectable headings divide related objects
-  into VIP, listener, pool, and Amphora groups; their visible counts update with
-  the active text and status filters. The panel and individual group headings
-  also roll up ERROR and DEGRADED counts from their currently visible rows.
+  Non-selectable headings divide related objects into VIP, listener, pool,
+  Amphora, COE cluster, and Kubernetes service groups; their visible counts
+  update with the active text and status filters. The panel and individual group
+  headings also roll up ERROR and DEGRADED counts from their currently visible
+  rows.
+- **Kubernetes relationships without N+1 requests.** Kubernetes Service load
+  balancers are recognized as
+  `kube_service_<cluster UUID>_<namespace>_<service>`, while CAPI API-server load
+  balancers are matched through the Magnum cluster's `stack_id`. One asynchronous
+  Magnum cluster-list request is indexed and reused for every matching load
+  balancer in the active scope and cached for 60 seconds; manual refresh bypasses
+  the cache. COE clusters and inferred Kubernetes services open as lightweight
+  detail views; missing, inaccessible, or slow Magnum data never blocks Octavia
+  rendering.
 - **Other detail is lazy.** Per-object `show` calls used for raw inspection and
   precise reference resolution are fetched only when needed.
 - **Readable traffic statistics.** Byte totals use IEC units and show throughput,
@@ -222,8 +232,9 @@ counts throughout the TUI.
   ready, and prunes dead history entries. Automatic refresh is enabled by
   default: visible load-balancer/listener stats update every 5 seconds
   (adjustable from those views with `+` and `-` through
-  1/2/5/10/30/60-second steps), while lists, details, and
-  related objects update every 30 seconds. Details and related objects show
+  1/2/5/10/30/60-second steps), while Octavia lists, details, and related
+  objects update every 30 seconds. COE cluster and Kubernetes service details
+  use their independent 60-second Magnum cache. Details and related objects show
   their last-successful update age. Fresh automatic stats instead show a moving
   `Points` cadence indicator; after the interval and a short grace window they
   switch to an advancing age and a `stale` marker (manual mode always shows
@@ -235,9 +246,9 @@ counts throughout the TUI.
   `refresh: auto (stats/full)`, for example `refresh: auto (5s/30s)`. Views
   without statistics show only their fixed cadence as `refresh: auto (30s)`.
 - **Graceful degradation.** Admin-only (amphorae) and cross-service (floating IP,
-  Nova instance) surfaces degrade with a clear reason when scope or RBAC is
-  missing, rather than erroring out or rendering a dead node. OVN-backed LBs have
-  no amphora branch at all.
+  Nova instance, Magnum cluster) surfaces degrade with a clear reason when scope
+  or RBAC is missing, rather than erroring out or rendering a dead node.
+  OVN-backed LBs have no amphora branch at all.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for implementation decisions the spec
 deferred (clipboard/OSC 52, reference-edge resolution, platform notes).

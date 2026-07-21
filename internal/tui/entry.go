@@ -339,6 +339,10 @@ func relatedObjectGroup(e entry) (key, title string) {
 				return "pools", "POOLS"
 			case model.TypeL7Policy:
 				return "l7-policies", "L7 POLICIES"
+			case model.TypeCOECluster:
+				return "coe-clusters", "COE CLUSTERS"
+			case model.TypeKubeService:
+				return "kubernetes-services", "KUBERNETES SERVICES"
 			}
 		}
 		return "related", "RELATED"
@@ -359,6 +363,10 @@ func relatedObjectGroup(e entry) (key, title string) {
 				return "health-monitors", "HEALTH MONITORS"
 			case model.TypeMember:
 				return "members", "MEMBERS"
+			case model.TypeCOECluster:
+				return "coe-clusters", "COE CLUSTERS"
+			case model.TypeKubeService:
+				return "kubernetes-services", "KUBERNETES SERVICES"
 			}
 		}
 		return "other", "OTHER"
@@ -481,8 +489,12 @@ func relatedObjectRank(t model.NodeType) int {
 		return 2
 	case model.TypeAmphora:
 		return 3
-	default:
+	case model.TypeCOECluster:
 		return 4
+	case model.TypeKubeService:
+		return 5
+	default:
+		return 6
 	}
 }
 
@@ -541,6 +553,10 @@ func inlineAttrs(n *model.Node) string {
 		return joinAttrs(n, "address", "port")
 	case model.TypeHealthMonitor:
 		return healthMonitorSummary(n)
+	case model.TypeCOECluster:
+		return coeClusterSummary(n)
+	case model.TypeKubeService:
+		return kubernetesServiceSummary(n)
 	case model.TypeL7Policy:
 		return joinAttrs(n, "action")
 	case model.TypeL7Rule:

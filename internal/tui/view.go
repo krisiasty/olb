@@ -188,6 +188,8 @@ func (m Model) visibleRows() int {
 		_, h = m.amphoraOverviewParts(h)
 	} else if m.isHealthMonitorOverview() {
 		_, h = m.healthMonitorOverviewParts(h)
+	} else if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		h--
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -220,6 +222,9 @@ func (m Model) bodyLines() []string {
 	}
 	if m.isHealthMonitorOverview() {
 		return m.healthMonitorOverviewLines(h)
+	}
+	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		return m.simpleKubernetesOverviewLines(h)
 	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
@@ -314,12 +319,21 @@ func (m Model) isHealthMonitorOverview() bool {
 	return m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor
 }
 
+func (m Model) isCOEClusterOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeCOECluster
+}
+
+func (m Model) isKubernetesServiceOverview() bool {
+	return m.loc.node != nil && m.loc.node.Type == model.TypeKubeService
+}
+
 func (m Model) isStatsOverview() bool {
 	return m.isLBOverview() || m.isListenerOverview()
 }
 
 func (m Model) isOverview() bool {
-	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() || m.isHealthMonitorOverview()
+	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() ||
+		m.isHealthMonitorOverview() || m.isCOEClusterOverview() || m.isKubernetesServiceOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -1757,7 +1771,7 @@ func (m Model) renderRow(e entry, sel bool) string {
 	if eff == "" {
 		eff = e.prov
 	}
-	healthy := eff == "ONLINE" || eff == "ACTIVE"
+	healthy := eff == "ONLINE" || eff == "ACTIVE" || eff == "HEALTHY"
 	if e.node != nil && e.node.Type == model.TypeAmphora && eff == "ALLOCATED" {
 		healthy = true
 	}
@@ -2034,6 +2048,10 @@ func nodeTypeLabel(t model.NodeType) string {
 		return "Amphora"
 	case model.TypeInstance:
 		return "Instance"
+	case model.TypeCOECluster:
+		return "COE cluster"
+	case model.TypeKubeService:
+		return "Kubernetes service"
 	default:
 		return upperFirst(string(t))
 	}
@@ -2153,7 +2171,7 @@ func (m Model) hintLine() string {
 	if hasStatusEntries(m.allEntries) {
 		parts = append(parts, "s status")
 	}
-	parts = append(parts, "p project", "r refresh", "a auto")
+	parts = append(parts, "p/0 project", "r refresh", "a auto")
 	if m.isStatsOverview() {
 		parts = append(parts, "+/- interval")
 	}
@@ -2226,7 +2244,11 @@ func (m Model) projectView() string {
 		if cap.GlobalAdmin {
 			kind = "all projects"
 		}
-		return title + "\n\n" + m.spinner.View() + " loading " + kind + "…\n\n" + m.st.help.Render("esc cancel")
+		footer := "esc cancel"
+		if cap.GlobalAdmin && cap.CanAllProjects {
+			footer = "a all projects · esc cancel"
+		}
+		return title + "\n\n" + m.spinner.View() + " loading " + kind + "…\n\n" + m.st.help.Render(footer)
 	}
 	fp := m.filteredProjects()
 	type prow struct {
@@ -2294,6 +2316,9 @@ func (m Model) projectView() string {
 		b.WriteString(m.st.help.Render("global view: restart with --global-admin"))
 	}
 	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
+	if cap.GlobalAdmin && cap.CanAllProjects {
+		footer = "enter select · a all projects · arrows/page/home/end move · / filter · esc/q cancel"
+	}
 	if m.search.Focused() {
 		footer = "type to filter · enter apply · esc clear"
 	}
@@ -2546,7 +2571,7 @@ Inspect
   c                copy the displayed raw object (inside the YAML/JSON view)
 
 {{list_controls}}Global
-  p                project switcher
+  p / 0            project switcher
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
 {{stats_interval_controls}}  t                application and API telemetry
@@ -2564,7 +2589,8 @@ Status colors
 
 Notes
 	• load-balancer/listener details show stats/full refresh cadences (for
-	  example, 5s/30s); other views show the fixed full cadence (30s).
+	  example, 5s/30s); COE cluster and Kubernetes service details show their
+	  Magnum cadence (60s), while other views show the fixed full cadence (30s).
 	• enter is the only descent key; arrows are reserved for history.
 	• 1-5 switch persistent views; each keeps its own history, cursor, and filters.
   • esc clears an active filter first, otherwise it is back.

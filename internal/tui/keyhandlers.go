@@ -238,6 +238,9 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	if m.refreshing {
 		return m, nil
 	}
+	if automatic && (m.isCOEClusterOverview() || m.isKubernetesServiceOverview()) {
+		return m, m.ensureCOEClustersCmd(false)
+	}
 	m.hist.pruneDead()
 	m.refreshing = true
 	m.refreshAutomatic = automatic
@@ -246,13 +249,18 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	if m.loc.isTopLevelList() {
 		m.refreshLBID = ""
 		switch m.loc.listKind() {
+		case kindVIP:
+			m.refreshVIPLBs = nil
+			m.refreshVIPFloatingIPs = nil
+			m.vipFloatingIPsLoading = true
+			return m, tea.Batch(m.loadLBsCmd(), m.loadVIPFloatingIPsCmd(true))
 		case kindListener:
 			return m, m.loadListenersCmd(true)
 		case kindPool:
 			return m, m.loadPoolsCmd(true)
 		case kindAmphora:
 			return m, m.loadAmphoraeListCmd(true)
-		default: // LB list and the derived VIPs list both reload the LB list
+		default:
 			return m, m.loadLBsCmd()
 		}
 	}
@@ -394,6 +402,9 @@ func (m *Model) openInspect(node *model.Node, intent detailIntent) tea.Cmd {
 
 func (m Model) currentIDName() (id, name string) {
 	if m.loc.node != nil {
+		if m.loc.node.Type == model.TypeCOECluster && m.loc.node.Attrs["uuid"] != "" {
+			return m.loc.node.Attrs["uuid"], m.loc.node.Name
+		}
 		return m.loc.node.ID, m.loc.node.Name
 	}
 	if m.loc.isTopLevelList() && m.cursor >= 0 && m.cursor < len(m.entries) {
@@ -511,6 +522,16 @@ func (m Model) openProject() (tea.Model, tea.Cmd) {
 	return m, m.loadProjectsCmd()
 }
 
+func (m Model) selectAllProjects() (tea.Model, tea.Cmd) {
+	if !m.allProjectsSelectable() {
+		return m, nil
+	}
+	m.overlay = overlayNone
+	m.search.Blur()
+	m.loading, m.loadingWhat = true, "all projects"
+	return m, m.enterAllProjectsCmd()
+}
+
 func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !m.backend.SwitchCapability().CanSwitch {
 		if key.Matches(msg, m.keys.Cancel) || key.Matches(msg, m.keys.Quit) {
@@ -561,6 +582,8 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Filter):
 		m.search.Focus()
 		return m, textinput.Blink
+	case key.Matches(msg, m.keys.ProjectAll):
+		return m.selectAllProjects()
 	case key.Matches(msg, m.keys.Up):
 		if m.projCursor > 0 {
 			m.projCursor--
@@ -599,13 +622,7 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := m.projCursor
 		if hasAllProjects {
 			if m.projCursor == 0 {
-				if !m.allProjectsSelectable() {
-					return m, nil
-				}
-				m.overlay = overlayNone
-				m.search.Blur()
-				m.loading, m.loadingWhat = true, "all projects"
-				return m, m.enterAllProjectsCmd()
+				return m.selectAllProjects()
 			}
 			idx--
 		}

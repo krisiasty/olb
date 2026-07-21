@@ -25,6 +25,8 @@ const (
 	TypeL7Rule        NodeType = "l7rule"
 	TypeAmphora       NodeType = "amphora"
 	TypeInstance      NodeType = "instance" // Nova server backing a member
+	TypeCOECluster    NodeType = "coecluster"
+	TypeKubeService   NodeType = "kubernetesservice"
 )
 
 // Short returns a compact type label used in breadcrumbs and list entries.
@@ -36,6 +38,10 @@ func (t NodeType) Short() string {
 		return "monitor"
 	case TypeFloatingIP:
 		return "fip"
+	case TypeCOECluster:
+		return "cluster"
+	case TypeKubeService:
+		return "service"
 	default:
 		return string(t)
 	}

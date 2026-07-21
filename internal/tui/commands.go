@@ -12,7 +12,10 @@ import (
 
 // requestTimeout bounds every backend round trip so a hung API can't wedge the
 // UI (the command goroutine returns an error msg instead).
-const requestTimeout = 30 * time.Second
+const (
+	requestTimeout    = 30 * time.Second
+	coeRequestTimeout = 2 * time.Minute
+)
 
 func ctxTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), requestTimeout)
@@ -126,6 +129,12 @@ type lbFloatingIPMsg struct {
 	err     error
 }
 
+type vipFloatingIPsMsg struct {
+	items   []osclient.FloatingIPMapping
+	refresh bool
+	err     error
+}
+
 type listenerSummariesMsg struct {
 	lbID    string
 	items   map[string]osclient.ListenerSummary
@@ -138,6 +147,13 @@ type poolSummariesMsg struct {
 	items   map[string]osclient.PoolSummary
 	refresh bool
 	err     error
+}
+
+type coeClustersMsg struct {
+	items     []osclient.COECluster
+	projectID string
+	all       bool
+	err       error
 }
 
 type flashClearMsg struct{ token int }
@@ -181,6 +197,30 @@ func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
 		defer cancel()
 		nodes, err := b.ListAllAmphorae(ctx)
 		return amphoraeListMsg{nodes: nodes, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadVIPFloatingIPsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		items, err := b.ListFloatingIPMappings(ctx)
+		return vipFloatingIPsMsg{items: items, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadCOEClustersCmd() tea.Cmd {
+	b := m.backend
+	projectID, all := m.project.ID, m.allProjects
+	return func() tea.Msg {
+		// Magnum cluster listing is enrichment and does not block Octavia views.
+		// Some deployments need substantially longer than the interactive API
+		// timeout, while coeClustersLoading still deduplicates concurrent calls.
+		ctx, cancel := context.WithTimeout(context.Background(), coeRequestTimeout)
+		defer cancel()
+		items, err := b.ListCOEClusters(ctx)
+		return coeClustersMsg{items: items, projectID: projectID, all: all, err: err}
 	}
 }
 

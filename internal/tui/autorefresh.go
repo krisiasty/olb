@@ -80,9 +80,13 @@ func (m Model) fullOverviewRefreshOverdue() bool {
 		return false
 	}
 	now := m.clock()
+	interval := fullAutoRefreshInterval
+	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		interval = coeClusterCacheTTL
+	}
 	for _, section := range []overviewSection{sectionDetails, sectionRelated} {
 		updated := m.updatedAt(m.loc.node.ID, section)
-		if !updated.IsZero() && now.Sub(updated) >= fullAutoRefreshInterval {
+		if !updated.IsZero() && now.Sub(updated) >= interval {
 			return true
 		}
 	}
@@ -137,7 +141,7 @@ func (m Model) overviewRequestInFlight() bool {
 	return anyLoading(m.lbDetailLoading) || anyLoading(m.lbStatsLoading) ||
 		anyLoading(m.lbFIPLoading) || anyLoading(m.lbAmphoraLoading) ||
 		anyLoading(m.lbListenersLoading) || anyLoading(m.lbPoolsLoading) ||
-		anyLoading(m.autoStatsLoading)
+		anyLoading(m.autoStatsLoading) || m.vipFloatingIPsLoading
 }
 
 func anyLoading(values map[string]bool) bool {
@@ -234,6 +238,9 @@ func (m Model) autoRefreshLabel() string {
 func (m Model) autoRefreshCadence() string {
 	if m.isStatsOverview() {
 		return m.autoRefreshInterval().String() + "/" + fullAutoRefreshInterval.String()
+	}
+	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		return fmt.Sprintf("%.0fs", coeClusterCacheTTL.Seconds())
 	}
 	return fullAutoRefreshInterval.String()
 }

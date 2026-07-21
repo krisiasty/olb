@@ -40,6 +40,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
+		case m.coeSpinner.ID():
+			if !m.coeClustersLoading {
+				m.coeSpinnerRunning = false
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.coeSpinner, cmd = m.coeSpinner.Update(msg)
+			return m, cmd
 		case m.statsSpinner.ID():
 			updated := m.updatedAt(m.currentStatsID(), sectionStats)
 			if !m.isStatsOverview() || !m.statsWithinAutoInterval(updated) {
@@ -54,6 +62,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case lbsMsg:
 		return m.onLBs(msg)
+	case vipFloatingIPsMsg:
+		return m.onVIPFloatingIPs(msg)
 	case listenersMsg:
 		return m.onListeners(msg)
 	case poolsMsg:
@@ -74,6 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onListenerSummaries(msg)
 	case poolSummariesMsg:
 		return m.onPoolSummaries(msg)
+	case coeClustersMsg:
+		return m.onCOEClusters(msg)
 	case refResolveMsg:
 		return m.onRefResolve(msg)
 	case amphoraeMsg:
@@ -106,6 +118,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	wasRefresh := m.refreshing && m.refreshLBID == ""
+	if wasRefresh && m.refreshAt.Equal(model.VIPListIdentity) {
+		m.refreshVIPLBs = &msg
+		return m, m.commitVIPListRefresh()
+	}
 	m.loading = false
 	if msg.err != nil {
 		if wasRefresh {
@@ -121,8 +137,10 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	if m.loc.isTopLevelList() {
 		ready := false
 		switch m.loc.listKind() {
-		case kindLB, kindVIP:
+		case kindLB:
 			ready = true
+		case kindVIP:
+			ready = m.vipFloatingIPsLoaded
 		case kindListener:
 			ready = m.listenersLoaded
 		case kindPool:
@@ -133,12 +151,76 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 		if ready {
 			m.setTopLevelEntries()
 			m.restoreRefreshSelection()
+		} else if m.loc.listKind() == kindVIP {
+			m.loading, m.loadingWhat = true, "floating IPs"
 		}
 	}
 	if wasRefresh {
 		return m, m.finishRefresh("")
 	}
 	return m, nil
+}
+
+func (m Model) onVIPFloatingIPs(msg vipFloatingIPsMsg) (tea.Model, tea.Cmd) {
+	if msg.refresh {
+		if m.refreshing && m.refreshAt.Equal(model.VIPListIdentity) {
+			m.refreshVIPFloatingIPs = &msg
+			return m, m.commitVIPListRefresh()
+		}
+		return m, nil
+	}
+	m.vipFloatingIPsLoading = false
+	m.vipFloatingIPsLoaded = true
+	m.loading = m.loc.isTopLevelList() && m.loc.listKind() == kindVIP && !m.lbsLoaded
+	if m.loading {
+		m.loadingWhat = "load balancers"
+	}
+	m.vipFloatingIPsErr = ""
+	if msg.err == nil {
+		m.vipFloatingIPs = msg.items
+	} else {
+		m.vipFloatingIPs = nil
+		m.vipFloatingIPsErr = msg.err.Error()
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindVIP && m.lbsLoaded {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.err != nil {
+		return m, m.setFlash("list floating IPs: "+msg.err.Error(), true)
+	}
+	return m, nil
+}
+
+func (m *Model) commitVIPListRefresh() tea.Cmd {
+	if m.refreshVIPLBs == nil || m.refreshVIPFloatingIPs == nil {
+		return nil
+	}
+	m.loading = false
+	m.vipFloatingIPsLoading = false
+	var failures []string
+	if m.refreshVIPLBs.err != nil {
+		failures = append(failures, "load balancers: "+m.refreshVIPLBs.err.Error())
+	} else {
+		m.lbs = m.refreshVIPLBs.lbs
+		m.lbsLoaded = true
+	}
+	if m.refreshVIPFloatingIPs.err != nil {
+		m.vipFloatingIPsErr = m.refreshVIPFloatingIPs.err.Error()
+		failures = append(failures, "floating IPs: "+m.refreshVIPFloatingIPs.err.Error())
+	} else {
+		m.vipFloatingIPs = m.refreshVIPFloatingIPs.items
+		m.vipFloatingIPsLoaded = true
+		m.vipFloatingIPsErr = ""
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindVIP {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if len(failures) > 0 {
+		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
+	}
+	return m.finishRefresh("")
 }
 
 func (m Model) onListeners(msg listenersMsg) (tea.Model, tea.Cmd) {
@@ -247,6 +329,7 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 		delete(m.lbRelatedErr, msg.lbID)
 		m.markFresh(msg.lbID, sectionRelated)
 	}
+	m.applyKubernetesRelations(msg.tree)
 	if msg.attach != nil && msg.tree != nil {
 		attachAmphora(msg.tree, msg.attach)
 	}
@@ -272,6 +355,9 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 			}
 			if m.loc.node != nil && m.loc.node.Type == model.TypeHealthMonitor {
 				return m, m.reloadHealthMonitorOverview()
+			}
+			if m.loc.node != nil && (m.loc.node.Type == model.TypeCOECluster || m.loc.node.Type == model.TypeKubeService) {
+				return m, tea.Batch(m.ensureCOEClustersCmd(!m.refreshAutomatic), m.finishRefresh(""))
 			}
 			delete(m.lbRelatedErr, msg.lbID)
 			m.markFresh(msg.lbID, sectionRelated)
@@ -602,6 +688,9 @@ func (m *Model) loadLBOverview() tea.Cmd {
 	if m.isHealthMonitorOverview() {
 		return m.loadHealthMonitorOverview(false)
 	}
+	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
+		return m.ensureCOEClustersCmd(false)
+	}
 	return m.startLBOverview(false)
 }
 
@@ -882,6 +971,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 		m.refreshPoolsExpected = true
 		m.lbPoolsLoading[n.ID] = true
 		cmds = append(cmds, m.poolSummariesCmd(n.ID, true))
+		if cmd := m.ensureCOEClustersCmd(!m.refreshAutomatic); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		return tea.Batch(cmds...)
 	}
 	var cmds []tea.Cmd
@@ -912,6 +1004,9 @@ func (m *Model) startLBOverview(refresh bool) tea.Cmd {
 	if !m.lbPoolsLoaded[n.ID] && !m.lbPoolsLoading[n.ID] {
 		m.lbPoolsLoading[n.ID] = true
 		cmds = append(cmds, m.poolSummariesCmd(n.ID, false))
+	}
+	if cmd := m.ensureCOEClustersCmd(false); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	if cmd := m.ensureStatsSpinner(); cmd != nil {
 		cmds = append(cmds, cmd)
@@ -1366,6 +1461,8 @@ func (m *Model) endRefresh() {
 	m.loadingWhat = ""
 	m.refreshing = false
 	m.refreshLBID = ""
+	m.refreshVIPLBs = nil
+	m.refreshVIPFloatingIPs = nil
 	m.refreshDetail = nil
 	m.refreshHealthMonitor = nil
 	m.refreshMonitorExpected = false
@@ -1538,6 +1635,44 @@ func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) onCOEClusters(msg coeClustersMsg) (tea.Model, tea.Cmd) {
+	if msg.projectID != m.project.ID || msg.all != m.allProjects {
+		return m, nil
+	}
+	m.coeClustersLoading = false
+	m.coeSpinnerRunning = false
+	m.coeClustersLoaded = true
+	m.coeClustersAt = m.clock()
+	if msg.err != nil {
+		m.coeClustersErr = msg.err.Error()
+	} else {
+		m.coeClusters = msg.items
+		m.coeClustersErr = ""
+	}
+	if m.loc.tree == nil || m.loc.tree.Root == nil {
+		return m, nil
+	}
+	if inferKubernetesLB(m.loc.tree.Root.Name).kind == kubernetesLBNone {
+		return m, nil
+	}
+	m.applyKubernetesRelations(m.loc.tree)
+	if m.loc.node == m.loc.tree.Root {
+		m.allEntries = locationEntries(m.loc.node)
+		m.applyFilters()
+	} else if m.loc.node != nil && (m.loc.node.Type == model.TypeCOECluster || m.loc.node.Type == model.TypeKubeService) {
+		if replacement := m.loc.tree.Node(m.loc.id.ID); replacement != nil {
+			m.loc.node = replacement
+			m.allEntries = locationEntries(replacement)
+			m.applyFilters()
+		}
+	}
+	if m.loc.node != nil {
+		m.markFresh(m.loc.node.ID, sectionDetails)
+	}
+	m.markFresh(m.loc.tree.Root.ID, sectionRelated)
+	return m, nil
+}
+
 func (m *Model) applyAmphorae(lbID string, nodes []*model.Node) {
 	var tree *model.Tree
 	if m.loc.tree != nil && m.loc.tree.Root != nil && m.loc.tree.Root.ID == lbID {
@@ -1674,6 +1809,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.refreshing = false
 	m.refreshLBID = ""
+	m.refreshVIPLBs = nil
+	m.refreshVIPFloatingIPs = nil
 	m.refreshDetail = nil
 	m.refreshHealthMonitor = nil
 	m.refreshMonitorExpected = false
@@ -1714,8 +1851,18 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbListenersLoaded = map[string]bool{}
 	m.lbPoolsLoading = map[string]bool{}
 	m.lbPoolsLoaded = map[string]bool{}
+	m.coeClusters = nil
+	m.coeClustersLoaded = false
+	m.coeClustersLoading = false
+	m.coeSpinnerRunning = false
+	m.coeClustersErr = ""
+	m.coeClustersAt = time.Time{}
 	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
+	m.vipFloatingIPs = nil
+	m.vipFloatingIPsLoaded = false
+	m.vipFloatingIPsLoading = false
+	m.vipFloatingIPsErr = ""
 	// The top-level resource lists are scope-dependent too; drop their caches.
 	m.listeners, m.listenersLoaded = nil, false
 	m.pools, m.poolsLoaded = nil, false
@@ -1794,6 +1941,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	}
 	entry, fresh := m.cache.Get(id.OwningLBID)
 	if entry.Tree != nil && fresh {
+		m.applyKubernetesRelations(entry.Tree)
 		m.buildNodeLocation(id, entry.Tree)
 		return m.loadLBOverview()
 	}
@@ -1858,7 +2006,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 	m.loc = location{id: id}
 	switch listKindOf(id) {
-	case kindLB, kindVIP:
+	case kindLB:
 		if m.lbsLoaded {
 			m.setTopLevelEntries()
 			return nil
@@ -1866,6 +2014,29 @@ func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 		m.loading, m.loadingWhat = true, "load balancers"
 		m.showLoadingList()
 		return m.loadLBsCmd()
+	case kindVIP:
+		if m.lbsLoaded && m.vipFloatingIPsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "virtual IPs"
+		m.showLoadingList()
+		var cmds []tea.Cmd
+		if !m.lbsLoaded {
+			cmds = append(cmds, m.loadLBsCmd())
+		}
+		if !m.vipFloatingIPsLoaded && !m.vipFloatingIPsLoading {
+			m.vipFloatingIPsLoading = true
+			cmds = append(cmds, m.loadVIPFloatingIPsCmd(false))
+		}
+		switch len(cmds) {
+		case 0:
+			return nil
+		case 1:
+			return cmds[0]
+		default:
+			return tea.Batch(cmds...)
+		}
 	case kindListener:
 		if m.listenersLoaded {
 			m.setTopLevelEntries()
@@ -1908,7 +2079,7 @@ func (m *Model) showLoadingList() {
 func (m *Model) setTopLevelEntries() {
 	switch m.loc.listKind() {
 	case kindVIP:
-		m.allEntries = vipEntries(deriveVIPs(m.lbs))
+		m.allEntries = vipEntries(deriveVIPs(m.lbs, m.vipFloatingIPs))
 	case kindListener:
 		m.allEntries = listenerEntries(m.listeners, m.lbNameByID())
 	case kindPool:

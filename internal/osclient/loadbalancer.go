@@ -59,6 +59,14 @@ type PoolSummary struct {
 	OperatingStatus    string
 }
 
+// FloatingIPMapping is the compact Neutron association needed by the top-level
+// VIP list. PortID plus FixedIP identifies one primary or additional VIP.
+type FloatingIPMapping struct {
+	PortID     string
+	FixedIP    string
+	FloatingIP string
+}
+
 // Meta returns the LB-level facts the graph builder needs.
 func (l LB) Meta() model.LBMeta {
 	return model.LBMeta{
@@ -70,7 +78,7 @@ func (l LB) Meta() model.LBMeta {
 }
 
 // ErrUnavailable marks a feature that cannot be served because a required
-// service client (Neutron/Nova) is absent from the catalog.
+// service client (for example Neutron, Nova, or Magnum) is absent from the catalog.
 var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
@@ -642,6 +650,45 @@ func (c *Clients) ResolveFloatingIPs(ctx context.Context, lbID, portID string) (
 		return nil, err
 	}
 	return floatingIPNodes(fips), nil
+}
+
+// ListFloatingIPMappings returns all floating-IP associations visible in the
+// current scope in one paginated Neutron request. A concrete project selection
+// is also sent as a server-side filter when global-admin clients are retained.
+func (c *Clients) ListFloatingIPMappings(ctx context.Context) ([]FloatingIPMapping, error) {
+	c.mu.Lock()
+	sc := c.activeServices
+	if sc == nil {
+		sc = c.services
+	}
+	selected := c.selected
+	allMode := c.allMode
+	c.mu.Unlock()
+	if sc == nil || sc.network == nil {
+		return nil, ErrUnavailable
+	}
+	opts := floatingips.ListOpts{}
+	if !allMode {
+		opts.ProjectID = selected.ID
+	}
+	pages, err := floatingips.List(sc.network, opts).AllPages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fips, err := floatingips.ExtractFloatingIPs(pages)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FloatingIPMapping, 0, len(fips))
+	for _, fip := range fips {
+		if fip.PortID == "" || fip.FixedIP == "" || fip.FloatingIP == "" {
+			continue
+		}
+		out = append(out, FloatingIPMapping{
+			PortID: fip.PortID, FixedIP: fip.FixedIP, FloatingIP: fip.FloatingIP,
+		})
+	}
+	return out, nil
 }
 
 func floatingIPNodes(fips []floatingips.FloatingIP) map[string]*model.Node {

@@ -290,3 +290,37 @@ func TestFloatingIPNodesAreKeyedByFixedAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestListFloatingIPMappingsUsesOneProjectFilteredNeutronList(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.URL.Query().Get("project_id"); got != "project-1" {
+			t.Errorf("project_id query = %q, want project-1", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"floatingips":[
+			{"id":"fip-1","port_id":"port-1","fixed_ip_address":"10.0.0.10","floating_ip_address":"198.51.100.10"},
+			{"id":"unbound","floating_ip_address":"198.51.100.20"}
+		]}`))
+	}))
+	defer server.Close()
+
+	sc := &serviceClients{network: &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v2.0/",
+	}}
+	c := &Clients{services: sc, activeServices: sc, selected: ProjectInfo{ID: "project-1"}}
+	items, err := c.ListFloatingIPMappings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("Neutron requests = %d, want one collection request", requests)
+	}
+	if len(items) != 1 || items[0] != (FloatingIPMapping{
+		PortID: "port-1", FixedIP: "10.0.0.10", FloatingIP: "198.51.100.10",
+	}) {
+		t.Fatalf("floating-IP mappings = %+v", items)
+	}
+}

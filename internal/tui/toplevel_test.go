@@ -30,7 +30,7 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 		columns   []string // headers that must be present
 		rowSample string   // a value that must appear in the body
 	}{
-		{"2", "virtual IPs", "ADDRESS", []string{"ADDRESS", "PORT ID", "SUBNET", "NETWORK", "LOAD BALANCER"}, "203.0.113.9"},
+		{"2", "virtual IPs", "ADDRESS", []string{"ADDRESS", "FLOATING IP", "PORT ID", "SUBNET", "NETWORK", "LOAD BALANCER"}, "203.0.113.9"},
 		{"3", "listeners", "PROTOCOL", []string{"NAME", "PROTOCOL", "PORT", "LOAD BALANCER", "PROVISIONING", "OPERATING"}, "http"},
 		{"4", "pools", "ALGORITHM", []string{"NAME", "PROTOCOL", "ALGORITHM", "MEMBERS", "LOAD BALANCER"}, "web"},
 		{"5", "amphorae", "AMPHORA ID", []string{"AMPHORA ID", "ROLE", "STATUS", "LB NETWORK IP", "HA IP", "COMPUTE ID"}, "MASTER"},
@@ -56,6 +56,56 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 		if !strings.Contains(view, tt.rowSample) {
 			t.Errorf("key %s: expected %q in body:\n%s", tt.key, tt.rowSample, view)
 		}
+	}
+}
+
+func TestVIPTablePlacesFloatingIPAfterAddress(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("2"))
+	if len(m.entries) == 0 || m.entries[0].kind != entVIP {
+		t.Fatal("VIP list has no VIP row")
+	}
+	cells := m.rowCells(m.entries[0])
+	if len(cells) < 2 || cells[0] != "203.0.113.9" || cells[1] != "198.51.100.7" {
+		t.Fatalf("VIP address/floating-IP cells = %q, want adjacent fixed and floating addresses", cells)
+	}
+	header := headerLine(ansiRE.ReplaceAllString(m.View(), ""), "ADDRESS")
+	if strings.Index(header, "FLOATING IP") <= strings.Index(header, "ADDRESS") {
+		t.Fatalf("VIP header does not place FLOATING IP after ADDRESS: %q", header)
+	}
+}
+
+func TestVIPListRefreshReloadsFloatingIPColumn(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("2"))
+	if got := m.rowCells(m.entries[0])[1]; got != "198.51.100.7" {
+		t.Fatalf("initial floating IP = %q", got)
+	}
+
+	next, cmd := m.Update(press("r"))
+	m = next.(Model)
+	if cmd == nil || !m.refreshing {
+		t.Fatal("VIP list refresh did not start both collection requests")
+	}
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	if !m.refreshing {
+		t.Fatal("VIP list refresh completed before Neutron data arrived")
+	}
+	if got := m.rowCells(m.entries[0])[1]; got != "198.51.100.7" {
+		t.Fatalf("floating IP changed before refresh commit: %q", got)
+	}
+	m = upd(t, m, vipFloatingIPsMsg{
+		refresh: true,
+		items: []osclient.FloatingIPMapping{
+			{PortID: "port-9", FixedIP: "203.0.113.9", FloatingIP: "198.51.100.8"},
+			{PortID: "port-9", FixedIP: "203.0.114.9", FloatingIP: "198.51.100.18"},
+		},
+	})
+	if got := m.rowCells(m.entries[0])[1]; got != "198.51.100.8" {
+		t.Fatalf("refreshed floating IP = %q, want 198.51.100.8", got)
+	}
+	if m.refreshing || m.loading {
+		t.Fatal("VIP list refresh did not finish after both collections arrived")
 	}
 }
 
@@ -337,7 +387,7 @@ func TestProjectScopeChangeKeepsEachTopLevelView(t *testing.T) {
 		loading string
 	}{
 		{"1", kindLB, "load balancers"},
-		{"2", kindVIP, "load balancers"},
+		{"2", kindVIP, "virtual IPs"},
 		{"3", kindListener, "listeners"},
 		{"4", kindPool, "pools"},
 		{"5", kindAmphora, "amphorae"},

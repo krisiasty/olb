@@ -64,6 +64,10 @@ type Model struct {
 	width, height int
 
 	spinner spinner.Model
+	// coeSpinner is independent because slow Magnum enrichment must animate
+	// without marking the responsive Octavia UI as globally loading.
+	coeSpinner        spinner.Model
+	coeSpinnerRunning bool
 	// statsSpinner is a cadence indicator, not a loading indicator: while the
 	// latest automatic stats sample is still within its expected interval, the
 	// moving point shows that another sample is scheduled.
@@ -78,15 +82,19 @@ type Model struct {
 	lbs       []osclient.LB
 	lbsLoaded bool
 
-	// Top-level resource lists (keys 2-5). VIPs derive from lbs; the rest load on
-	// demand and are cached until the next refresh or scope change.
-	listeners       []osclient.ListenerRow
-	pools           []osclient.PoolRow
-	amphorae        []*model.Node
-	listenersLoaded bool
-	poolsLoaded     bool
-	amphoraeLoaded  bool
-	amphoraeErr     string // e.g. admin RBAC required
+	// Top-level resource lists (keys 2-5). VIP rows combine lbs with one Neutron
+	// floating-IP collection; the rest load their own collections on demand.
+	vipFloatingIPs        []osclient.FloatingIPMapping
+	vipFloatingIPsLoaded  bool
+	vipFloatingIPsLoading bool
+	vipFloatingIPsErr     string
+	listeners             []osclient.ListenerRow
+	pools                 []osclient.PoolRow
+	amphorae              []*model.Node
+	listenersLoaded       bool
+	poolsLoaded           bool
+	amphoraeLoaded        bool
+	amphoraeErr           string // e.g. admin RBAC required
 
 	hist *history
 	loc  location
@@ -133,6 +141,11 @@ type Model struct {
 	lbListenersLoaded  map[string]bool
 	lbPoolsLoading     map[string]bool
 	lbPoolsLoaded      map[string]bool
+	coeClusters        []osclient.COECluster
+	coeClustersLoaded  bool
+	coeClustersLoading bool
+	coeClustersErr     string
+	coeClustersAt      time.Time
 
 	// Automatic refresh uses a fast, user-selectable cadence for stats and a
 	// slower fixed cadence for the full list/status graph. Generations make old
@@ -171,6 +184,8 @@ type Model struct {
 	// together so no field or related-object row jumps ahead.
 	refreshing               bool
 	refreshLBID              string
+	refreshVIPLBs            *lbsMsg
+	refreshVIPFloatingIPs    *vipFloatingIPsMsg
 	refreshDetail            *detailMsg
 	refreshHealthMonitor     *detailMsg
 	refreshMonitorExpected   bool
@@ -211,6 +226,8 @@ func New(backend Backend, cfg Config) Model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
+	coeSpinner := spinner.New()
+	coeSpinner.Spinner = spinner.Dot
 	statsSpinner := spinner.New()
 	statsSpinner.Spinner = spinner.Spinner{
 		Frames: []string{"∙∙∙∙", "●∙∙∙", "∙●∙∙", "∙∙●∙", "∙∙∙●"},
@@ -233,6 +250,7 @@ func New(backend Backend, cfg Config) Model {
 		st:                     st,
 		cfg:                    cfg,
 		spinner:                sp,
+		coeSpinner:             coeSpinner,
 		statsSpinner:           statsSpinner,
 		filter:                 fi,
 		search:                 se,

@@ -2196,6 +2196,35 @@ func TestLBOverviewResponsiveLayout(t *testing.T) {
 	}
 }
 
+func TestUpperOverviewValuesWrapWithAlignedContinuations(t *testing.T) {
+	m := New(&fakeBackend{}, Config{PrintMode: true})
+	fields := []overviewField{
+		{label: "Name", value: "alpha beta gamma delta"},
+		{label: "Description", value: "short"},
+	}
+	assertWrapped := func(t *testing.T, rendered string) {
+		t.Helper()
+		plain := ansiRE.ReplaceAllString(rendered, "")
+		lines := strings.Split(plain, "\n")
+		for i, line := range lines {
+			if !strings.Contains(line, "alpha beta") {
+				continue
+			}
+			if i+1 >= len(lines) || !strings.Contains(lines[i+1], "gamma delta") {
+				t.Fatalf("long value did not wrap onto the next line:\n%s", plain)
+			}
+			if strings.Index(line, "alpha") != strings.Index(lines[i+1], "gamma") {
+				t.Fatalf("continuation is not aligned with the value column:\n%s", plain)
+			}
+			return
+		}
+		t.Fatalf("wrapped value is missing:\n%s", plain)
+	}
+
+	assertWrapped(t, m.renderOverviewPanel("DETAILS", fields, 28, len(fields)))
+	assertWrapped(t, m.renderOverviewGroup(overviewGroup{title: "DETAILS", fields: fields}, 28))
+}
+
 func TestLBOverviewPanelsFailIndependently(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))

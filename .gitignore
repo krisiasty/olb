@@ -35,3 +35,7 @@ go.work.sum
 # .idea/
 # .vscode/
 api.log
+
+# Local-only design docs — removed from history, intentionally not tracked.
+/spec.md
+/docs/DECISIONS.md

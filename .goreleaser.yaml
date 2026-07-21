@@ -1,0 +1,87 @@
+version: 2
+
+project_name: olb
+
+# The release workflow runs the quality gates, license check, and
+# THIRD_PARTY_NOTICES regeneration as steps before invoking GoReleaser, so there
+# are no `before` hooks here — GoReleaser only builds, archives, and publishes.
+
+builds:
+  - id: darwin
+    binary: olb
+    ldflags:
+      - -s -w
+      - -X github.com/krisiasty/olb/internal/version.Version={{.Version}}
+      - -X github.com/krisiasty/olb/internal/version.Commit={{.Commit}}
+      - -X github.com/krisiasty/olb/internal/version.Date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+  - id: others
+    binary: olb
+    ldflags:
+      - -s -w
+      - -X github.com/krisiasty/olb/internal/version.Version={{.Version}}
+      - -X github.com/krisiasty/olb/internal/version.Commit={{.Commit}}
+      - -X github.com/krisiasty/olb/internal/version.Date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: binaries
+    formats:
+      - binary
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: archives
+    ids:
+      - darwin
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+homebrew_casks:
+  - name: olb
+    ids:
+      - archives
+    homepage: "https://github.com/krisiasty/olb"
+    description: "Interactive terminal UI for inspecting OpenStack Octavia load balancers (Amphora and OVN providers)."
+    license: "Apache-2.0"
+    repository:
+      owner: krisiasty
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    binaries:
+      - olb
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  abbrev: 8
+  format: "- [{{ .SHA }}](https://github.com/krisiasty/olb/commit/{{ .SHA }}) {{ .Message }}"
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: "{{ .IsV0 }}"

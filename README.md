@@ -14,13 +14,19 @@ non-interactive scriptable mode (`--output json|yaml`, exit codes) is deferred.
 Requires Go 1.24+.
 
 ```sh
-make build        # -> ./olb   (cgo-free)
-make dist         # -> dist/olb-<os>-<arch> for all five supported targets
-go install github.com/krisiasty/olb@latest
+go install github.com/krisiasty/olb@latest    # install from source
+go build -o olb .                              # quick local binary (cgo-free)
+goreleaser build --snapshot --clean           # cross-compile all five targets -> dist/
 ```
 
 Supported targets (all built cgo-free from one machine): `windows/amd64`,
 `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`.
+
+Releases are cut by pushing a `v*` tag. The
+[release workflow](.github/workflows/release.yml) runs gofmt/vet/`go test -race`,
+the `go-licenses` gate, and regenerates the embedded `THIRD_PARTY_NOTICES` as
+steps, then invokes GoReleaser to build all five targets, publish a GitHub
+release, and update the Homebrew cask.
 
 ## Usage
 
@@ -204,11 +210,20 @@ deferred (clipboard/OSC 52, reference-edge resolution, platform notes).
 
 ## Development
 
+Day-to-day checks are plain Go tools:
+
 ```sh
-make test            # go test -race ./...
-make lint            # vet + gofmt check
-make check-licenses  # authoritative go-licenses gate (Apache-2.0-compatible only)
-make notices         # regenerate embedded THIRD_PARTY_NOTICES
+go test -race ./...                    # tests
+go vet ./... && gofmt -l .             # lint (gofmt -l prints unformatted files)
+```
+
+The [release workflow](.github/workflows/release.yml) runs those same checks,
+plus the authoritative `go-licenses` gate and regeneration of the embedded
+`THIRD_PARTY_NOTICES`, as steps before invoking GoReleaser. To dry-run the build
+side locally without publishing:
+
+```sh
+goreleaser release --snapshot --clean --skip=publish
 ```
 
 ## License

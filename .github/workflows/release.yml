@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser needs full history and all tags for the changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)" || { echo "unformatted files (run gofmt -w .)"; gofmt -l .; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: License gate
+        # Authoritative check over the full transitive tree (Apache-2.0-compatible
+        # only). Also puts go-licenses on PATH for the notices step below.
+        run: |
+          go install github.com/google/go-licenses@latest
+          go-licenses check . --disallowed_types=forbidden,restricted,unknown
+
+      - name: Regenerate third-party notices
+        # Must run before GoReleaser: main.go embeds THIRD_PARTY_NOTICES via
+        # //go:embed, and the copy in the repo is a placeholder. This overwrites
+        # it so the released binaries ship the real license texts.
+        run: bash scripts/gen-notices.sh
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT with repo scope on krisiasty/homebrew-tap, for the cask push.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

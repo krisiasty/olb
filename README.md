@@ -1,4 +1,4 @@
-# olb — OpenStack Load Balancer CLI
+# olb — OpenStack Load Balancer TUI
 
 `olb` is an interactive terminal UI for inspecting OpenStack **Octavia** load
 balancers (both the **Amphora** and **OVN** provider drivers). It fetches a load
@@ -21,32 +21,38 @@ brew upgrade olb                   # later, to update
 The cask clears the Gatekeeper quarantine attribute on install, so the binary
 runs without any right-click-to-open dance.
 
-### Prebuilt binary (Linux, macOS, Windows)
+### Release archive (Linux, macOS, Windows)
 
-Download the binary for your platform from the
-[releases page](https://github.com/krisiasty/olb/releases/latest). Binaries are
+Download the archive for your platform from the
+[releases page](https://github.com/krisiasty/olb/releases/latest). Archives are
 published for `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, and
-`windows/amd64`; `checksums.txt` carries SHA-256 sums for every asset.
+`windows/amd64` (`.tar.gz` for Linux/macOS, `.zip` for Windows) and bundle the
+`olb` binary with `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES`; `checksums.txt`
+carries SHA-256 sums for every asset.
 
 On **Linux / macOS** (substitute your os/arch — `linux_amd64`, `linux_arm64`,
 `darwin_amd64`, `darwin_arm64`):
 
 ```sh
 VERSION=0.9.0   # pick the version from the releases page
-curl -fLO "https://github.com/krisiasty/olb/releases/download/v${VERSION}/olb_${VERSION}_linux_amd64"
-chmod +x "olb_${VERSION}_linux_amd64"
-sudo mv "olb_${VERSION}_linux_amd64" /usr/local/bin/olb
+curl -fLO "https://github.com/krisiasty/olb/releases/download/v${VERSION}/olb_${VERSION}_linux_amd64.tar.gz"
+tar -xzf "olb_${VERSION}_linux_amd64.tar.gz"
+sudo mv olb /usr/local/bin/olb
 ```
 
-On **macOS**, a manually downloaded binary is not notarized, so Gatekeeper
-quarantines it. Clear the attribute once (Homebrew does this for you):
+On **macOS**, the extracted binary is not notarized, so Gatekeeper quarantines
+it. Clear the attribute once (Homebrew does this for you):
 
 ```sh
 xattr -d com.apple.quarantine /usr/local/bin/olb
 ```
 
-On **Windows**, download `olb_<version>_windows_amd64.exe`, rename it to
-`olb.exe`, and put it somewhere on your `PATH`.
+On **Windows**, download `olb_<version>_windows_amd64.zip`, extract it, and put
+`olb.exe` somewhere on your `PATH`.
+
+Each platform also ships a bare binary (`olb_<version>_<os>_<arch>`, `.exe` on
+Windows) on the same page if you would rather skip extraction — the embedded
+`olb --licenses` still reproduces the third-party notices.
 
 ### From source
 
@@ -262,6 +268,20 @@ side locally without publishing:
 ```sh
 goreleaser release --snapshot --clean --skip=publish
 ```
+
+## Author
+
+Krzysztof Ciepłucha
+
+## Disclaimer
+
+This tool was designed and built with the assistance of AI tools. The design
+decisions, architecture, and all code have been reviewed and verified by a
+human. The project goes through automated security checks, vulnerability
+scanning, and static code analysis on every commit.
+
+That said, this software is provided as-is with no guarantees. It may contain
+bugs. **Use at your own risk.**
 
 ## License
 

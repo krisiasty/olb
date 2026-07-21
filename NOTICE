@@ -1,0 +1,11 @@
+olb - OpenStack Load Balancer TUI
+
+Copyright 2026 Krzysztof Ciepłucha
+
+This product is licensed under the Apache License, Version 2.0; see the LICENSE
+file for the full terms.
+
+olb links third-party open-source modules. Their copyright notices and full
+license texts (and any upstream NOTICE contents) are reproduced in
+THIRD_PARTY_NOTICES, which is embedded in the binary and printed by
+`olb --licenses`.

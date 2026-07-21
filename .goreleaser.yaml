@@ -40,22 +40,48 @@ builds:
       - goos: windows
         goarch: arm64
 
+# One bundled archive per platform (tar.gz everywhere, zip on Windows), each
+# carrying the binary plus the legal files. A raw `binary` format can't include
+# extra files, so archives are the vehicle for LICENSE/NOTICE/THIRD_PARTY_NOTICES.
+# Darwin is a separate archive id so the Homebrew cask references macOS only.
 archives:
-  - id: binaries
-    formats:
-      - binary
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - id: archives
+  - id: darwin
     ids:
       - darwin
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES
+      - README.md
+  - id: others
+    ids:
+      - others
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES
+      - README.md
+  # Raw, uncompressed binaries for direct download (no extraction). These carry
+  # no side files — the embedded `olb --licenses` still reproduces the notices.
+  - id: binaries
+    formats:
+      - binary
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 homebrew_casks:
   - name: olb
     ids:
-      - archives
+      - darwin
     homepage: "https://github.com/krisiasty/olb"
     description: "Interactive terminal UI for inspecting OpenStack Octavia load balancers (Amphora and OVN providers)."
     license: "Apache-2.0"

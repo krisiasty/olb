@@ -9,24 +9,52 @@ tree view can never answer: *"who points at this pool?"*
 This is the v1 deliverable: **read / inspect, interactive-only**. A
 non-interactive scriptable mode (`--output json|yaml`, exit codes) is deferred.
 
-## Install / build
+## Install
+
+### Homebrew (macOS)
+
+```sh
+brew install krisiasty/tap/olb     # auto-taps krisiasty/homebrew-tap
+brew upgrade olb                   # later, to update
+```
+
+The cask clears the Gatekeeper quarantine attribute on install, so the binary
+runs without any right-click-to-open dance.
+
+### Prebuilt binary (Linux, macOS, Windows)
+
+Download the binary for your platform from the
+[releases page](https://github.com/krisiasty/olb/releases/latest). Binaries are
+published for `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, and
+`windows/amd64`; `checksums.txt` carries SHA-256 sums for every asset.
+
+On **Linux / macOS** (substitute your os/arch — `linux_amd64`, `linux_arm64`,
+`darwin_amd64`, `darwin_arm64`):
+
+```sh
+VERSION=0.9.0   # pick the version from the releases page
+curl -fLO "https://github.com/krisiasty/olb/releases/download/v${VERSION}/olb_${VERSION}_linux_amd64"
+chmod +x "olb_${VERSION}_linux_amd64"
+sudo mv "olb_${VERSION}_linux_amd64" /usr/local/bin/olb
+```
+
+On **macOS**, a manually downloaded binary is not notarized, so Gatekeeper
+quarantines it. Clear the attribute once (Homebrew does this for you):
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/olb
+```
+
+On **Windows**, download `olb_<version>_windows_amd64.exe`, rename it to
+`olb.exe`, and put it somewhere on your `PATH`.
+
+### From source
 
 Requires Go 1.24+.
 
 ```sh
-go install github.com/krisiasty/olb@latest    # install from source
-go build -o olb .                              # quick local binary (cgo-free)
-goreleaser build --snapshot --clean           # cross-compile all five targets -> dist/
+go install github.com/krisiasty/olb@latest
 ```
-
-Supported targets (all built cgo-free from one machine): `windows/amd64`,
-`darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`.
-
-Releases are cut by pushing a `v*` tag. The
-[release workflow](.github/workflows/release.yml) runs gofmt/vet/`go test -race`,
-the `go-licenses` gate, and regenerates the embedded `THIRD_PARTY_NOTICES` as
-steps, then invokes GoReleaser to build all five targets, publish a GitHub
-release, and update the Homebrew cask.
 
 ## Usage
 
@@ -210,6 +238,14 @@ deferred (clipboard/OSC 52, reference-edge resolution, platform notes).
 
 ## Development
 
+Build locally (all targets are cgo-free: `windows/amd64`, `darwin/amd64`,
+`darwin/arm64`, `linux/amd64`, `linux/arm64`):
+
+```sh
+go build -o olb .                      # quick local binary
+goreleaser build --snapshot --clean    # cross-compile every target -> dist/
+```
+
 Day-to-day checks are plain Go tools:
 
 ```sh
@@ -217,7 +253,8 @@ go test -race ./...                    # tests
 go vet ./... && gofmt -l .             # lint (gofmt -l prints unformatted files)
 ```
 
-The [release workflow](.github/workflows/release.yml) runs those same checks,
+Releases are cut by pushing a `v*` tag. The
+[release workflow](.github/workflows/release.yml) runs those same checks,
 plus the authoritative `go-licenses` gate and regeneration of the embedded
 `THIRD_PARTY_NOTICES`, as steps before invoking GoReleaser. To dry-run the build
 side locally without publishing:

@@ -28,6 +28,7 @@ type keyMap struct {
 	Filter  key.Binding // /
 	Status  key.Binding // s
 	ShowIDs key.Binding // d
+	Sort    key.Binding // o
 
 	Project      key.Binding // p
 	ProjectAll   key.Binding // a inside the project selector
@@ -70,6 +71,7 @@ func defaultKeys() keyMap {
 		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Status:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
 		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
+		Sort:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
 
 		Project:      key.NewBinding(key.WithKeys("p", "0"), key.WithHelp("p/0", "project")),
 		ProjectAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all projects")),

@@ -2136,6 +2136,7 @@ func (m *Model) applyFilters() {
 	if m.isLBOverview() || m.isListenerOverview() || m.isPoolOverview() {
 		res = withRelatedGroupHeadings(res)
 	}
+	m.sortEntries(res) // no-op unless a top-level list has an active sort column
 	m.entries = res
 	if keepSelection {
 		for i := range m.entries {

@@ -199,6 +199,13 @@ func (f *fakeBackend) ListPoolSummaries(context.Context, string) (map[string]osc
 	}, nil
 }
 
+func (f *fakeBackend) ListFloatingIPMappings(context.Context) ([]osclient.FloatingIPMapping, error) {
+	return []osclient.FloatingIPMapping{
+		{PortID: "port-9", FixedIP: "203.0.113.9", FloatingIP: "198.51.100.7"},
+		{PortID: "port-9", FixedIP: "203.0.114.9", FloatingIP: "198.51.100.17"},
+	}, nil
+}
+
 func (f *fakeBackend) ResolveFloatingIPs(context.Context, string, string) (map[string]*model.Node, error) {
 	return map[string]*model.Node{}, nil // internal LB: no floating IP
 }

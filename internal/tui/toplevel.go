@@ -83,6 +83,7 @@ func (l location) listKind() listKind { return listKindOf(l.id) }
 // row per additional VIP.
 type vipRow struct {
 	address    string
+	floatingIP string
 	portID     string
 	subnetID   string
 	networkID  string
@@ -92,13 +93,39 @@ type vipRow struct {
 	additional bool
 }
 
-// deriveVIPs expands the load-balancer list into one row per VIP address.
-func deriveVIPs(lbs []osclient.LB) []vipRow {
+type vipAddressKey struct {
+	portID  string
+	address string
+}
+
+// deriveVIPs expands the load-balancer list into one row per VIP address. The
+// lookup retains mappings only for visible VIPs, which bounds memory in a
+// global-admin scope where Neutron may return many unrelated floating IPs.
+func deriveVIPs(lbs []osclient.LB, mappings []osclient.FloatingIPMapping) []vipRow {
+	wanted := make(map[vipAddressKey]struct{}, len(lbs))
+	for _, lb := range lbs {
+		if lb.VipAddress != "" {
+			wanted[vipAddressKey{portID: lb.VipPortID, address: lb.VipAddress}] = struct{}{}
+		}
+		for _, extra := range lb.AdditionalVIPs {
+			if extra.Address != "" {
+				wanted[vipAddressKey{portID: lb.VipPortID, address: extra.Address}] = struct{}{}
+			}
+		}
+	}
+	floatingIPs := make(map[vipAddressKey]string, len(wanted))
+	for _, mapping := range mappings {
+		key := vipAddressKey{portID: mapping.PortID, address: mapping.FixedIP}
+		if _, visible := wanted[key]; visible {
+			floatingIPs[key] = mapping.FloatingIP
+		}
+	}
 	rows := make([]vipRow, 0, len(lbs))
 	for _, lb := range lbs {
 		if lb.VipAddress != "" {
 			rows = append(rows, vipRow{
-				address: lb.VipAddress, portID: lb.VipPortID,
+				address: lb.VipAddress, floatingIP: floatingIPs[vipAddressKey{portID: lb.VipPortID, address: lb.VipAddress}],
+				portID:   lb.VipPortID,
 				subnetID: lb.VipSubnetID, networkID: lb.VipNetworkID,
 				lbID: lb.ID, lbName: lb.Name, nodeID: lb.VipPortID,
 			})
@@ -108,7 +135,8 @@ func deriveVIPs(lbs []osclient.LB) []vipRow {
 				continue
 			}
 			rows = append(rows, vipRow{
-				address: extra.Address, portID: lb.VipPortID,
+				address: extra.Address, floatingIP: floatingIPs[vipAddressKey{portID: lb.VipPortID, address: extra.Address}],
+				portID:   lb.VipPortID,
 				subnetID: extra.SubnetID, networkID: lb.VipNetworkID,
 				lbID: lb.ID, lbName: lb.Name,
 				nodeID:     model.AdditionalVIPID(lb.ID, model.AdditionalVIP{Address: extra.Address, SubnetID: extra.SubnetID}),
@@ -137,7 +165,7 @@ func vipEntries(vips []vipRow) []entry {
 		label := "vip:" + v.address
 		es = append(es, entry{
 			kind: entVIP, vip: v, lbName: v.lbName,
-			label: label, extra: strings.TrimSpace(v.lbName + " " + v.subnetID + " " + v.networkID),
+			label: label, extra: strings.TrimSpace(v.floatingIP + " " + v.lbName + " " + v.subnetID + " " + v.networkID),
 		})
 	}
 	return es
@@ -200,7 +228,7 @@ func amphoraEntries(nodes []*model.Node, lbNames map[string]string, filterToLBs 
 func (m Model) columnTitles() []string {
 	switch m.loc.listKind() {
 	case kindVIP:
-		return []string{"ADDRESS", "PORT ID", "SUBNET", "NETWORK", m.lbColTitle()}
+		return []string{"ADDRESS", "FLOATING IP", "PORT ID", "SUBNET", "NETWORK", m.lbColTitle()}
 	case kindListener:
 		obj := "NAME"
 		if m.showIDs {
@@ -233,7 +261,7 @@ func (m Model) rowCells(e entry) []string {
 	switch e.kind {
 	case entVIP:
 		v := e.vip
-		return []string{v.address, idCell(v.portID, m.showIDs), idCell(v.subnetID, m.showIDs),
+		return []string{v.address, displayValue(v.floatingIP), idCell(v.portID, m.showIDs), idCell(v.subnetID, m.showIDs),
 			idCell(v.networkID, m.showIDs), lbNameCell(v.lbName, v.lbID, m.showIDs)}
 	case entListener:
 		r := e.listener

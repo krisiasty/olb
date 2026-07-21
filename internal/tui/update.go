@@ -54,6 +54,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case lbsMsg:
 		return m.onLBs(msg)
+	case vipFloatingIPsMsg:
+		return m.onVIPFloatingIPs(msg)
 	case listenersMsg:
 		return m.onListeners(msg)
 	case poolsMsg:
@@ -106,6 +108,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	wasRefresh := m.refreshing && m.refreshLBID == ""
+	if wasRefresh && m.refreshAt.Equal(model.VIPListIdentity) {
+		m.refreshVIPLBs = &msg
+		return m, m.commitVIPListRefresh()
+	}
 	m.loading = false
 	if msg.err != nil {
 		if wasRefresh {
@@ -121,8 +127,10 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 	if m.loc.isTopLevelList() {
 		ready := false
 		switch m.loc.listKind() {
-		case kindLB, kindVIP:
+		case kindLB:
 			ready = true
+		case kindVIP:
+			ready = m.vipFloatingIPsLoaded
 		case kindListener:
 			ready = m.listenersLoaded
 		case kindPool:
@@ -133,12 +141,76 @@ func (m Model) onLBs(msg lbsMsg) (tea.Model, tea.Cmd) {
 		if ready {
 			m.setTopLevelEntries()
 			m.restoreRefreshSelection()
+		} else if m.loc.listKind() == kindVIP {
+			m.loading, m.loadingWhat = true, "floating IPs"
 		}
 	}
 	if wasRefresh {
 		return m, m.finishRefresh("")
 	}
 	return m, nil
+}
+
+func (m Model) onVIPFloatingIPs(msg vipFloatingIPsMsg) (tea.Model, tea.Cmd) {
+	if msg.refresh {
+		if m.refreshing && m.refreshAt.Equal(model.VIPListIdentity) {
+			m.refreshVIPFloatingIPs = &msg
+			return m, m.commitVIPListRefresh()
+		}
+		return m, nil
+	}
+	m.vipFloatingIPsLoading = false
+	m.vipFloatingIPsLoaded = true
+	m.loading = m.loc.isTopLevelList() && m.loc.listKind() == kindVIP && !m.lbsLoaded
+	if m.loading {
+		m.loadingWhat = "load balancers"
+	}
+	m.vipFloatingIPsErr = ""
+	if msg.err == nil {
+		m.vipFloatingIPs = msg.items
+	} else {
+		m.vipFloatingIPs = nil
+		m.vipFloatingIPsErr = msg.err.Error()
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindVIP && m.lbsLoaded {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.err != nil {
+		return m, m.setFlash("list floating IPs: "+msg.err.Error(), true)
+	}
+	return m, nil
+}
+
+func (m *Model) commitVIPListRefresh() tea.Cmd {
+	if m.refreshVIPLBs == nil || m.refreshVIPFloatingIPs == nil {
+		return nil
+	}
+	m.loading = false
+	m.vipFloatingIPsLoading = false
+	var failures []string
+	if m.refreshVIPLBs.err != nil {
+		failures = append(failures, "load balancers: "+m.refreshVIPLBs.err.Error())
+	} else {
+		m.lbs = m.refreshVIPLBs.lbs
+		m.lbsLoaded = true
+	}
+	if m.refreshVIPFloatingIPs.err != nil {
+		m.vipFloatingIPsErr = m.refreshVIPFloatingIPs.err.Error()
+		failures = append(failures, "floating IPs: "+m.refreshVIPFloatingIPs.err.Error())
+	} else {
+		m.vipFloatingIPs = m.refreshVIPFloatingIPs.items
+		m.vipFloatingIPsLoaded = true
+		m.vipFloatingIPsErr = ""
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindVIP {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if len(failures) > 0 {
+		return m.finishRefresh("refresh incomplete (" + strings.Join(failures, "; ") + ")")
+	}
+	return m.finishRefresh("")
 }
 
 func (m Model) onListeners(msg listenersMsg) (tea.Model, tea.Cmd) {
@@ -1366,6 +1438,8 @@ func (m *Model) endRefresh() {
 	m.loadingWhat = ""
 	m.refreshing = false
 	m.refreshLBID = ""
+	m.refreshVIPLBs = nil
+	m.refreshVIPFloatingIPs = nil
 	m.refreshDetail = nil
 	m.refreshHealthMonitor = nil
 	m.refreshMonitorExpected = false
@@ -1674,6 +1748,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.refreshing = false
 	m.refreshLBID = ""
+	m.refreshVIPLBs = nil
+	m.refreshVIPFloatingIPs = nil
 	m.refreshDetail = nil
 	m.refreshHealthMonitor = nil
 	m.refreshMonitorExpected = false
@@ -1716,6 +1792,10 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbPoolsLoaded = map[string]bool{}
 	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
+	m.vipFloatingIPs = nil
+	m.vipFloatingIPsLoaded = false
+	m.vipFloatingIPsLoading = false
+	m.vipFloatingIPsErr = ""
 	// The top-level resource lists are scope-dependent too; drop their caches.
 	m.listeners, m.listenersLoaded = nil, false
 	m.pools, m.poolsLoaded = nil, false
@@ -1858,7 +1938,7 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 	m.loc = location{id: id}
 	switch listKindOf(id) {
-	case kindLB, kindVIP:
+	case kindLB:
 		if m.lbsLoaded {
 			m.setTopLevelEntries()
 			return nil
@@ -1866,6 +1946,29 @@ func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 		m.loading, m.loadingWhat = true, "load balancers"
 		m.showLoadingList()
 		return m.loadLBsCmd()
+	case kindVIP:
+		if m.lbsLoaded && m.vipFloatingIPsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "virtual IPs"
+		m.showLoadingList()
+		var cmds []tea.Cmd
+		if !m.lbsLoaded {
+			cmds = append(cmds, m.loadLBsCmd())
+		}
+		if !m.vipFloatingIPsLoaded && !m.vipFloatingIPsLoading {
+			m.vipFloatingIPsLoading = true
+			cmds = append(cmds, m.loadVIPFloatingIPsCmd(false))
+		}
+		switch len(cmds) {
+		case 0:
+			return nil
+		case 1:
+			return cmds[0]
+		default:
+			return tea.Batch(cmds...)
+		}
 	case kindListener:
 		if m.listenersLoaded {
 			m.setTopLevelEntries()
@@ -1908,7 +2011,7 @@ func (m *Model) showLoadingList() {
 func (m *Model) setTopLevelEntries() {
 	switch m.loc.listKind() {
 	case kindVIP:
-		m.allEntries = vipEntries(deriveVIPs(m.lbs))
+		m.allEntries = vipEntries(deriveVIPs(m.lbs, m.vipFloatingIPs))
 	case kindListener:
 		m.allEntries = listenerEntries(m.listeners, m.lbNameByID())
 	case kindPool:

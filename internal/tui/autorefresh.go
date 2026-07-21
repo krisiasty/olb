@@ -137,7 +137,7 @@ func (m Model) overviewRequestInFlight() bool {
 	return anyLoading(m.lbDetailLoading) || anyLoading(m.lbStatsLoading) ||
 		anyLoading(m.lbFIPLoading) || anyLoading(m.lbAmphoraLoading) ||
 		anyLoading(m.lbListenersLoading) || anyLoading(m.lbPoolsLoading) ||
-		anyLoading(m.autoStatsLoading)
+		anyLoading(m.autoStatsLoading) || m.vipFloatingIPsLoading
 }
 
 func anyLoading(values map[string]bool) bool {

@@ -246,13 +246,18 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	if m.loc.isTopLevelList() {
 		m.refreshLBID = ""
 		switch m.loc.listKind() {
+		case kindVIP:
+			m.refreshVIPLBs = nil
+			m.refreshVIPFloatingIPs = nil
+			m.vipFloatingIPsLoading = true
+			return m, tea.Batch(m.loadLBsCmd(), m.loadVIPFloatingIPsCmd(true))
 		case kindListener:
 			return m, m.loadListenersCmd(true)
 		case kindPool:
 			return m, m.loadPoolsCmd(true)
 		case kindAmphora:
 			return m, m.loadAmphoraeListCmd(true)
-		default: // LB list and the derived VIPs list both reload the LB list
+		default:
 			return m, m.loadLBsCmd()
 		}
 	}

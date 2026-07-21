@@ -78,15 +78,19 @@ type Model struct {
 	lbs       []osclient.LB
 	lbsLoaded bool
 
-	// Top-level resource lists (keys 2-5). VIPs derive from lbs; the rest load on
-	// demand and are cached until the next refresh or scope change.
-	listeners       []osclient.ListenerRow
-	pools           []osclient.PoolRow
-	amphorae        []*model.Node
-	listenersLoaded bool
-	poolsLoaded     bool
-	amphoraeLoaded  bool
-	amphoraeErr     string // e.g. admin RBAC required
+	// Top-level resource lists (keys 2-5). VIP rows combine lbs with one Neutron
+	// floating-IP collection; the rest load their own collections on demand.
+	vipFloatingIPs        []osclient.FloatingIPMapping
+	vipFloatingIPsLoaded  bool
+	vipFloatingIPsLoading bool
+	vipFloatingIPsErr     string
+	listeners             []osclient.ListenerRow
+	pools                 []osclient.PoolRow
+	amphorae              []*model.Node
+	listenersLoaded       bool
+	poolsLoaded           bool
+	amphoraeLoaded        bool
+	amphoraeErr           string // e.g. admin RBAC required
 
 	hist *history
 	loc  location
@@ -171,6 +175,8 @@ type Model struct {
 	// together so no field or related-object row jumps ahead.
 	refreshing               bool
 	refreshLBID              string
+	refreshVIPLBs            *lbsMsg
+	refreshVIPFloatingIPs    *vipFloatingIPsMsg
 	refreshDetail            *detailMsg
 	refreshHealthMonitor     *detailMsg
 	refreshMonitorExpected   bool

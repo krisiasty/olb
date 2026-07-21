@@ -126,6 +126,12 @@ type lbFloatingIPMsg struct {
 	err     error
 }
 
+type vipFloatingIPsMsg struct {
+	items   []osclient.FloatingIPMapping
+	refresh bool
+	err     error
+}
+
 type listenerSummariesMsg struct {
 	lbID    string
 	items   map[string]osclient.ListenerSummary
@@ -181,6 +187,16 @@ func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
 		defer cancel()
 		nodes, err := b.ListAllAmphorae(ctx)
 		return amphoraeListMsg{nodes: nodes, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadVIPFloatingIPsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		items, err := b.ListFloatingIPMappings(ctx)
+		return vipFloatingIPsMsg{items: items, refresh: refresh, err: err}
 	}
 }
 

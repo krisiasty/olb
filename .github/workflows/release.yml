@@ -46,7 +46,11 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          # --skip=validate: the notices step above intentionally regenerates the
+          # committed placeholder THIRD_PARTY_NOTICES, leaving the tree "dirty".
+          # That is expected here, so skip GoReleaser's clean-tree/semver gate.
+          # (This workflow only ever runs on a pushed tag.)
+          args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # PAT with repo scope on krisiasty/homebrew-tap, for the cask push.

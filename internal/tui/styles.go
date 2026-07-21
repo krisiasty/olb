@@ -26,6 +26,10 @@ type styles struct {
 	helpKey       lipgloss.Style
 	overlay       lipgloss.Style
 	overlayTitle  lipgloss.Style
+	modalFrame    lipgloss.Style
+	modalTitle    lipgloss.Style
+	modalRow      lipgloss.Style
+	modalHelp     lipgloss.Style
 	disabled      lipgloss.Style
 	dead          lipgloss.Style
 	panelLabel    lipgloss.Style
@@ -60,10 +64,19 @@ func newStyles() styles {
 		helpKey:       lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 		overlay:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1),
 		overlayTitle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
-		disabled:      lipgloss.NewStyle().Foreground(subtle).Italic(true),
-		dead:          lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Strikethrough(true),
-		panelLabel:    lipgloss.NewStyle().Foreground(subtle),
-		groupHeading:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245")),
+
+		// Centered pop-up modal (the sort picker): a rounded blue border on the
+		// terminal's default background — the frame alone sets it off from the
+		// list rendered behind it.
+		modalFrame: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39")).Padding(1, 2),
+		modalTitle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
+		modalRow:     lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
+		modalHelp:    lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
+		disabled:     lipgloss.NewStyle().Foreground(subtle).Italic(true),
+		dead:         lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Strikethrough(true),
+		panelLabel:   lipgloss.NewStyle().Foreground(subtle),
+		groupHeading: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245")),
 
 		// The load-balancer list is a Lip Gloss table; the right-pad per cell is
 		// the column gap. Two spaces keep long name/project columns legible in

@@ -42,6 +42,8 @@ func (m Model) View() string {
 		return m.projectView()
 	case overlayPicker:
 		return m.pickerView()
+	case overlaySort:
+		return m.sortView()
 	case overlayTelemetry:
 		return m.telemetryView()
 	}
@@ -2163,7 +2165,7 @@ func (m Model) hintLine() string {
 		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n copy",
 	}
 	if m.loc.isTopLevelList() {
-		parts = append(parts, "d names/ids")
+		parts = append(parts, "d names/ids", "o sort")
 	}
 	if hasFilterableEntries(m.allEntries) {
 		parts = append(parts, "/ filter")
@@ -2486,6 +2488,86 @@ func (m Model) pickerPageSize() int {
 	return rows
 }
 
+// sortView renders the sort-column picker as a compact pop-up centered over the
+// list, so the list it will reorder stays visible behind the modal.
+func (m Model) sortView() string {
+	return overlayCenter(m.listView(), m.sortModalBox(), m.width, m.height)
+}
+
+// sortModalBox builds the bordered pop-up panel: a title, one row per sortable
+// column (the active column marked, the highlighted row barred), and a footer.
+// Every inner line is rendered at the same width so the dark panel background
+// fills uniformly. The sort is always ascending.
+func (m Model) sortModalBox() string {
+	cols := m.sortColumns()
+	title := "Sort · " + m.activeWorkspace.rootLabel()
+	footer := "↑/↓ move · enter select · esc cancel"
+
+	labels := make([]string, len(cols))
+	iw := max(lipgloss.Width(title), lipgloss.Width(footer))
+	for i, c := range cols {
+		label := c.label
+		if c.key == m.sortKey {
+			label += " (active)"
+		}
+		labels[i] = label
+		if w := lipgloss.Width("▸ " + label); w > iw {
+			iw = w
+		}
+	}
+
+	lines := []string{m.st.modalTitle.Width(iw).Render(title), m.st.modalRow.Width(iw).Render("")}
+	for i, label := range labels {
+		if i == m.sortCursor {
+			lines = append(lines, m.st.selected.Width(iw).Render("▸ "+label))
+		} else {
+			lines = append(lines, m.st.modalRow.Width(iw).Render("  "+label))
+		}
+	}
+	lines = append(lines, m.st.modalRow.Width(iw).Render(""), m.st.modalHelp.Width(iw).Render(footer))
+	return m.st.modalFrame.Render(strings.Join(lines, "\n"))
+}
+
+// overlayCenter composites box centered over base (each sized to width×height).
+// Cutting is ANSI-aware so the base's styling is preserved on either side of the
+// box, with resets around the box so its background cannot bleed. A box that
+// does not fit falls back to being placed on a blank backdrop.
+func overlayCenter(base, box string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return box
+	}
+	boxLines := strings.Split(box, "\n")
+	bw := 0
+	for _, l := range boxLines {
+		if w := ansi.StringWidth(l); w > bw {
+			bw = w
+		}
+	}
+	bh := len(boxLines)
+	if bw >= width || bh >= height {
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	}
+
+	baseLines := strings.Split(base, "\n")
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+	baseLines = baseLines[:height]
+
+	top := (height - bh) / 2
+	left := (width - bw) / 2
+	for i, bl := range boxLines {
+		row := top + i
+		leftPart := ansi.Cut(baseLines[row], 0, left)
+		if pad := left - ansi.StringWidth(leftPart); pad > 0 {
+			leftPart += strings.Repeat(" ", pad)
+		}
+		rightPart := ansi.Cut(baseLines[row], left+bw, width)
+		baseLines[row] = leftPart + "\x1b[0m" + bl + "\x1b[0m" + rightPart
+	}
+	return strings.Join(baseLines, "\n")
+}
+
 func (m Model) filteredProjects() []osclient.ProjectInfo {
 	q := strings.ToLower(strings.TrimSpace(m.search.Value()))
 	if q == "" {
@@ -2610,6 +2692,7 @@ Notes
 	var listControls []string
 	if showNameIDToggle {
 		listControls = append(listControls, "  d                toggle top-level tables between names and IDs")
+		listControls = append(listControls, "  o                sort the list by a column — name / id / IP, ascending")
 	}
 	if showFilter {
 		listControls = append(listControls, "  /                filter current list (substring)")

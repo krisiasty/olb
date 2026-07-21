@@ -24,6 +24,7 @@ const (
 	overlayRaw     // y / j raw object view
 	overlayProject // p project switcher
 	overlayPicker  // h history picker
+	overlaySort    // o sort-column picker (top-level lists)
 	overlayTelemetry
 )
 
@@ -116,6 +117,10 @@ type Model struct {
 	filtering bool // substring filter input focused
 	status    statusFilter
 
+	// sortKey is the active top-level-list sort column (per workspace); "" means
+	// the natural API order. Only top-level lists are sortable.
+	sortKey string
+
 	// Overlay state.
 	overlay    overlayKind
 	rawContent string // last y/j content for the current node (drives o)
@@ -171,6 +176,7 @@ type Model struct {
 	projects   []osclient.ProjectInfo
 	projCursor int
 	pickCursor int
+	sortCursor int // highlighted row in the sort-column overlay
 
 	// Async / feedback.
 	loading     bool

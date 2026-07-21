@@ -16,6 +16,7 @@ type workspaceState struct {
 
 	filterValue string
 	status      statusFilter
+	sortKey     string
 	rawContent  string
 	rawFormat   string
 }
@@ -65,6 +66,7 @@ func (m *Model) saveWorkspaceState() {
 	state.top = m.top
 	state.filterValue = m.filter.Value()
 	state.status = m.status
+	state.sortKey = m.sortKey
 	state.rawContent = m.rawContent
 	state.rawFormat = m.rawFormat
 }
@@ -82,6 +84,7 @@ func (m *Model) restoreWorkspaceState(kind listKind) {
 	m.filter.Blur()
 	m.filtering = false
 	m.status = state.status
+	m.sortKey = state.sortKey
 	m.rawContent = state.rawContent
 	m.rawFormat = state.rawFormat
 	m.rawTitle = ""

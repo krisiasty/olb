@@ -152,6 +152,7 @@ list because previous objects may not exist in the new view.
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
+| | `o` | Sort a top-level list by a name/id/IP column, ascending (esc cancels, enter selects) |
 | Global | `p`/`0` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit (back out, then exit) |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |

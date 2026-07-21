@@ -126,6 +126,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.toggleIDs()
+	case key.Matches(msg, m.keys.Sort):
+		return m.openSort()
 
 	case key.Matches(msg, m.keys.Project):
 		return m.openProject()
@@ -502,8 +504,70 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onProjectKey(msg)
 	case overlayPicker:
 		return m.onPickerKey(msg)
+	case overlaySort:
+		return m.onSortKey(msg)
 	case overlayTelemetry:
 		return m.onTelemetryKey(msg)
+	}
+	return m, nil
+}
+
+// openSort opens the sort-column picker for the active top-level list, with the
+// current sort column pre-selected. Other views have no sortable columns, so it
+// flashes a hint instead of opening an empty overlay.
+func (m Model) openSort() (tea.Model, tea.Cmd) {
+	cols := m.sortColumns()
+	if len(cols) == 0 {
+		return m, m.setFlash("sorting is available in the list views", false)
+	}
+	m.overlay = overlaySort
+	m.sortCursor = 0
+	for i, c := range cols {
+		if c.key == m.sortKey {
+			m.sortCursor = i
+			break
+		}
+	}
+	return m, nil
+}
+
+// onSortKey drives the sort-column picker: arrows/page/home/end move, enter
+// applies the highlighted column (always ascending) and re-sorts in place, esc
+// cancels without changing the current sort.
+func (m Model) onSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cols := m.sortColumns()
+	last := len(cols) - 1
+	switch {
+	case key.Matches(msg, m.keys.Cancel):
+		m.overlay = overlayNone
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		if m.sortCursor > 0 {
+			m.sortCursor--
+		}
+	case key.Matches(msg, m.keys.Down):
+		if m.sortCursor < last {
+			m.sortCursor++
+		}
+	case key.Matches(msg, m.keys.PageUp):
+		if m.sortCursor -= m.pickerPageSize(); m.sortCursor < 0 {
+			m.sortCursor = 0
+		}
+	case key.Matches(msg, m.keys.PageDown):
+		if m.sortCursor += m.pickerPageSize(); m.sortCursor > last {
+			m.sortCursor = last
+		}
+	case key.Matches(msg, m.keys.Home):
+		m.sortCursor = 0
+	case key.Matches(msg, m.keys.End):
+		m.sortCursor = last
+	case key.Matches(msg, m.keys.Accept):
+		if m.sortCursor >= 0 && m.sortCursor <= last {
+			m.sortKey = cols[m.sortCursor].key
+			m.applyFilters() // re-sort; selection follows the object by identity
+		}
+		m.overlay = overlayNone
+		return m, nil
 	}
 	return m, nil
 }

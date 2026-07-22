@@ -332,12 +332,14 @@ func (m Model) coeClusterOverviewLines(h int) []string {
 }
 
 func (m Model) kubernetesDetailTitle(title string) string {
-	if m.coeClustersLoading {
-		title += "  " + m.coeSpinner.View() + " obtaining cluster data…"
-	} else if m.coeClustersErr != "" {
-		title += "  [cluster data unavailable]"
+	rendered := m.st.panelTitle.Render(title)
+	switch {
+	case m.coeClustersLoading:
+		rendered += "  " + m.coeSpinner.View() + " " + m.st.disabled.Render("obtaining cluster data…")
+	case m.coeClustersErr != "":
+		rendered += "  " + m.st.flashErr.Render("[cluster data unavailable]")
 	}
-	return title
+	return rendered
 }
 
 func padOverviewLines(lines []string, h int) []string {

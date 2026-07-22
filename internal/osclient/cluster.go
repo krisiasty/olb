@@ -3,6 +3,7 @@ package osclient
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2/openstack/containerinfra/v1/clusters"
 )
@@ -55,4 +56,63 @@ func (c *Clients) ListCOEClusters(ctx context.Context) ([]COECluster, error) {
 		})
 	}
 	return out, nil
+}
+
+// COEClusterDetail holds the extra Magnum cluster fields that the brief cluster
+// list omits and only the per-cluster detail call populates — notably the
+// Kubernetes API endpoint (served by the cluster's master load balancer), the
+// running version, per-node health, and networking flags. It is fetched lazily
+// because that endpoint is slow.
+type COEClusterDetail struct {
+	APIAddress         string            `json:"api_address" yaml:"api_address"`
+	COEVersion         string            `json:"coe_version" yaml:"coe_version"`
+	StatusReason       string            `json:"status_reason,omitempty" yaml:"status_reason,omitempty"`
+	HealthStatusReason map[string]string `json:"health_status_reason,omitempty" yaml:"health_status_reason,omitempty"`
+	MasterAddresses    []string          `json:"master_addresses,omitempty" yaml:"master_addresses,omitempty"`
+	NodeAddresses      []string          `json:"node_addresses,omitempty" yaml:"node_addresses,omitempty"`
+	FixedNetwork       string            `json:"fixed_network,omitempty" yaml:"fixed_network,omitempty"`
+	FixedSubnet        string            `json:"fixed_subnet,omitempty" yaml:"fixed_subnet,omitempty"`
+	FloatingIPEnabled  bool              `json:"floating_ip_enabled" yaml:"floating_ip_enabled"`
+	MasterLBEnabled    bool              `json:"master_lb_enabled" yaml:"master_lb_enabled"`
+	CreatedAt          string            `json:"created_at,omitempty" yaml:"created_at,omitempty"`
+	UpdatedAt          string            `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
+}
+
+// GetCOECluster fetches one Magnum cluster's full detail (the slow per-cluster
+// endpoint the list call does not populate). Callers fetch it lazily and cache
+// it by UUID.
+func (c *Clients) GetCOECluster(ctx context.Context, id string) (COEClusterDetail, error) {
+	sc, err := c.clientsForLB(ctx, "")
+	if err != nil {
+		return COEClusterDetail{}, err
+	}
+	if sc.container == nil {
+		return COEClusterDetail{}, fmt.Errorf("magnum: %w", ErrUnavailable)
+	}
+	cluster, err := clusters.Get(ctx, sc.container, id).Extract()
+	if err != nil {
+		return COEClusterDetail{}, err
+	}
+	var health map[string]string
+	if len(cluster.HealthStatusReason) > 0 {
+		health = make(map[string]string, len(cluster.HealthStatusReason))
+		for k, v := range cluster.HealthStatusReason {
+			health[k] = fmt.Sprintf("%v", v)
+		}
+	}
+	return COEClusterDetail{
+		APIAddress: cluster.APIAddress, COEVersion: cluster.COEVersion,
+		StatusReason: cluster.StatusReason, HealthStatusReason: health,
+		MasterAddresses: cluster.MasterAddresses, NodeAddresses: cluster.NodeAddresses,
+		FixedNetwork: cluster.FixedNetwork, FixedSubnet: cluster.FixedSubnet,
+		FloatingIPEnabled: cluster.FloatingIPEnabled, MasterLBEnabled: cluster.MasterLBEnabled,
+		CreatedAt: formatClusterTime(cluster.CreatedAt), UpdatedAt: formatClusterTime(cluster.UpdatedAt),
+	}, nil
+}
+
+func formatClusterTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

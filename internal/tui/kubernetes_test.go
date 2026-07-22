@@ -396,3 +396,77 @@ func runCOERequest(t *testing.T, cmd tea.Cmd) coeClustersMsg {
 	}
 	return msg
 }
+
+func testCOEClusterDetail() osclient.COEClusterDetail {
+	return osclient.COEClusterDetail{
+		APIAddress: "https://100.104.48.250:6443",
+		COEVersion: "v1.32.8",
+		HealthStatusReason: map[string]string{
+			"kube-slzjy-2dm89-vd8bb.Ready":    "True",
+			"kube-slzjy-2dm89-x2xqn.Ready":    "True",
+			"kube-slzjy-default-worker.Ready": "False",
+			"api":                             "ok",
+		},
+		FixedNetwork:      "0390a0b4-8823-44bd-b39d-e67abfef70cf",
+		FloatingIPEnabled: false,
+		MasterLBEnabled:   true,
+		CreatedAt:         "2025-10-22T14:28:05Z",
+		UpdatedAt:         "2026-06-30T13:31:54Z",
+	}
+}
+
+func TestCOEClusterDetailEnrichment(t *testing.T) {
+	uuid := testClusterUUID
+	backend := &fakeBackend{
+		coeClusters: []osclient.COECluster{testCOECluster()},
+		coeDetails:  map[string]osclient.COEClusterDetail{uuid: testCOEClusterDetail()},
+	}
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	m := New(backend, Config{})
+	m.clock = func() time.Time { return now }
+	m.width, m.height = 120, 40
+	m.coeClusters = backend.coeClusters
+	m.coeClustersLoaded = true
+	tree := newTree()
+	tree.Root.Name = "kube_service_" + uuid + "_tenant-layer_web"
+	m.applyKubernetesRelations(tree)
+	cluster := firstChildOfType(tree.Root, model.TypeCOECluster)
+	m.loc = location{id: cluster.Identity(), node: cluster, tree: tree}
+
+	before := ansiRE.ReplaceAllString(strings.Join(m.simpleKubernetesOverviewLines(30), "\n"), "")
+	if strings.Contains(before, "API endpoint") {
+		t.Fatalf("detail-only fields must not appear before the detail loads:\n%s", before)
+	}
+
+	if cmd := (&m).ensureCOEClusterDetailCmd(false); cmd == nil {
+		t.Fatal("first landing on a COE cluster should trigger a detail fetch")
+	}
+	if !m.coeClusterDetails[uuid].loading {
+		t.Fatal("detail state should be marked loading after triggering the fetch")
+	}
+
+	msg := m.getCOEClusterDetailCmd(uuid)().(coeClusterDetailMsg)
+	if backend.coeGetCalls == 0 {
+		t.Fatal("GetCOECluster was not called")
+	}
+	next, _ := m.onCOEClusterDetail(msg)
+	m = next.(Model)
+
+	view := ansiRE.ReplaceAllString(strings.Join(m.simpleKubernetesOverviewLines(30), "\n"), "")
+	for _, want := range []string{
+		"KUBERNETES", "API endpoint", "https://100.104.48.250:6443",
+		"Kubernetes version", "v1.32.8",
+		"Node health", "2/3 nodes ready", "api: ok",
+		"API load balancer", "Floating IP",
+		"Fixed network", "LIFECYCLE", "Created", "2025-10-22",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("enriched cluster detail missing %q:\n%s", want, view)
+		}
+	}
+
+	// The cached detail must not refetch on a subsequent landing.
+	if cmd := (&m).ensureCOEClusterDetailCmd(false); cmd != nil {
+		t.Error("a fresh cached detail should not trigger a refetch")
+	}
+}

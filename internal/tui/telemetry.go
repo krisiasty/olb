@@ -238,7 +238,9 @@ func (m Model) applicationTelemetryContent() string {
 		{label: "Runtime reserved", value: bytesCurrentAndMax(snapshot.RuntimeSys, snapshot.MaxRuntimeSys)},
 		{label: "Live heap objects", value: countCurrentAndMax(snapshot.HeapObjects, snapshot.MaxHeapObjects)},
 	}}
-	return strings.TrimRight(m.renderOverviewGroup(group, m.width), " \n")
+	return strings.TrimRight(m.renderOverviewGroup(group, m.width, func(s string) string {
+		return m.st.groupHeading.Render(s)
+	}), " \n")
 }
 
 // currentAndMax formats a "current (max N)" pair. It is generic so it serves

@@ -86,6 +86,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onPoolSummaries(msg)
 	case coeClustersMsg:
 		return m.onCOEClusters(msg)
+	case coeClusterDetailMsg:
+		return m.onCOEClusterDetail(msg)
 	case refResolveMsg:
 		return m.onRefResolve(msg)
 	case amphoraeMsg:
@@ -357,7 +359,8 @@ func (m Model) onTree(msg treeMsg) (tea.Model, tea.Cmd) {
 				return m, m.reloadHealthMonitorOverview()
 			}
 			if m.loc.node != nil && (m.loc.node.Type == model.TypeCOECluster || m.loc.node.Type == model.TypeKubeService) {
-				return m, tea.Batch(m.ensureCOEClustersCmd(!m.refreshAutomatic), m.finishRefresh(""))
+				force := !m.refreshAutomatic
+				return m, tea.Batch(m.ensureCOEClustersCmd(force), m.ensureCOEClusterDetailCmd(force), m.finishRefresh(""))
 			}
 			delete(m.lbRelatedErr, msg.lbID)
 			m.markFresh(msg.lbID, sectionRelated)
@@ -689,7 +692,7 @@ func (m *Model) loadLBOverview() tea.Cmd {
 		return m.loadHealthMonitorOverview(false)
 	}
 	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
-		return m.ensureCOEClustersCmd(false)
+		return tea.Batch(m.ensureCOEClustersCmd(false), m.ensureCOEClusterDetailCmd(false))
 	}
 	return m.startLBOverview(false)
 }
@@ -1670,7 +1673,9 @@ func (m Model) onCOEClusters(msg coeClustersMsg) (tea.Model, tea.Cmd) {
 		m.markFresh(m.loc.node.ID, sectionDetails)
 	}
 	m.markFresh(m.loc.tree.Root.ID, sectionRelated)
-	return m, nil
+	// Now that the cluster is identified (UUID resolved), the COE cluster view
+	// can fetch its slow per-cluster detail.
+	return m, m.ensureCOEClusterDetailCmd(false)
 }
 
 func (m *Model) applyAmphorae(lbID string, nodes []*model.Node) {
@@ -1857,6 +1862,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.coeSpinnerRunning = false
 	m.coeClustersErr = ""
 	m.coeClustersAt = time.Time{}
+	m.coeClusterDetails = map[string]coeDetailState{}
 	m.autoStatsLoading = map[string]bool{}
 	m.lbs, m.lbsLoaded = nil, false
 	m.vipFloatingIPs = nil

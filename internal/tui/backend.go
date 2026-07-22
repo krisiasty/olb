@@ -24,6 +24,7 @@ type Backend interface {
 	ListAllAmphorae(ctx context.Context) ([]*model.Node, error)
 	ListFloatingIPMappings(ctx context.Context) ([]osclient.FloatingIPMapping, error)
 	ListCOEClusters(ctx context.Context) ([]osclient.COECluster, error)
+	GetCOECluster(ctx context.Context, id string) (osclient.COEClusterDetail, error)
 	ResolveFloatingIPs(ctx context.Context, lbID, portID string) (map[string]*model.Node, error)
 	ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error)
 	ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error)

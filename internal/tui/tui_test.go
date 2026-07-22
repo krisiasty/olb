@@ -45,6 +45,9 @@ type fakeBackend struct {
 	coeErr       error
 	coeCalls     int
 	coeDeadline  time.Duration
+	coeDetails   map[string]osclient.COEClusterDetail
+	coeDetailErr error
+	coeGetCalls  int
 }
 
 func newTree() *model.Tree {
@@ -216,6 +219,14 @@ func (f *fakeBackend) ListCOEClusters(ctx context.Context) ([]osclient.COECluste
 		f.coeDeadline = time.Until(deadline)
 	}
 	return f.coeClusters, f.coeErr
+}
+
+func (f *fakeBackend) GetCOECluster(_ context.Context, id string) (osclient.COEClusterDetail, error) {
+	f.coeGetCalls++
+	if f.coeDetailErr != nil {
+		return osclient.COEClusterDetail{}, f.coeDetailErr
+	}
+	return f.coeDetails[id], nil
 }
 
 func (f *fakeBackend) ResolveFloatingIPs(context.Context, string, string) (map[string]*model.Node, error) {
@@ -2241,7 +2252,7 @@ func TestUpperOverviewValuesWrapWithAlignedContinuations(t *testing.T) {
 	}
 
 	assertWrapped(t, m.renderOverviewPanel("DETAILS", fields, 28, len(fields)))
-	assertWrapped(t, m.renderOverviewGroup(overviewGroup{title: "DETAILS", fields: fields}, 28))
+	assertWrapped(t, m.renderOverviewGroup(overviewGroup{title: "DETAILS", fields: fields}, 28, m.subsectionHeading))
 }
 
 func TestLBOverviewPanelsFailIndependently(t *testing.T) {

@@ -151,6 +151,10 @@ type Model struct {
 	coeClustersLoading bool
 	coeClustersErr     string
 	coeClustersAt      time.Time
+	// coeClusterDetails caches the slow per-cluster Magnum detail, keyed by
+	// cluster UUID so the API and Service load balancers sharing a cluster only
+	// fetch it once.
+	coeClusterDetails map[string]coeDetailState
 
 	// Automatic refresh uses a fast, user-selectable cadence for stats and a
 	// slower fixed cadence for the full list/status graph. Generations make old
@@ -281,6 +285,7 @@ func New(backend Backend, cfg Config) Model {
 		lbListenersLoaded:      map[string]bool{},
 		lbPoolsLoading:         map[string]bool{},
 		lbPoolsLoaded:          map[string]bool{},
+		coeClusterDetails:      map[string]coeDetailState{},
 		autoRefreshEnabled:     true,
 		autoIntervalIndex:      defaultAutoRefreshIntervalIndex,
 		autoGeneration:         1,

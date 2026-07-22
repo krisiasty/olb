@@ -156,6 +156,12 @@ type coeClustersMsg struct {
 	err       error
 }
 
+type coeClusterDetailMsg struct {
+	uuid   string
+	detail osclient.COEClusterDetail
+	err    error
+}
+
 type flashClearMsg struct{ token int }
 
 // --- commands -------------------------------------------------------------
@@ -221,6 +227,18 @@ func (m Model) loadCOEClustersCmd() tea.Cmd {
 		defer cancel()
 		items, err := b.ListCOEClusters(ctx)
 		return coeClustersMsg{items: items, projectID: projectID, all: all, err: err}
+	}
+}
+
+func (m Model) getCOEClusterDetailCmd(uuid string) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		// The per-cluster Magnum detail endpoint is slow (seconds); use the same
+		// generous timeout as the cluster list rather than the interactive one.
+		ctx, cancel := context.WithTimeout(context.Background(), coeRequestTimeout)
+		defer cancel()
+		detail, err := b.GetCOECluster(ctx, uuid)
+		return coeClusterDetailMsg{uuid: uuid, detail: detail, err: err}
 	}
 }
 

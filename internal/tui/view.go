@@ -400,16 +400,16 @@ func (m Model) vipOverviewSummary(budget int) []string {
 		available := m.width - gap
 		leftWidth := available / 2
 		rightWidth := available - leftWidth
-		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap, m.subsectionHeading), "\n")...)
 		lines = append(lines, "")
-		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[2], groups[3], leftWidth, rightWidth, gap), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[2], groups[3], leftWidth, rightWidth, gap, m.subsectionHeading), "\n")...)
 		return limitLines(lines, budget)
 	}
 	for i, group := range groups {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width, m.subsectionHeading), "\n")...)
 	}
 	return limitLines(lines, budget)
 }
@@ -491,14 +491,14 @@ func (m Model) poolOverviewSummary(budget int) []string {
 		available := m.width - gap
 		leftWidth := available / 2
 		rightWidth := available - leftWidth
-		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap, m.subsectionHeading), "\n")...)
 		return limitLines(lines, budget)
 	}
 	for i, group := range groups {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width, m.subsectionHeading), "\n")...)
 	}
 	return limitLines(lines, budget)
 }
@@ -718,7 +718,7 @@ func (m Model) amphoraOverviewSummary(budget int) []string {
 			if i > 0 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[i], groups[i+1], leftWidth, rightWidth, gap), "\n")...)
+			lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[i], groups[i+1], leftWidth, rightWidth, gap, m.subsectionHeading), "\n")...)
 		}
 		return limitLines(lines, budget)
 	}
@@ -726,7 +726,7 @@ func (m Model) amphoraOverviewSummary(budget int) []string {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width, m.subsectionHeading), "\n")...)
 	}
 	return limitLines(lines, budget)
 }
@@ -820,14 +820,14 @@ func (m Model) healthMonitorOverviewSummary(budget int) []string {
 		available := m.width - gap
 		leftWidth := available / 2
 		rightWidth := available - leftWidth
-		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroupPair(groups[0], groups[1], leftWidth, rightWidth, gap, m.subsectionHeading), "\n")...)
 		return limitLines(lines, budget)
 	}
 	for i, group := range groups {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width), "\n")...)
+		lines = append(lines, strings.Split(m.renderOverviewGroup(group, m.width, m.subsectionHeading), "\n")...)
 	}
 	return limitLines(lines, budget)
 }
@@ -934,16 +934,23 @@ func (m Model) vipDetailGroups() []overviewGroup {
 	}
 }
 
-func (m Model) renderOverviewGroupPair(left, right overviewGroup, leftWidth, rightWidth, gap int) string {
+// subsectionHeading renders an overview detail subsection header (IDENTITY,
+// STATE, COMPUTE, …) in the same style and spacing as the related-object group
+// headers, so both read consistently.
+func (m Model) subsectionHeading(title string) string {
+	return " " + m.st.relatedGroup.Render(title)
+}
+
+func (m Model) renderOverviewGroupPair(left, right overviewGroup, leftWidth, rightWidth, gap int, heading func(string) string) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		m.renderOverviewGroup(left, leftWidth),
+		m.renderOverviewGroup(left, leftWidth, heading),
 		strings.Repeat(" ", gap),
-		m.renderOverviewGroup(right, rightWidth),
+		m.renderOverviewGroup(right, rightWidth, heading),
 	)
 }
 
-func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
+func (m Model) renderOverviewGroup(group overviewGroup, width int, heading func(string) string) string {
 	if width < 1 {
 		width = 1
 	}
@@ -958,14 +965,14 @@ func (m Model) renderOverviewGroup(group overviewGroup, width int) string {
 	}
 	lines := make([]string, 0, len(group.fields)+1)
 	if group.title != "" {
-		lines = append(lines, m.st.groupHeading.Render(group.title))
+		lines = append(lines, heading(group.title))
 	}
 	for _, field := range group.fields {
 		if field.breakBefore {
 			lines = append(lines, "")
 		}
 		if field.subheading != "" {
-			lines = append(lines, m.st.groupHeading.Render(field.subheading))
+			lines = append(lines, heading(field.subheading))
 		}
 		label := m.st.panelLabel.Render(padRight(field.label, labelWidth))
 		value := field.value

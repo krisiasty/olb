@@ -85,7 +85,8 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 
 `--project` selects the initial TUI project. In regular mode this exchanges the
 startup token for a token scoped to that project. With `--global-admin`, it
-keeps the startup token and applies a server-side project filter instead. Use
+keeps the startup token and applies a server-side project filter instead; a
+global administrator that omits `--project` starts in the all-projects view. Use
 `--os-project-name` or `--os-project-id` to set the startup authentication
 scope itself.
 
@@ -132,10 +133,10 @@ authentication-scope change.
 
 In `--global-admin` mode, the switcher's first entry is
 **⟨ all projects ⟩**. Regular mode omits that row and shows a footer hint to
-restart with `--global-admin` for the global view. `--all-projects` selects this
-view at startup and therefore requires `--global-admin`. Changing the selected
-project clears all five workspace histories and returns to the load-balancer
-list because previous objects may not exist in the new view.
+restart with `--global-admin` for the global view. A global administrator starts
+in this all-projects view unless `--project` requests a specific project.
+Changing the selected project clears all five workspace histories and returns to
+the load-balancer list because previous objects may not exist in the new view.
 
 ### Keybindings
 

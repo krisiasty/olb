@@ -13,10 +13,28 @@ func TestAPILogBodiesRequiresAPILogPath(t *testing.T) {
 	}
 }
 
-func TestAllProjectsRequiresGlobalAdmin(t *testing.T) {
-	err := run([]string{"--all-projects"})
-	if err == nil || !strings.Contains(err.Error(), "--all-projects requires --global-admin") {
-		t.Fatalf("run error = %v", err)
+func TestAllProjectsModeDerivation(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"global admin, no project → all projects", []string{"--global-admin"}, true},
+		{"global admin with project → scoped", []string{"--global-admin", "--project", "demo"}, false},
+		{"project only → scoped", []string{"--project", "demo"}, false},
+		{"no flags → scoped", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFlagSet()
+			opts := registerAuthFlags(fs)
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			if got := allProjectsMode(opts); got != tc.want {
+				t.Fatalf("allProjectsMode = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

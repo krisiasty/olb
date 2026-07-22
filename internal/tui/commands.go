@@ -162,6 +162,15 @@ type coeClusterDetailMsg struct {
 	err    error
 }
 
+// coePreloadMsg triggers the startup background pre-warm of the Magnum cluster
+// list. It flows through Update so the in-flight flag is set on the live model,
+// letting a fast drill-in dedupe against the pre-warm instead of refetching.
+type coePreloadMsg struct{}
+
+func coePreloadCmd() tea.Cmd {
+	return func() tea.Msg { return coePreloadMsg{} }
+}
+
 type flashClearMsg struct{ token int }
 
 // --- commands -------------------------------------------------------------
@@ -216,17 +225,30 @@ func (m Model) loadVIPFloatingIPsCmd(refresh bool) tea.Cmd {
 	}
 }
 
-func (m Model) loadCOEClustersCmd() tea.Cmd {
+// startCOEClustersLoad cancels any in-flight Magnum cluster listing and returns
+// a command that lists clusters afresh, bound to a cancellable context stored on
+// the model. Magnum listing is enrichment (it never blocks Octavia views) but can
+// take many seconds; storing the cancel lets a project switch abort the previous
+// scope's request instead of leaving it to run to completion only to be discarded
+// on arrival. coeClustersLoading still deduplicates concurrent calls.
+func (m *Model) startCOEClustersLoad() tea.Cmd {
+	m.cancelCOEClustersLoad()
+	ctx, cancel := context.WithTimeout(context.Background(), coeRequestTimeout)
+	m.coeCancel = cancel
 	b := m.backend
 	projectID, all := m.project.ID, m.allProjects
 	return func() tea.Msg {
-		// Magnum cluster listing is enrichment and does not block Octavia views.
-		// Some deployments need substantially longer than the interactive API
-		// timeout, while coeClustersLoading still deduplicates concurrent calls.
-		ctx, cancel := context.WithTimeout(context.Background(), coeRequestTimeout)
 		defer cancel()
 		items, err := b.ListCOEClusters(ctx)
 		return coeClustersMsg{items: items, projectID: projectID, all: all, err: err}
+	}
+}
+
+// cancelCOEClustersLoad aborts the in-flight cluster listing, if any.
+func (m *Model) cancelCOEClustersLoad() {
+	if m.coeCancel != nil {
+		m.coeCancel()
+		m.coeCancel = nil
 	}
 }
 

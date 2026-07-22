@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"io"
 	"time"
 
@@ -151,6 +152,10 @@ type Model struct {
 	coeClustersLoading bool
 	coeClustersErr     string
 	coeClustersAt      time.Time
+	// coeCancel aborts the in-flight Magnum cluster listing. That request is slow
+	// (many seconds); a project switch cancels it so the stale scope's request
+	// stops immediately instead of running to completion only to be discarded.
+	coeCancel context.CancelFunc
 	// coeClusterDetails caches the slow per-cluster Magnum detail, keyed by
 	// cluster UUID so the API and Service load balancers sharing a cluster only
 	// fetch it once.
@@ -301,5 +306,9 @@ func New(backend Backend, cfg Config) Model {
 
 // Init loads the initial load balancer list.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), m.scheduleAutoRefresh(), freshnessTickCmd())
+	// Pre-warm the Magnum cluster list in the background at startup so a COE
+	// cluster / Kubernetes service overview renders its enrichment without a wait
+	// on first visit. It is non-blocking, degrades gracefully when Magnum is
+	// absent, and its result is cached like any other cluster-list fetch.
+	return tea.Batch(m.spinner.Tick, m.loadLBsCmd(), coePreloadCmd(), m.scheduleAutoRefresh(), freshnessTickCmd())
 }

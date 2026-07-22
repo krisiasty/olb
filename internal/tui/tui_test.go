@@ -45,6 +45,7 @@ type fakeBackend struct {
 	coeErr       error
 	coeCalls     int
 	coeDeadline  time.Duration
+	coeBlock     bool // when true, ListCOEClusters blocks until its context is cancelled
 	coeDetails   map[string]osclient.COEClusterDetail
 	coeDetailErr error
 	coeGetCalls  int
@@ -217,6 +218,10 @@ func (f *fakeBackend) ListCOEClusters(ctx context.Context) ([]osclient.COECluste
 	f.coeCalls++
 	if deadline, ok := ctx.Deadline(); ok {
 		f.coeDeadline = time.Until(deadline)
+	}
+	if f.coeBlock {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	return f.coeClusters, f.coeErr
 }

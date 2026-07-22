@@ -2202,10 +2202,50 @@ func (m *Model) setupHelpViewport() {
 	m.vp.GotoTop()
 }
 
+// scrollMarkers returns the edge hints for the shared overlay viewport: an
+// arrow toward off-screen content plus the scroll percentage. The "above" hint
+// goes on the title line, the "below" hint on the footer. Both are empty when
+// the content fits without scrolling.
+func (m Model) scrollMarkers() (above, below string) {
+	if m.vp.TotalLineCount() <= m.vp.VisibleLineCount() {
+		return "", ""
+	}
+	// Rendered as reversed, padded chips (the panel-header style) so they stand
+	// out against the title/footer chrome.
+	if !m.vp.AtTop() {
+		above = m.st.panelTitle.Render("▲ more")
+	}
+	pct := int(m.vp.ScrollPercent()*100 + 0.5)
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
+	}
+	label := fmt.Sprintf("%d%%", pct)
+	if !m.vp.AtBottom() {
+		label += " ▼ more"
+	}
+	return above, m.st.panelTitle.Render(label)
+}
+
+// scrollLine right-aligns a scroll marker on an overlay title/footer line,
+// dropping the marker (never the content) when the line is too narrow.
+func (m Model) scrollLine(left, marker string) string {
+	if marker == "" {
+		return m.clip(left)
+	}
+	lw, rw := lipgloss.Width(left), lipgloss.Width(marker)
+	if lw+1+rw > m.width {
+		return m.clip(left)
+	}
+	return left + strings.Repeat(" ", m.width-lw-rw) + marker
+}
+
 func (m Model) helpView() string {
 	title := m.st.overlayTitle.Render("olb — help")
 	footer := m.st.help.Render("esc / ? / q  close   ·   ↑/↓ scroll")
-	return title + "\n" + m.vp.View() + "\n" + m.clip(footer)
+	above, below := m.scrollMarkers()
+	return m.scrollLine(title, above) + "\n" + m.vp.View() + "\n" + m.scrollLine(footer, below)
 }
 
 func (m *Model) setupRawViewport() {
@@ -2237,7 +2277,8 @@ func (m Model) rawView() string {
 	if footer == "" {
 		footer = m.st.help.Render("esc/q close · c copy · ↑/↓ scroll")
 	}
-	return m.st.overlayTitle.Render(m.clip(title)) + "\n" + m.vp.View() + "\n" + m.clip(footer)
+	above, below := m.scrollMarkers()
+	return m.scrollLine(m.st.overlayTitle.Render(title), above) + "\n" + m.vp.View() + "\n" + m.scrollLine(footer, below)
 }
 
 func (m Model) projectView() string {

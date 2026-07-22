@@ -470,3 +470,173 @@ func TestCOEClusterDetailEnrichment(t *testing.T) {
 		t.Error("a fresh cached detail should not trigger a refetch")
 	}
 }
+
+func TestStartupBackgroundLoadsCOEClusters(t *testing.T) {
+	backend := &fakeBackend{coeClusters: []osclient.COECluster{testCOECluster()}}
+	m := New(backend, Config{})
+
+	// Start-up batch must include the COE pre-warm trigger.
+	batch, ok := m.Init()().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("Init should return a batch of commands")
+	}
+	var preloaded bool
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		done := make(chan tea.Msg, 1)
+		go func(cmd tea.Cmd) { done <- cmd() }(c)
+		select {
+		case got := <-done:
+			if _, ok := got.(coePreloadMsg); ok {
+				preloaded = true
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
+		if preloaded {
+			break
+		}
+	}
+	if !preloaded {
+		t.Fatal("startup did not dispatch the COE cluster pre-warm")
+	}
+
+	// The pre-warm marks the load in flight (so a drill-in dedupes) and fetches.
+	next, cmd := m.onCOEPreload()
+	m = next.(Model)
+	if !m.coeClustersLoading {
+		t.Fatal("pre-warm should mark the COE list load in flight")
+	}
+	if cmd == nil {
+		t.Fatal("pre-warm should dispatch the COE list load")
+	}
+	msg, ok := cmd().(coeClustersMsg)
+	if !ok {
+		t.Fatalf("pre-warm command should load the COE list, got %T", cmd())
+	}
+	updated, _ := m.onCOEClusters(msg)
+	if got := updated.(Model); !got.coeClustersLoaded || got.coeClustersLoading || len(got.coeClusters) != 1 {
+		t.Fatalf("startup COE list not stored: loaded=%v loading=%v n=%d", got.coeClustersLoaded, got.coeClustersLoading, len(got.coeClusters))
+	}
+}
+
+func TestDrillInDuringPrewarmDedupesAndAnimates(t *testing.T) {
+	backend := &fakeBackend{coeClusters: []osclient.COECluster{testCOECluster()}}
+	m := New(backend, Config{})
+	// Pre-warm is in flight (as at startup, before the list has landed).
+	next, _ := m.onCOEPreload()
+	m = next.(Model)
+
+	// Drill into a k8s LB whose COE list is still loading.
+	tree := newTree()
+	tree.Root.Name = "kube_service_" + testClusterUUID + "_tenant-layer_web"
+	m.loc = location{id: tree.Root.Identity(), node: tree.Root, tree: tree}
+
+	cmd := m.ensureCOEClustersCmd(false)
+	if cmd == nil {
+		t.Fatal("in-flight pre-warm should start the spinner for the waiting view")
+	}
+	if !m.coeSpinnerRunning {
+		t.Fatal("spinner should animate while the pre-warm is in flight")
+	}
+	if backend.coeCalls != 0 {
+		t.Fatalf("drill-in during pre-warm must not refetch the list; coeCalls=%d", backend.coeCalls)
+	}
+}
+
+func TestProjectSwitchRewarmsCOEClusters(t *testing.T) {
+	backend := &fakeBackend{
+		coeClusters: []osclient.COECluster{testCOECluster()},
+		cap:         osclient.SwitchCapability{CanSwitch: true},
+	}
+	m := New(backend, Config{})
+	// A completed startup pre-warm for the initial project.
+	m.coeClusters = backend.coeClusters
+	m.coeClustersLoaded = true
+
+	next, cmd := m.onSwitched(switchedMsg{project: osclient.ProjectInfo{ID: "p2", Name: "beta"}})
+	m = next.(Model)
+	if m.coeClustersLoaded || m.coeClustersLoading || len(m.coeClusters) != 0 {
+		t.Fatal("a project switch must invalidate the previous project's COE list")
+	}
+	// The switch must re-warm the COE list for the new scope.
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("onSwitched should return a batch of commands")
+	}
+	rewarmed := false
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		done := make(chan tea.Msg, 1)
+		go func(cmd tea.Cmd) { done <- cmd() }(c)
+		select {
+		case got := <-done:
+			if _, ok := got.(coePreloadMsg); ok {
+				rewarmed = true
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
+		if rewarmed {
+			break
+		}
+	}
+	if !rewarmed {
+		t.Fatal("project switch did not re-warm the COE cluster list")
+	}
+}
+
+func TestNavigatingRebuildsStaleCOENode(t *testing.T) {
+	m := New(&fakeBackend{}, Config{})
+	m.width, m.height = 100, 40
+
+	// A tree built while the cluster list was still loading shows "obtaining…".
+	tree := newTree()
+	tree.Root.Name = "kube_service_" + testClusterUUID + "_tenant-layer_web"
+	m.applyKubernetesRelations(tree)
+	if stale := firstChildOfType(tree.Root, model.TypeCOECluster); stale == nil || stale.Name != "obtaining cluster data…" {
+		t.Fatalf("precondition: expected an obtaining-data COE node, got %+v", stale)
+	}
+
+	// The list lands afterwards (e.g. the pre-warm completes on the LB list).
+	m.coeClusters = []osclient.COECluster{testCOECluster()}
+	m.coeClustersLoaded = true
+
+	// Navigating to the (possibly cached) tree must rebuild the stale node.
+	m.buildNodeLocation(tree.Root.Identity(), tree)
+	if fresh := firstChildOfType(tree.Root, model.TypeCOECluster); fresh == nil || fresh.Name != "clusterapi" {
+		t.Fatalf("navigation should rebuild the stale COE node from the loaded list, got %+v", fresh)
+	}
+}
+
+func TestProjectSwitchCancelsInFlightCOELoad(t *testing.T) {
+	backend := &fakeBackend{coeBlock: true, cap: osclient.SwitchCapability{CanSwitch: true}}
+	m := New(backend, Config{})
+
+	// Start the pre-warm; ListCOEClusters blocks until its context is cancelled.
+	next, cmd := m.onCOEPreload()
+	m = next.(Model)
+	if cmd == nil || m.coeCancel == nil {
+		t.Fatal("pre-warm should start a cancellable load and store its cancel handle")
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+
+	// Switching project must abort the in-flight (slow) load, not wait it out.
+	next, _ = m.onSwitched(switchedMsg{project: osclient.ProjectInfo{ID: "p2", Name: "beta"}})
+	m = next.(Model)
+	if m.coeCancel != nil {
+		t.Fatal("switch should clear the cancel handle after aborting the load")
+	}
+	select {
+	case msg := <-done:
+		cm, ok := msg.(coeClustersMsg)
+		if !ok || cm.err == nil {
+			t.Fatalf("cancelled load should return a context error, got %+v", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("project switch did not cancel the in-flight COE cluster load")
+	}
+}

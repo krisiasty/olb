@@ -84,6 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onListenerSummaries(msg)
 	case poolSummariesMsg:
 		return m.onPoolSummaries(msg)
+	case coePreloadMsg:
+		return m.onCOEPreload()
 	case coeClustersMsg:
 		return m.onCOEClusters(msg)
 	case coeClusterDetailMsg:
@@ -1640,8 +1642,10 @@ func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) onCOEClusters(msg coeClustersMsg) (tea.Model, tea.Cmd) {
 	if msg.projectID != m.project.ID || msg.all != m.allProjects {
+		// A stale-scope result; a newer load (if any) owns coeCancel, so leave it.
 		return m, nil
 	}
+	m.coeCancel = nil // this load has settled; its context no longer needs aborting
 	m.coeClustersLoading = false
 	m.coeSpinnerRunning = false
 	m.coeClustersLoaded = true
@@ -1856,6 +1860,10 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.lbListenersLoaded = map[string]bool{}
 	m.lbPoolsLoading = map[string]bool{}
 	m.lbPoolsLoaded = map[string]bool{}
+	// The previous scope's cluster listing (possibly the slow startup pre-warm) is
+	// now irrelevant; abort it so it stops immediately rather than running to
+	// completion. onSwitched re-warms the list for the new scope below.
+	m.cancelCOEClustersLoad()
 	m.coeClusters = nil
 	m.coeClustersLoaded = false
 	m.coeClustersLoading = false
@@ -1888,7 +1896,11 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	if m.backend.SwitchCapability().GlobalAdmin {
 		scope = "global admin · " + scope
 	}
-	return m, tea.Batch(loadCmd, m.setFlash("switched to "+scope, false))
+	// Re-warm the Magnum cluster list for the new scope; the switch invalidated
+	// the previous project's pre-warmed list. Without this the COE overview would
+	// sit at "obtaining cluster data…" until a drill-in triggered a lazy fetch,
+	// which is the common path since users usually switch project before drilling.
+	return m, tea.Batch(loadCmd, coePreloadCmd(), m.setFlash("switched to "+scope, false))
 }
 
 // --- navigation & rendering ----------------------------------------------
@@ -2102,6 +2114,11 @@ func (m *Model) setTopLevelEntries() {
 }
 
 func (m *Model) buildNodeLocation(id model.Identity, tree *model.Tree) {
+	// A tree may have been built (or cached) while the Magnum cluster list was
+	// still loading, leaving its COE/Kubernetes node showing "obtaining cluster
+	// data…". Rebuild those relations from the current list on every navigation
+	// so the node reflects the latest data. No-op for non-Kubernetes trees.
+	m.applyKubernetesRelations(tree)
 	node := tree.Node(id.ID)
 	if node == nil {
 		m.loc = location{id: id, tree: tree, dead: true}

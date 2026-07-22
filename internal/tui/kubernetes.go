@@ -70,8 +70,17 @@ func (m *Model) ensureCOEClustersCmd(force bool) tea.Cmd {
 	if m.loc.tree == nil || m.loc.tree.Root == nil || inferKubernetesLB(m.loc.tree.Root.Name).kind == kubernetesLBNone {
 		return nil
 	}
+	if m.coeClustersLoading {
+		// A load is already in flight (e.g. the startup pre-warm); don't refetch.
+		// Ensure the spinner animates while this view waits for it.
+		if !m.coeSpinnerRunning {
+			m.coeSpinnerRunning = true
+			return m.coeSpinner.Tick
+		}
+		return nil
+	}
 	cacheFresh := m.coeClustersLoaded && !m.coeClustersAt.IsZero() && m.clock().Sub(m.coeClustersAt) < coeClusterCacheTTL
-	if m.coeClustersLoading || (!force && cacheFresh) {
+	if !force && cacheFresh {
 		return nil
 	}
 	m.coeClustersLoading = true
@@ -79,7 +88,22 @@ func (m *Model) ensureCOEClustersCmd(force bool) tea.Cmd {
 		m.coeClustersErr = ""
 	}
 	m.coeSpinnerRunning = true
-	return tea.Batch(m.loadCOEClustersCmd(), m.coeSpinner.Tick)
+	return tea.Batch(m.startCOEClustersLoad(), m.coeSpinner.Tick)
+}
+
+// onCOEPreload starts the startup background pre-warm of the Magnum cluster
+// list. Setting the in-flight flag here (rather than in New) lets a drill-in
+// that happens before the list lands dedupe against it instead of refetching.
+func (m Model) onCOEPreload() (tea.Model, tea.Cmd) {
+	if m.coeClustersLoading || m.coeClustersLoaded {
+		return m, nil
+	}
+	m.coeClustersLoading = true
+	// Assign before returning: startCOEClustersLoad stores m.coeCancel, and Go
+	// leaves the order of the plain `m` read vs. this call's side effects
+	// unspecified, so the returned model must observe the mutation explicitly.
+	cmd := m.startCOEClustersLoad()
+	return m, cmd
 }
 
 // ensureCOEClusterDetailCmd lazily loads the slow per-cluster Magnum detail for

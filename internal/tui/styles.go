@@ -34,6 +34,8 @@ type styles struct {
 	dead          lipgloss.Style
 	panelLabel    lipgloss.Style
 	groupHeading  lipgloss.Style
+	relatedGroup  lipgloss.Style
+	panelTitle    lipgloss.Style
 
 	tableHeader   lipgloss.Style
 	tableSelected lipgloss.Style
@@ -77,6 +79,15 @@ func newStyles() styles {
 		dead:         lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Strikethrough(true),
 		panelLabel:   lipgloss.NewStyle().Foreground(subtle),
 		groupHeading: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245")),
+		// Related-object section headers: left-aligned, slightly highlighted in
+		// a dim/muted yellow so single-item sections stay easy to scan.
+		relatedGroup: lipgloss.NewStyle().Foreground(lipgloss.Color("254")),
+		// Panel headers ("LOAD BALANCER DETAILS", "RELATED OBJECTS", "STATS", …):
+		// the same color as relatedGroup with foreground/background reversed, so
+		// they read as an inverted bar (dark text on a 254 background). One space
+		// of horizontal padding sits inside the reversed span, so the bar reads as
+		// a padded chip rather than hugging the text.
+		panelTitle: lipgloss.NewStyle().Foreground(lipgloss.Color("254")).Reverse(true).Padding(0, 1),
 
 		// The load-balancer list is a Lip Gloss table; the right-pad per cell is
 		// the column gap. Two spaces keep long name/project columns legible in

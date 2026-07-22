@@ -872,8 +872,8 @@ func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
 	if strings.Contains(plain, "VIPS ") || strings.Contains(plain, "POOLS ") || strings.Contains(plain, "AMPHORAE ") {
 		t.Fatalf("empty filtered groups should be omitted:\n%s", plain)
 	}
-	if heading := lineContaining(plain, "LISTENERS 1"); !strings.HasPrefix(heading, "── ") || !strings.Contains(heading, "DEGRADED 1") {
-		t.Fatalf("group heading should render as a panel-aligned divider: %q", heading)
+	if heading := lineContaining(plain, "LISTENERS 1"); !strings.HasPrefix(heading, " LISTENERS 1") || strings.HasPrefix(heading, "  LISTENERS 1") || !strings.Contains(heading, "DEGRADED 1") {
+		t.Fatalf("group heading should be indented one space with issue counts: %q", heading)
 	}
 	if listener := navigationLineContaining(plain, "http"); !strings.HasPrefix(listener, "▶ ●") {
 		t.Fatalf("selected related object should show cursor and status markers: %q", listener)

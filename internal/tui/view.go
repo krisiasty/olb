@@ -372,7 +372,7 @@ func (m Model) vipOverviewLines(h int) []string {
 		if visibleCount != allCount {
 			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
 		}
-		rendered := m.st.title.Render(title)
+		rendered := m.st.panelTitle.Render(title)
 		errors, degraded := relatedIssueCounts(m.entries)
 		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
 	}
@@ -458,7 +458,7 @@ func (m Model) poolOverviewLines(h int) []string {
 		if visibleCount != allCount {
 			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
 		}
-		rendered := m.st.title.Render(title)
+		rendered := m.st.panelTitle.Render(title)
 		errors, degraded := relatedIssueCounts(m.entries)
 		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
 	}
@@ -1027,7 +1027,7 @@ func (m Model) lbOverviewLines(h int) []string {
 		if visibleCount != allCount {
 			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
 		}
-		renderedTitle := m.st.title.Render(title)
+		renderedTitle := m.st.panelTitle.Render(title)
 		errorCount, degradedCount := relatedIssueCounts(m.entries)
 		renderedTitle = m.renderIssueCounts(renderedTitle, errorCount, degradedCount)
 		lbID := m.loc.node.ID
@@ -1097,7 +1097,7 @@ func (m Model) listenerOverviewLines(h int) []string {
 		if visibleCount != allCount {
 			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
 		}
-		rendered := m.st.title.Render(title)
+		rendered := m.st.panelTitle.Render(title)
 		errors, degraded := relatedIssueCounts(m.entries)
 		rendered = m.renderIssueCounts(rendered, errors, degraded)
 		id := m.loc.node.ID
@@ -1137,7 +1137,7 @@ func (m Model) listenerOverviewSummary(budget int) []string {
 		return limitLines(strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right), "\n"), budget)
 	}
 	if budget == 1 {
-		return []string{m.clip(m.st.title.Render("LISTENER DETAILS · STATS"))}
+		return []string{m.clip(m.st.panelTitle.Render("LISTENER DETAILS · STATS"))}
 	}
 	if budget == 2 {
 		return []string{m.clip(detailTitle), ""}
@@ -1300,7 +1300,7 @@ func (m Model) lbOverviewSummary(budget int) []string {
 	// Narrow terminals stack the panels. Divide the available field rows between
 	// them, prioritizing the first few identity and traffic values.
 	if budget == 1 {
-		return []string{m.clip(m.st.title.Render("LOAD BALANCER DETAILS · STATS"))}
+		return []string{m.clip(m.st.panelTitle.Render("LOAD BALANCER DETAILS · STATS"))}
 	}
 	if budget == 2 {
 		return []string{m.clip(detailTitle), ""}
@@ -1447,14 +1447,14 @@ func (m Model) statsPanelTitle(lbID string) string {
 	errText := m.lbStatsErr[lbID]
 	loading := !m.refreshing && m.lbStatsLoading[lbID]
 	if errText == "" && m.statsWithinAutoInterval(updated) {
-		return m.st.title.Render("STATS") + " · " + m.st.disabled.Render(m.statsSpinner.View())
+		return m.st.panelTitle.Render("STATS") + " · " + m.st.disabled.Render(m.statsSpinner.View())
 	}
 	overdue := m.autoRefreshEnabled && !updated.IsZero() && !m.statsWithinAutoInterval(updated)
 	return m.overviewPanelTitle("STATS", loading, errText, updated, errText != "" || overdue)
 }
 
 func (m Model) overviewPanelTitle(title string, loading bool, errText string, updatedAt time.Time, stale bool) string {
-	return m.overviewPanelTitleRendered(m.st.title.Render(title), loading, errText, updatedAt, stale)
+	return m.overviewPanelTitleRendered(m.st.panelTitle.Render(title), loading, errText, updatedAt, stale)
 }
 
 func (m Model) overviewPanelTitleRendered(title string, loading bool, errText string, updatedAt time.Time, stale bool) string {
@@ -1766,7 +1766,7 @@ func runeLen(s string) int { return len([]rune(s)) }
 
 func (m Model) renderRow(e entry, sel bool) string {
 	if e.kind == entGroup {
-		heading := m.st.groupHeading.Render("── " + e.label)
+		heading := " " + m.st.relatedGroup.Render(e.label)
 		return m.clip(m.renderIssueCounts(heading, e.issueErrors, e.issueDegraded))
 	}
 	eff := e.oper

@@ -1842,6 +1842,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	// history so objects from the previous authorization context cannot leak in.
 	m.project = msg.project
 	m.allProjects = msg.all
+	m.filtered = msg.filtered
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
 	m.lbStats = map[string]map[string]any{}
 	m.lbStatsChanges = map[string]map[string]statChange{}

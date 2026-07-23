@@ -662,3 +662,49 @@ func TestAmphoraeAdminRequiredMessage(t *testing.T) {
 		t.Errorf("amphorae view should explain the admin requirement; got:\n%s", view)
 	}
 }
+
+func TestGlobalAdminFilteredSelectionSurfacedInHeader(t *testing.T) {
+	capab := osclient.SwitchCapability{CanSwitch: true, GlobalAdmin: true, CanAllProjects: true, AllProjectsChecked: true}
+
+	t.Run("re-scope denied falls back to a filtered selection", func(t *testing.T) {
+		backend := &fakeBackend{cap: capab, scopeDenied: true}
+		m := New(backend, Config{AllProjects: true})
+		m.width, m.height = 120, 40
+
+		msg, ok := m.switchProjectCmd(osclient.ProjectInfo{ID: "p2", Name: "beta"})().(switchedMsg)
+		if !ok || msg.err != nil {
+			t.Fatalf("switch result = %+v", msg)
+		}
+		if !msg.filtered {
+			t.Fatal("switchedMsg.filtered = false, want true when re-scope is denied")
+		}
+		m = upd(t, m, msg)
+		if !m.filtered {
+			t.Fatal("model did not record the filtered selection")
+		}
+		if !strings.Contains(m.subtitleLine(), "(filtered)") {
+			t.Fatalf("header missing filtered marker: %q", m.subtitleLine())
+		}
+	})
+
+	t.Run("successful re-scope is not marked filtered", func(t *testing.T) {
+		backend := &fakeBackend{cap: capab}
+		m := New(backend, Config{AllProjects: true})
+		m.width, m.height = 120, 40
+
+		msg, ok := m.switchProjectCmd(osclient.ProjectInfo{ID: "p2", Name: "beta"})().(switchedMsg)
+		if !ok || msg.err != nil {
+			t.Fatalf("switch result = %+v", msg)
+		}
+		if msg.filtered {
+			t.Fatal("switchedMsg.filtered = true, want false when re-scope succeeds")
+		}
+		m = upd(t, m, msg)
+		if m.filtered {
+			t.Fatal("scoped selection was incorrectly marked filtered")
+		}
+		if strings.Contains(m.subtitleLine(), "(filtered)") {
+			t.Fatalf("scoped header shows filtered marker: %q", m.subtitleLine())
+		}
+	})
+}

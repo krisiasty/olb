@@ -264,37 +264,58 @@ func mergeProjectNames(admin, accessible []ProjectInfo) map[string]string {
 	return names
 }
 
-// SwitchProject selects a concrete project. Explicit global-admin mode retains
-// the startup clients and changes only the target filter; regular mode obtains
-// and activates a new project-scoped service client.
+// SwitchProject selects a concrete project. Regular mode obtains and activates a
+// new project-scoped service client. Global-admin mode also tries to re-scope,
+// so project-scoped resources such as Barbican TLS secrets become readable; when
+// the credential cannot be re-scoped to the target — the common case for a
+// policy-only administrator with no role assignment there — it falls back to
+// filtering the retained startup token so browsing still works (without those
+// project-scoped resources).
 func (c *Clients) SwitchProject(ctx context.Context, target ProjectInfo) error {
 	if target.ID == "" {
 		return fmt.Errorf("cannot switch to a project without an ID")
 	}
 	c.mu.Lock()
-	if c.globalAdmin {
-		c.activeServices = c.services
-		c.selected = target
-		c.allMode = false
-		c.mu.Unlock()
-		return nil
-	}
+	globalAdmin := c.globalAdmin
 	scopeProject := c.scopeProject
 	c.mu.Unlock()
 	if scopeProject == nil {
+		if globalAdmin {
+			c.applyFilteredSelection(target)
+			return nil
+		}
 		return fmt.Errorf("project-scoped authentication is unavailable")
 	}
 
 	scoped, err := scopeProject(ctx, target)
 	if err != nil {
+		if globalAdmin {
+			// The global credential cannot be re-scoped to the target (typically no
+			// role assignment on it). Fall back to a server-side filter on the
+			// retained token so the project's load balancers remain browsable.
+			c.applyFilteredSelection(target)
+			return nil
+		}
 		return err
 	}
 	c.mu.Lock()
 	c.activeServices = scoped
 	c.selected = target
 	c.allMode = false
+	c.filtered = false
 	c.mu.Unlock()
 	return nil
+}
+
+// applyFilteredSelection records a concrete global-admin project selection served
+// by filtering the retained startup token rather than a project-scoped re-auth.
+func (c *Clients) applyFilteredSelection(target ProjectInfo) {
+	c.mu.Lock()
+	c.activeServices = c.services
+	c.selected = target
+	c.allMode = false
+	c.filtered = true
+	c.mu.Unlock()
 }
 
 // EnterAllProjects restores the exact authentication scope with which the
@@ -307,6 +328,7 @@ func (c *Clients) EnterAllProjects(_ context.Context) error {
 	}
 	c.activeServices = c.services
 	c.allMode = true
+	c.filtered = false
 	c.mu.Unlock()
 	return nil
 }

@@ -23,6 +23,12 @@ type listenerCertificate struct {
 }
 
 func (c *Clients) listenerCertificate(ctx context.Context, sc *serviceClients, ref string) (listenerCertificate, error) {
+	if c.Filtered() {
+		// A filtered global-admin selection uses the retained startup token, which
+		// is not scoped to this project, so Barbican would reject the secret read.
+		// Skip the doomed call and explain why rather than surfacing a raw 403.
+		return listenerCertificate{}, fmt.Errorf("unavailable in filtered global-admin view (re-scope requires a role on this project)")
+	}
 	if sc.keyManager == nil {
 		return listenerCertificate{}, fmt.Errorf("key manager service is unavailable")
 	}

@@ -146,7 +146,13 @@ func (m Model) subtitleLine() string {
 			scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all projects")
 		}
 	} else if m.backend.SwitchCapability().GlobalAdmin {
-		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("global admin · project "+projectLabel(m.project))
+		label := "global admin · project " + projectLabel(m.project)
+		if m.filtered {
+			// The selection is a filter on the retained global token, not a
+			// re-scope, so certificate details are unavailable for this project.
+			label += " (filtered)"
+		}
+		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render(label)
 	}
 	parts := []string{scope, m.styledAutoRefreshLabel()}
 	if !m.isOverview() {

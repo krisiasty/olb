@@ -33,6 +33,7 @@ type Backend interface {
 	EnterAllProjects(ctx context.Context) error
 	CurrentProject() osclient.ProjectInfo
 	AllProjects() bool
+	Filtered() bool
 	SwitchCapability() osclient.SwitchCapability
 }
 

@@ -137,7 +137,12 @@ type Clients struct {
 	telemetry      *telemetry.Collector
 	selected       ProjectInfo
 	allMode        bool
-	globalAdmin    bool
+	// filtered is true when a concrete global-admin selection is served by
+	// filtering the retained startup token because the credential could not be
+	// re-scoped to the target project. Filtered selections cannot read that
+	// project's Barbican secrets, so listener certificate details are unavailable.
+	filtered    bool
+	globalAdmin bool
 
 	// projNames caches the ID→display-name map used to label all-projects rows,
 	// so repeated (auto-)refreshes don't re-enumerate Keystone every time.

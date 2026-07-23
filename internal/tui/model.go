@@ -222,6 +222,7 @@ type Model struct {
 
 	project     osclient.ProjectInfo
 	allProjects bool // global-admin listing without a concrete project filter
+	filtered    bool // global-admin selection served by a filter, not a re-scope
 	showIDs     bool // list columns show object/project IDs instead of names
 	quitting    bool
 	clock       func() time.Time
@@ -273,6 +274,7 @@ func New(backend Backend, cfg Config) Model {
 		cache:                  cache.New(cfg.CacheSize, cfg.CacheTTL),
 		project:                backend.CurrentProject(),
 		allProjects:            cfg.AllProjects,
+		filtered:               backend.Filtered(),
 		lbStats:                map[string]map[string]any{},
 		lbStatsChanges:         map[string]map[string]statChange{},
 		lbStatsSampledAt:       map[string]time.Time{},

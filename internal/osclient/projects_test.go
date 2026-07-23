@@ -141,7 +141,45 @@ func TestProjectSelectionScopesClients(t *testing.T) {
 
 }
 
-func TestGlobalAdminSelectionRetainsStartupClients(t *testing.T) {
+func TestGlobalAdminSelectionScopesWhenPermitted(t *testing.T) {
+	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}
+	target := ProjectInfo{ID: "tenant-a", Name: "tenant-a"}
+	scoped := &serviceClients{project: target}
+	c := &Clients{
+		Switch: SwitchCapability{
+			CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
+		},
+		services:       original,
+		activeServices: original,
+		globalAdmin:    true,
+		selected:       original.project,
+		allMode:        true,
+		scopeProject: func(_ context.Context, want ProjectInfo) (*serviceClients, error) {
+			if want != target {
+				t.Fatalf("re-scope target = %+v, want %+v", want, target)
+			}
+			return scoped, nil
+		},
+	}
+
+	if err := c.SwitchProject(context.Background(), target); err != nil {
+		t.Fatalf("SwitchProject: %v", err)
+	}
+	// A re-scope that succeeds activates the project-scoped clients (certificates
+	// become readable) and is not a filtered selection.
+	if c.activeServices != scoped || c.CurrentProject() != target || c.AllProjects() || c.Filtered() {
+		t.Fatalf("scoped selection state: active=%p project=%+v all=%v filtered=%v", c.activeServices, c.CurrentProject(), c.AllProjects(), c.Filtered())
+	}
+
+	if err := c.EnterAllProjects(context.Background()); err != nil {
+		t.Fatalf("EnterAllProjects: %v", err)
+	}
+	if c.activeServices != original || !c.AllProjects() || c.Filtered() {
+		t.Fatalf("all-projects state: active=%p all=%v filtered=%v", c.activeServices, c.AllProjects(), c.Filtered())
+	}
+}
+
+func TestGlobalAdminSelectionFallsBackToFilterWhenReScopeDenied(t *testing.T) {
 	original := &serviceClients{project: ProjectInfo{ID: "admin-scope", Name: "admin"}}
 	c := &Clients{
 		Switch: SwitchCapability{
@@ -153,27 +191,29 @@ func TestGlobalAdminSelectionRetainsStartupClients(t *testing.T) {
 		selected:       original.project,
 		allMode:        true,
 		scopeProject: func(context.Context, ProjectInfo) (*serviceClients, error) {
-			t.Fatal("global-admin selection attempted to obtain a scoped token")
-			return nil, nil
+			return nil, errors.New("scope denied: no role on project")
 		},
 	}
 
 	target := ProjectInfo{ID: "tenant-a", Name: "tenant-a"}
+	// The switch must still succeed, falling back to a filtered selection on the
+	// retained startup clients rather than surfacing the re-scope failure.
 	if err := c.SwitchProject(context.Background(), target); err != nil {
 		t.Fatalf("SwitchProject: %v", err)
 	}
-	if c.activeServices != original || c.CurrentProject() != target || c.AllProjects() {
-		t.Fatalf("global selection changed clients or state: active=%p project=%+v all=%v", c.activeServices, c.CurrentProject(), c.AllProjects())
+	if c.activeServices != original || c.CurrentProject() != target || c.AllProjects() || !c.Filtered() {
+		t.Fatalf("filtered selection state: active=%p project=%+v all=%v filtered=%v", c.activeServices, c.CurrentProject(), c.AllProjects(), c.Filtered())
 	}
 	if got, err := c.clientsForLB(context.Background(), "lb-in-tenant"); err != nil || got != original {
-		t.Fatalf("global drill-in clients = %p, %v; want startup %p", got, err, original)
+		t.Fatalf("filtered drill-in clients = %p, %v; want startup %p", got, err, original)
 	}
 
+	// Returning to the all-projects view clears the filtered marker.
 	if err := c.EnterAllProjects(context.Background()); err != nil {
 		t.Fatalf("EnterAllProjects: %v", err)
 	}
-	if c.activeServices != original || !c.AllProjects() {
-		t.Fatalf("all-projects state: active=%p all=%v", c.activeServices, c.AllProjects())
+	if c.activeServices != original || !c.AllProjects() || c.Filtered() {
+		t.Fatalf("all-projects state: active=%p all=%v filtered=%v", c.activeServices, c.AllProjects(), c.Filtered())
 	}
 }
 

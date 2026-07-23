@@ -38,6 +38,8 @@ const sampleStatus = `
 type fakeBackend struct {
 	cap          osclient.SwitchCapability
 	all          bool
+	filtered     bool // reported by Filtered(); set by SwitchProject when scopeDenied
+	scopeDenied  bool // when true, SwitchProject falls back to a filtered selection
 	telemetry    *telemetry.Collector
 	amphoraeErr  error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
 	lastTreeHint *model.LBMeta
@@ -329,16 +331,19 @@ func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, err
 
 func (f *fakeBackend) SwitchProject(_ context.Context, p osclient.ProjectInfo) error {
 	f.all = false
+	f.filtered = f.scopeDenied
 	return nil
 }
 func (f *fakeBackend) EnterAllProjects(context.Context) error {
 	f.all = true
+	f.filtered = false
 	return nil
 }
 func (f *fakeBackend) CurrentProject() osclient.ProjectInfo {
 	return osclient.ProjectInfo{ID: "p1", Name: "alpha"}
 }
 func (f *fakeBackend) AllProjects() bool                           { return f.all }
+func (f *fakeBackend) Filtered() bool                              { return f.filtered }
 func (f *fakeBackend) SwitchCapability() osclient.SwitchCapability { return f.cap }
 func (f *fakeBackend) TelemetrySnapshot() telemetry.Snapshot {
 	if f.telemetry == nil {

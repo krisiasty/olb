@@ -84,9 +84,10 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 **CLI flags > environment > clouds.yaml**.
 
 `--project` selects the initial TUI project. In regular mode this exchanges the
-startup token for a token scoped to that project. With `--global-admin`, it
-keeps the startup token and applies a server-side project filter instead; a
-global administrator that omits `--project` starts in the all-projects view. Use
+startup token for a token scoped to that project. With `--global-admin`, it first
+tries to re-scope the startup credential to that project and otherwise falls back
+to a server-side filter (see [Project switching](#project-switching)); a global
+administrator that omits `--project` starts in the all-projects view. Use
 `--os-project-name` or `--os-project-id` to set the startup authentication
 scope itself.
 
@@ -126,10 +127,14 @@ matching Octavia, Neutron, Nova, Barbican, and optional Magnum clients.
 
 Pass `--global-admin` to explicitly treat the startup credentials as globally
 privileged. This mode validates administrative Keystone project enumeration and
-a bounded cross-project Octavia read, populates the selector from
-`GET /v3/projects`, and retains the original clients when a project is selected.
-The selection becomes an Octavia `project_id` filter rather than an
-authentication-scope change.
+a bounded cross-project Octavia read, and always populates the selector from
+`GET /v3/projects` using the startup credentials. Selecting a project first tries
+to **re-scope** the credential to it — a real project-scoped token, so
+project-scoped resources such as listener TLS certificates become readable. When
+the credential cannot be re-scoped to the target (typically a policy-only
+administrator with no role assignment on it), the selection falls back to an
+Octavia `project_id` **filter** on the retained global token: the scope header
+marks it `(filtered)` and certificate details are unavailable for that project.
 
 In `--global-admin` mode, the switcher's first entry is
 **⟨ all projects ⟩**. Regular mode omits that row and shows a footer hint to

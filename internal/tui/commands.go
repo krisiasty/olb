@@ -98,9 +98,10 @@ type projectsMsg struct {
 }
 
 type switchedMsg struct {
-	project osclient.ProjectInfo
-	all     bool
-	err     error
+	project  osclient.ProjectInfo
+	all      bool
+	filtered bool // global-admin selection served by a filter (not a re-scope)
+	err      error
 }
 
 type statsMsg struct {
@@ -386,7 +387,7 @@ func (m Model) switchProjectCmd(target osclient.ProjectInfo) tea.Cmd {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		err := b.SwitchProject(ctx, target)
-		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), err: err}
+		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), filtered: b.Filtered(), err: err}
 	}
 }
 
@@ -396,7 +397,7 @@ func (m Model) enterAllProjectsCmd() tea.Cmd {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
 		err := b.EnterAllProjects(ctx)
-		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), err: err}
+		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), filtered: b.Filtered(), err: err}
 	}
 }
 

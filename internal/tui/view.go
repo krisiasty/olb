@@ -2032,15 +2032,27 @@ func (m Model) renderIdentityRow(e entry, sel bool) string {
 	if sel {
 		seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, "") + lipgloss.NewStyle().Bold(true).Render(name)
 		if extra != "" {
-			seg += m.st.attrs.Render(" · " + extra)
+			seg += m.styledIdentityExtra(e, extra)
 		}
 		return navigationStyledChevron(seg, m.width, m.st.refMarker)
 	}
 	seg := "  " + m.styledNavigationMarker(e, "") + name
 	if extra != "" {
-		seg += m.st.attrs.Render(" · " + extra)
+		seg += m.styledIdentityExtra(e, extra)
 	}
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+// styledIdentityExtra highlights broad role-assignment targets without
+// recoloring the assignment's actor/role or the row's selection chrome.
+func (m Model) styledIdentityExtra(e entry, extra string) string {
+	style := m.st.attrs
+	if e.kind == entAssignment && e.assignmentPivot != pivotTarget {
+		if color, ok := assignmentScopeColor(e.assignment.TargetType); ok {
+			style = lipgloss.NewStyle().Foreground(color)
+		}
+	}
+	return m.st.attrs.Render(" · ") + style.Render(extra)
 }
 
 // identityRowName strips the leading "type:" from an identity label (e.g.

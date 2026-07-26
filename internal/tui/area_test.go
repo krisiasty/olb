@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
 )
@@ -499,6 +501,53 @@ func TestRoleRelations(t *testing.T) {
 	m = updExec(t, m, press("enter"))
 	if !m.isUserOverview() || m.loc.node.ID != "u-2" {
 		t.Fatalf("opening an assignment should jump to its actor (alice); loc=%+v", m.loc)
+	}
+}
+
+func TestRoleAssignmentScopeColors(t *testing.T) {
+	m := Model{st: newStyles(), width: 120}
+	tests := []struct {
+		name   string
+		target string
+		extra  string
+		style  lipgloss.Style
+	}{
+		{"system", "system", "on system (cluster-wide)", lipgloss.NewStyle().Foreground(lipgloss.Color("214"))},
+		{"domain", "domain", "on domain:Default", lipgloss.NewStyle().Foreground(lipgloss.Color("226"))},
+		{"project", "project", "on project:alpha", m.st.attrs},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			e := entry{
+				kind:            entAssignment,
+				label:           "user:alice",
+				extra:           test.extra,
+				assignment:      osclient.RoleAssignment{TargetType: test.target},
+				assignmentPivot: pivotRole,
+			}
+			want := m.st.attrs.Render(" · ") + test.style.Render(test.extra)
+			for _, selected := range []bool{false, true} {
+				got := m.renderIdentityRow(e, selected)
+				if !strings.Contains(got, want) {
+					t.Fatalf("selected=%v assignment target is not styled correctly:\nwant segment %q\nrow          %q", selected, want, got)
+				}
+			}
+		})
+	}
+
+	// A domain detail already supplies the assignment target as context. Its
+	// trailing "as role:…" fact must stay neutral rather than turning yellow.
+	domainDetail := entry{
+		kind:            entAssignment,
+		label:           "user:alice",
+		extra:           "as role:admin",
+		assignment:      osclient.RoleAssignment{TargetType: "domain"},
+		assignmentPivot: pivotTarget,
+	}
+	got := m.renderIdentityRow(domainDetail, false)
+	want := m.st.attrs.Render(" · ") + m.st.attrs.Render(domainDetail.extra)
+	if !strings.Contains(got, want) {
+		t.Fatalf("domain-detail assignment fact should remain neutral:\nwant segment %q\nrow          %q", want, got)
 	}
 }
 

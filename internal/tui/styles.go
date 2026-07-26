@@ -93,6 +93,17 @@ func newStyles() styles {
 	}
 }
 
+func assignmentScopeColor(targetType string) (lipgloss.Color, bool) {
+	switch targetType {
+	case "system":
+		return lipgloss.Color("214"), true // amber
+	case "domain":
+		return lipgloss.Color("226"), true // yellow
+	default:
+		return lipgloss.Color(""), false
+	}
+}
+
 // statusColor maps an OpenStack status string to a Lip Gloss color. Operating
 // status drives most coloring; provisioning status is used as a fallback and
 // for the list's provisioning column.

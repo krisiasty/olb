@@ -139,8 +139,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Sort):
 		return m.openSort()
 
-	case key.Matches(msg, m.keys.Project):
-		return m.openProject()
+	case key.Matches(msg, m.keys.Scope):
+		return m.openScope()
 	case key.Matches(msg, m.keys.Refresh):
 		return m.refresh()
 	case key.Matches(msg, m.keys.AutoRefresh):
@@ -622,8 +622,8 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
 
-	case overlayProject:
-		return m.onProjectKey(msg)
+	case overlayScope:
+		return m.onScopeKey(msg)
 	case overlaySwitcher:
 		return m.onSwitcherKey(msg)
 	case overlayPicker:
@@ -722,7 +722,7 @@ func (m Model) openSwitcher() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onSwitcherKey drives the area/view switcher: it mirrors the project switcher's
+// onSwitcherKey drives the area/view switcher: it mirrors the scope switcher's
 // modal filtering (/ edits, enter applies, esc clears then closes) and reuses the
 // list navigation keys. Enter jumps to the highlighted area+view.
 func (m Model) onSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -812,46 +812,32 @@ func (m Model) onSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) openProject() (tea.Model, tea.Cmd) {
-	m.overlay = overlayProject
+func (m Model) openScope() (tea.Model, tea.Cmd) {
+	m.overlay = overlayScope
+	m.scopeError = ""
 	m.search.Prompt = "filter: "
 	m.search.PromptStyle = m.st.filterPrompt
 	m.search.SetValue("")
 	m.search.Blur()
-	if !m.backend.SwitchCapability().CanSwitch {
-		m.projects = nil
-		return m, nil
-	}
-	m.loading, m.loadingWhat = true, "projects"
-	return m, m.loadProjectsCmd()
+	m.loading, m.loadingWhat = true, "authentication scopes"
+	return m, m.loadScopesCmd()
 }
 
-func (m Model) selectAllProjects() (tea.Model, tea.Cmd) {
-	if !m.allProjectsSelectable() {
+func (m Model) onScopeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Do not let another selection race an authentication request. The selector
+	// remains visible; after a failure the user can retry or cancel it.
+	if m.loading && m.loadingWhat == "switching authentication scope" {
 		return m, nil
 	}
-	m.overlay = overlayNone
-	m.search.Blur()
-	m.loading, m.loadingWhat = true, "all projects"
-	return m, m.enterAllProjectsCmd()
-}
 
-func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if !m.backend.SwitchCapability().CanSwitch {
-		if key.Matches(msg, m.keys.Cancel) || key.Matches(msg, m.keys.Quit) {
-			m.overlay = overlayNone
-		}
-		return m, nil
-	}
-	// Project filtering follows the same modal behavior as the main list: slash
-	// starts editing, Enter keeps the query, and Esc clears it. Navigation keys
-	// continue to operate on the project list whenever the input is inactive.
+	// Scope filtering follows the same modal behavior as the main list: slash
+	// starts editing, Enter keeps the query, and Esc clears it.
 	if m.search.Focused() {
 		switch {
 		case key.Matches(msg, m.keys.Cancel):
 			m.search.SetValue("")
 			m.search.Blur()
-			m.projCursor = m.firstProjectCursor()
+			m.scopeCursor = m.currentScopeCursor()
 			return m, nil
 		case key.Matches(msg, m.keys.Accept):
 			m.search.Blur()
@@ -859,21 +845,17 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.search, cmd = m.search.Update(msg)
-		m.projCursor = m.firstProjectCursor()
+		m.scopeCursor = 0
 		return m, cmd
 	}
 
-	fp := m.filteredProjects()
-	hasAllProjects := m.hasAllProjectsRow()
-	total := len(fp)
-	if hasAllProjects {
-		total++
-	}
+	scopes := m.filteredScopes()
+	total := len(scopes)
 	switch {
 	case key.Matches(msg, m.keys.Cancel):
 		if m.search.Value() != "" {
 			m.search.SetValue("")
-			m.projCursor = m.firstProjectCursor()
+			m.scopeCursor = m.currentScopeCursor()
 			return m, nil
 		}
 		m.overlay = overlayNone
@@ -886,57 +868,55 @@ func (m Model) onProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Filter):
 		m.search.Focus()
 		return m, textinput.Blink
-	case key.Matches(msg, m.keys.ProjectAll):
-		return m.selectAllProjects()
 	case key.Matches(msg, m.keys.Up):
-		if m.projCursor > 0 {
-			m.projCursor--
+		if m.scopeCursor > 0 {
+			m.scopeCursor--
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Down):
-		if m.projCursor < total-1 {
-			m.projCursor++
+		if m.scopeCursor < total-1 {
+			m.scopeCursor++
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.PageUp):
-		m.projCursor -= m.projectPageSize()
-		if m.projCursor < 0 {
-			m.projCursor = 0
+		m.scopeCursor -= m.overlayPageSize()
+		if m.scopeCursor < 0 {
+			m.scopeCursor = 0
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.PageDown):
-		m.projCursor += m.projectPageSize()
-		if m.projCursor >= total {
-			m.projCursor = total - 1
+		m.scopeCursor += m.overlayPageSize()
+		if m.scopeCursor >= total {
+			m.scopeCursor = total - 1
 		}
-		if m.projCursor < 0 {
-			m.projCursor = 0
+		if m.scopeCursor < 0 {
+			m.scopeCursor = 0
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Home):
-		m.projCursor = 0
+		m.scopeCursor = 0
 		return m, nil
 	case key.Matches(msg, m.keys.End):
-		m.projCursor = total - 1
-		if m.projCursor < 0 {
-			m.projCursor = 0
+		m.scopeCursor = total - 1
+		if m.scopeCursor < 0 {
+			m.scopeCursor = 0
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Accept):
-		idx := m.projCursor
-		if hasAllProjects {
-			if m.projCursor == 0 {
-				return m.selectAllProjects()
-			}
-			idx--
-		}
-		if idx < 0 || idx >= len(fp) {
+		if m.scopeCursor < 0 || m.scopeCursor >= len(scopes) {
 			return m, nil
 		}
-		m.overlay = overlayNone
+		target := scopes[m.scopeCursor]
+		if target.Equal(m.scope) {
+			m.overlay = overlayNone
+			m.scopeError = ""
+			m.search.Blur()
+			return m, nil
+		}
+		m.scopeError = ""
 		m.search.Blur()
-		m.loading, m.loadingWhat = true, "switching project"
-		return m, m.switchProjectCmd(fp[idx])
+		m.loading, m.loadingWhat = true, "switching authentication scope"
+		return m, m.switchScopeCmd(target)
 	}
 	return m, nil
 }

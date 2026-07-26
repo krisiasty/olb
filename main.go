@@ -59,11 +59,6 @@ func run(args []string) (runErr error) {
 	if *apiLogBodies && *apiLogPath == "" {
 		return errors.New("--api-log-bodies requires --api-log PATH")
 	}
-	// A global administrator with no explicit --project starts in the all-projects
-	// view; a concrete --project scopes to that project while retaining the global
-	// credential.
-	allProjects := allProjectsMode(opts)
-
 	var apiLogger *telemetry.APILogger
 	if *apiLogPath != "" {
 		var err error
@@ -81,19 +76,14 @@ func run(args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if allProjects {
-		if err := clients.EnterAllProjects(ctx); err != nil {
-			return err
-		}
-	} else if opts.Project != "" {
+	if opts.Project != "" {
 		if err := clients.SelectProject(ctx, opts.Project); err != nil {
 			return err
 		}
 	}
 
 	return tui.Run(clients, tui.Config{
-		PrintMode:   *printMode,
-		AllProjects: allProjects,
-		Stdout:      os.Stdout,
+		PrintMode: *printMode,
+		Stdout:    os.Stdout,
 	})
 }

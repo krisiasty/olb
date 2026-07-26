@@ -30,8 +30,7 @@ func TestListLoadBalancersSendsSelectedProjectFilterToOctavia(t *testing.T) {
 	c := &Clients{
 		services:       sc,
 		activeServices: sc,
-		selected:       ProjectInfo{ID: "project-b", Name: "beta"},
-		globalAdmin:    true,
+		scope:          ScopeInfo{Kind: ScopeProject, ID: "project-b", Name: "beta"},
 	}
 	got, err := c.ListLoadBalancers(context.Background())
 	if err != nil {
@@ -310,7 +309,10 @@ func TestListFloatingIPMappingsUsesOneProjectFilteredNeutronList(t *testing.T) {
 		ProviderClient: &gophercloud.ProviderClient{},
 		Endpoint:       server.URL + "/v2.0/",
 	}}
-	c := &Clients{services: sc, activeServices: sc, selected: ProjectInfo{ID: "project-1"}}
+	c := &Clients{
+		services: sc, activeServices: sc,
+		scope: ScopeInfo{Kind: ScopeProject, ID: "project-1"},
+	}
 	items, err := c.ListFloatingIPMappings(context.Background())
 	if err != nil {
 		t.Fatal(err)

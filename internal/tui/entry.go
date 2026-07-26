@@ -203,7 +203,7 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 }
 
 // lbEntries builds the top-level load balancer list rows. When showProject is
-// set (all-projects mode) each row is prefixed with its owning project so the
+// set (system/domain scope) each row is prefixed with its owning project so the
 // aggregated list stays legible.
 func lbEntries(lbs []osclient.LB, showProject bool) []entry {
 	es := make([]entry, 0, len(lbs))

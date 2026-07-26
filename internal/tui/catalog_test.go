@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/krisiasty/olb/internal/osclient"
 )
 
@@ -11,7 +13,7 @@ import (
 // regions 8) and the three cross-link: a service lists its endpoints, an endpoint
 // opens its service and region, a region lists its endpoints.
 func TestServiceCatalogViews(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("S"))
 	m = updExec(t, m, press("2")) // services
 	if !m.loc.isTopLevelList() || m.loc.listKind() != kindService {
@@ -82,7 +84,7 @@ func TestServiceCatalogViews(t *testing.T) {
 	}
 
 	// RBAC denial degrades to an explanatory empty list.
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).servicesErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("S"))
 	denied = updExec(t, denied, press("2")) // services
@@ -93,7 +95,7 @@ func TestServiceCatalogViews(t *testing.T) {
 
 // The endpoints list is browsable on its own (auth view 7).
 func TestEndpointsListView(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("S"))
 	m = updExec(t, m, press("3")) // endpoints
 	if m.loc.listKind() != kindEndpoint {
@@ -110,13 +112,19 @@ func TestEndpointsListView(t *testing.T) {
 // The * key opens the current-token pop-up (a local read of the auth result),
 // and esc closes it.
 func TestCurrentTokenOverlay(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = upd(t, m, press("*"))
 	if m.overlay != overlayToken {
 		t.Fatalf("* should open the token overlay; overlay=%d", m.overlay)
 	}
 	view := ansiRE.ReplaceAllString(m.View(), "")
-	for _, want := range []string{"Current token", "admin", "project alpha", "admin, member", "Expires"} {
+	for _, want := range []string{
+		"Current token",
+		"User      admin  (domain: Default)",
+		"Scope     project: alpha  (domain: Default)",
+		"admin, member",
+		"Expires",
+	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("token overlay should show %q:\n%s", want, view)
 		}
@@ -127,10 +135,72 @@ func TestCurrentTokenOverlay(t *testing.T) {
 	}
 
 	// An unavailable token degrades rather than erroring.
-	m2 := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m2 := start(t, switchCapability{CanSwitch: true})
 	m2.backend.(*fakeBackend).token = &osclient.TokenInfo{Available: false}
 	m2 = upd(t, m2, press("*"))
 	if v := ansiRE.ReplaceAllString(m2.View(), ""); !strings.Contains(v, "unavailable") {
 		t.Fatalf("an unavailable token should say so:\n%s", v)
+	}
+}
+
+func TestCurrentTokenDomainScopeFormatting(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m.backend.(*fakeBackend).token = &osclient.TokenInfo{
+		Available:  true,
+		UserName:   "test-kc",
+		UserDomain: "Default",
+		ScopeType:  "domain",
+		ScopeName:  "Default",
+	}
+	m = upd(t, m, press("*"))
+
+	plain := ansiRE.ReplaceAllString(m.tokenModalBox(), "")
+	for _, want := range []string{
+		"User      test-kc  (domain: Default)",
+		"Scope     domain: Default",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("domain-scoped token modal should show %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestCurrentTokenRolesWrapWithinModal(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m.width, m.height = 42, 24
+	m.backend.(*fakeBackend).token = &osclient.TokenInfo{
+		Available: true,
+		UserName:  "alice",
+		ScopeType: "project",
+		ScopeName: "alpha",
+		Roles: []string{
+			"administrator",
+			"load-balancer_observer",
+			"member",
+			"reader",
+		},
+	}
+	m = upd(t, m, press("*"))
+
+	box := m.tokenModalBox()
+	if width := lipgloss.Width(box); width >= m.width {
+		t.Fatalf("token modal width = %d, terminal width = %d", width, m.width)
+	}
+	plain := ansiRE.ReplaceAllString(box, "")
+	lines := strings.Split(plain, "\n")
+	roleLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Roles") {
+			roleLine = i
+			break
+		}
+	}
+	if roleLine < 0 || roleLine+1 >= len(lines) || !strings.Contains(lines[roleLine+1], "load-balancer") {
+		t.Fatalf("roles should continue on another aligned line:\n%s", plain)
+	}
+	for _, role := range m.tokenInfo.Roles {
+		if !strings.Contains(plain, role) {
+			t.Fatalf("wrapped modal lost role %q:\n%s", role, plain)
+		}
 	}
 }

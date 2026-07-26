@@ -152,7 +152,7 @@ type vipAddressKey struct {
 
 // deriveVIPs expands the load-balancer list into one row per VIP address. The
 // lookup retains mappings only for visible VIPs, which bounds memory in a
-// global-admin scope where Neutron may return many unrelated floating IPs.
+// broader system/domain scope where Neutron may return unrelated floating IPs.
 func deriveVIPs(lbs []osclient.LB, mappings []osclient.FloatingIPMapping) []vipRow {
 	wanted := make(map[vipAddressKey]struct{}, len(lbs))
 	for _, lb := range lbs {

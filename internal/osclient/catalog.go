@@ -13,8 +13,7 @@ import (
 )
 
 // This file covers the Keystone service catalog (services, endpoints, regions)
-// and the current token / "whoami". These are global identity objects, not
-// project-scoped, so the project selector does not filter them.
+// and the current token / "whoami".
 
 // Service is a catalog service — a capability (compute, image, network, …) the
 // cloud exposes, reachable through its endpoints.
@@ -231,9 +230,8 @@ type TokenRole struct {
 	Name string
 }
 
-// CurrentToken reports the active token's identity, scope, roles, and expiry from
-// the retained auth result — no network call. It reflects the token actually in
-// use (which, in a global-admin filtered selection, remains the startup scope).
+// CurrentToken reports the active token's identity, scope, roles, and expiry
+// from the retained auth result — no network call.
 func (c *Clients) CurrentToken() TokenInfo {
 	c.mu.Lock()
 	sc := c.activeServices
@@ -269,6 +267,15 @@ func (c *Clients) CurrentToken() TokenInfo {
 		info.ScopeDomain = firstNonEmpty(info.ScopeDomainName, info.ScopeDomainID)
 	} else if d, err := cr.ExtractDomain(); err == nil && d != nil && d.ID != "" {
 		info.ScopeType, info.ScopeName, info.ScopeID = "domain", d.Name, d.ID
+	} else {
+		var body struct {
+			System *struct {
+				All bool `json:"all"`
+			} `json:"system"`
+		}
+		if err := cr.ExtractInto(&body); err == nil && body.System != nil && body.System.All {
+			info.ScopeType, info.ScopeName, info.ScopeID = "system", "all", "all"
+		}
 	}
 	if roles, err := cr.ExtractRoles(); err == nil {
 		for _, r := range roles {

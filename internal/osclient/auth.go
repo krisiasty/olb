@@ -30,10 +30,9 @@ import (
 // Options holds the auth-related inputs captured from CLI flags. Empty fields
 // are treated as "not provided" and fall through to env / clouds.yaml.
 type Options struct {
-	Cloud       string // --os-cloud / OS_CLOUD
-	Region      string // --os-region-name / OS_REGION_NAME
-	Project     string // --project: initial project selection (name or ID)
-	GlobalAdmin bool   // --global-admin: retain the startup token across projects
+	Cloud   string // --os-cloud / OS_CLOUD
+	Region  string // --os-region-name / OS_REGION_NAME
+	Project string // --project: initial project selection (name or ID)
 
 	AuthURL           string
 	Username          string
@@ -94,58 +93,69 @@ type ProjectInfo struct {
 	DomainID string
 }
 
-// SwitchCapability describes whether the project selector can be shown.
-// Failures to enumerate or authenticate to a selected project are reported by
-// the corresponding selector operation.
-type SwitchCapability struct {
-	CanSwitch          bool
-	Reason             string
-	Suggest            string
-	GlobalAdmin        bool
-	AllProjectsChecked bool
-	CanAllProjects     bool
-	AllProjectsReason  string
+// ScopeKind identifies the Keystone scope carried by an authentication token.
+type ScopeKind string
+
+const (
+	ScopeSystem  ScopeKind = "system"
+	ScopeDomain  ScopeKind = "domain"
+	ScopeProject ScopeKind = "project"
+)
+
+// ScopeInfo identifies one scope the current user can authenticate to.
+// DomainName is populated for project scopes so the selector can group projects
+// without performing extra calls while it renders.
+type ScopeInfo struct {
+	Kind       ScopeKind
+	ID         string
+	Name       string
+	DomainID   string
+	DomainName string
 }
 
-// serviceClients is one consistently authenticated set of OpenStack service
-// clients. Regular selections create a project-scoped set; global-admin
-// selections retain the original set.
+// Label returns the most useful human-readable scope identifier available.
+func (s ScopeInfo) Label() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	if s.Kind == ScopeSystem {
+		return "all"
+	}
+	return s.ID
+}
+
+// Equal reports whether two values identify the same Keystone scope.
+func (s ScopeInfo) Equal(other ScopeInfo) bool {
+	return s.Kind == other.Kind && s.ID == other.ID
+}
+
+// serviceClients is one consistently authenticated set of OpenStack clients.
 type serviceClients struct {
 	provider   *gophercloud.ProviderClient
-	lb         *gophercloud.ServiceClient // Octavia (required)
+	lb         *gophercloud.ServiceClient // Octavia (optional outside LB browsing)
 	identity   *gophercloud.ServiceClient // Keystone v3 (required)
 	network    *gophercloud.ServiceClient // Neutron (optional; floating IPs)
 	compute    *gophercloud.ServiceClient // Nova (optional; member instances)
 	keyManager *gophercloud.ServiceClient // Barbican (optional; TLS certificates)
 	container  *gophercloud.ServiceClient // Magnum (optional; Kubernetes relations)
-	project    ProjectInfo
+	scope      ScopeInfo
 }
 
-type projectScopeFunc func(context.Context, ProjectInfo) (*serviceClients, error)
+type scopeAuthFunc func(context.Context, ScopeInfo) (*serviceClients, error)
 
-// Clients retains the startup authentication scope. Regular project selections
-// activate a scoped client set; global-admin selections retain the startup set
-// and change only the target project filter.
+// Clients retains the startup token for re-scoping and the service clients for
+// the single currently active authentication scope.
 type Clients struct {
 	Region string
-	Switch SwitchCapability
 
 	mu             sync.Mutex
 	services       *serviceClients // immutable startup scope
-	activeServices *serviceClients // startup scope or selected project scope
-	scopeProject   projectScopeFunc
+	activeServices *serviceClients
+	scopeAuth      scopeAuthFunc
 	telemetry      *telemetry.Collector
-	selected       ProjectInfo
-	allMode        bool
-	// filtered is true when a concrete global-admin selection is served by
-	// filtering the retained startup token because the credential could not be
-	// re-scoped to the target project. Filtered selections cannot read that
-	// project's Barbican secrets, so listener certificate details are unavailable.
-	filtered    bool
-	globalAdmin bool
+	scope          ScopeInfo
 
-	// projNames caches the ID→display-name map used to label all-projects rows,
-	// so repeated (auto-)refreshes don't re-enumerate Keystone every time.
+	// projNames caches the ID→display-name map used to label cross-project rows.
 	projNames   map[string]string
 	projNamesAt time.Time
 	// domainNames caches the domain ID→name map used to label identity objects,
@@ -161,7 +171,7 @@ type Clients struct {
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,
-// builds the service clients, and determines the project-switch capability.
+// builds the service clients, and records the token's actual scope.
 func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption) (*Clients, error) {
 	o.applyToEnv()
 	config := authenticateConfig{}
@@ -190,19 +200,8 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 	ao.AllowReauth = true
 
 	c := &Clients{
-		Region: region,
-		Switch: SwitchCapability{
-			CanSwitch:          true,
-			GlobalAdmin:        o.GlobalAdmin,
-			AllProjectsChecked: true,
-			CanAllProjects:     o.GlobalAdmin,
-			AllProjectsReason:  "start olb with --global-admin",
-		},
-		globalAdmin: o.GlobalAdmin,
-		telemetry:   telemetry.NewCollector(telemetry.DefaultSlowThreshold),
-	}
-	if o.GlobalAdmin {
-		c.Switch.AllProjectsReason = ""
+		Region:    region,
+		telemetry: telemetry.NewCollector(telemetry.DefaultSlowThreshold),
 	}
 
 	// Authenticate exactly once with the credentials' original scope.
@@ -215,50 +214,57 @@ func Authenticate(ctx context.Context, o Options, options ...AuthenticateOption)
 	}
 	c.services = sc
 	c.activeServices = sc
-	c.selected = sc.project
+	c.scope = sc.scope
 	baseAuth := *ao
-	c.scopeProject = func(ctx context.Context, target ProjectInfo) (*serviceClients, error) {
-		// Keystone returns the startup token in X-Subject-Token. Authenticate with
-		// that token plus the selected scope to obtain a new project token.
+	c.scopeAuth = func(ctx context.Context, target ScopeInfo) (*serviceClients, error) {
 		subjectToken := sc.provider.Token()
 		if subjectToken == "" {
-			return nil, fmt.Errorf("authenticate for project %s: startup token is unavailable", projectLabel(target))
+			return nil, fmt.Errorf("authenticate for %s scope %s: startup token is unavailable", target.Kind, target.Label())
 		}
-		scopedAuth := projectScopedAuthOptions(baseAuth.IdentityEndpoint, subjectToken, target)
-		scoped, err := buildServiceClients(ctx, scopedAuth, endpoint, c.telemetry, config.apiLogger)
+		scopedAuth, err := scopedAuthOptions(baseAuth.IdentityEndpoint, subjectToken, target)
 		if err != nil {
-			return nil, fmt.Errorf("authenticate for project %s: %w", projectLabel(target), err)
-		}
-		if scoped.project.ID != "" && scoped.project.ID != target.ID {
-			return nil, fmt.Errorf("authenticate for project %s returned scope %s", projectLabel(target), projectLabel(scoped.project))
-		}
-		if scoped.project.ID == "" {
-			scoped.project = target
-		}
-		return scoped, nil
-	}
-	if o.GlobalAdmin {
-		if err := c.validateGlobalAdmin(ctx); err != nil {
 			return nil, err
 		}
+		scoped, err := buildServiceClients(ctx, scopedAuth, endpoint, c.telemetry, config.apiLogger)
+		if err != nil {
+			return nil, fmt.Errorf("authenticate for %s scope %s: %w", target.Kind, target.Label(), err)
+		}
+		if scoped.scope.Kind != "" && !scoped.scope.Equal(target) {
+			return nil, fmt.Errorf("authenticate for %s scope %s returned %s scope %s",
+				target.Kind, target.Label(), scoped.scope.Kind, scoped.scope.Label())
+		}
+		if scoped.scope.Kind == "" {
+			scoped.scope = target
+		}
+		return scoped, nil
 	}
 	return c, nil
 }
 
-func projectScopedAuthOptions(identityEndpoint, subjectToken string, target ProjectInfo) gophercloud.AuthOptions {
+func scopedAuthOptions(identityEndpoint, subjectToken string, target ScopeInfo) (gophercloud.AuthOptions, error) {
+	scope := &gophercloud.AuthScope{}
+	switch target.Kind {
+	case ScopeSystem:
+		scope.System = true
+	case ScopeDomain:
+		if target.ID == "" {
+			return gophercloud.AuthOptions{}, fmt.Errorf("cannot authenticate to a domain scope without an ID")
+		}
+		scope.DomainID = target.ID
+	case ScopeProject:
+		if target.ID == "" {
+			return gophercloud.AuthOptions{}, fmt.Errorf("cannot authenticate to a project scope without an ID")
+		}
+		scope.ProjectID = target.ID
+	default:
+		return gophercloud.AuthOptions{}, fmt.Errorf("unsupported authentication scope %q", target.Kind)
+	}
 	return gophercloud.AuthOptions{
 		IdentityEndpoint: identityEndpoint,
 		TokenID:          subjectToken,
-		Scope:            &gophercloud.AuthScope{ProjectID: target.ID},
+		Scope:            scope,
 		AllowReauth:      true,
-	}
-}
-
-func projectLabel(project ProjectInfo) string {
-	if project.Name != "" {
-		return project.Name
-	}
-	return project.ID
+	}, nil
 }
 
 func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoint gophercloud.EndpointOpts, collector *telemetry.Collector, apiLogger *telemetry.APILogger) (*serviceClients, error) {
@@ -273,9 +279,7 @@ func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoi
 		return nil, fmt.Errorf("authenticating to OpenStack: %w", err)
 	}
 	sc := &serviceClients{provider: provider}
-	if sc.lb, err = openstack.NewLoadBalancerV2(provider, endpoint); err != nil {
-		return nil, fmt.Errorf("no Octavia (load-balancer) endpoint in the service catalog: %w", err)
-	}
+	sc.lb, _ = openstack.NewLoadBalancerV2(provider, endpoint)
 	if sc.identity, err = openstack.NewIdentityV3(provider, endpoint); err != nil {
 		return nil, fmt.Errorf("no Keystone (identity) endpoint in the service catalog: %w", err)
 	}
@@ -286,36 +290,62 @@ func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoi
 	sc.keyManager, _ = openstack.NewKeyManagerV1(provider, endpoint)
 	sc.container, _ = openstack.NewContainerInfraV1(provider, endpoint)
 
-	sc.project = currentProject(provider)
+	sc.scope = currentScope(provider)
 	return sc, nil
 }
 
-// clientsForLB returns the clients matching the current view. Global-admin mode
-// always retains the startup clients; regular project selections use the token
-// explicitly scoped to the selected project.
-func (c *Clients) clientsForLB(_ context.Context, _ string) (*serviceClients, error) {
+// activeClients returns the service clients matching the active token scope.
+func (c *Clients) activeClients() (*serviceClients, error) {
 	c.mu.Lock()
 	services := c.activeServices
 	if services == nil {
 		services = c.services
 	}
 	c.mu.Unlock()
+	if services == nil {
+		return nil, ErrUnavailable
+	}
 	return services, nil
 }
 
-// currentProject extracts the scoped project from the authentication result.
-func currentProject(provider *gophercloud.ProviderClient) ProjectInfo {
+func (c *Clients) activeLBClients(_ context.Context, _ string) (*serviceClients, error) {
+	services, err := c.activeClients()
+	if err != nil {
+		return nil, err
+	}
+	if services.lb == nil {
+		return nil, ErrUnavailable
+	}
+	return services, nil
+}
+
+// currentScope extracts the authoritative scope from the token returned by
+// Keystone. A token has at most one of system, domain, or project scope.
+func currentScope(provider *gophercloud.ProviderClient) ScopeInfo {
 	ar := provider.GetAuthResult()
 	if ar == nil {
-		return ProjectInfo{}
+		return ScopeInfo{}
 	}
 	cr, ok := ar.(tokens.CreateResult)
 	if !ok {
-		return ProjectInfo{}
+		return ScopeInfo{}
 	}
-	p, err := cr.ExtractProject()
-	if err != nil || p == nil {
-		return ProjectInfo{}
+	if p, err := cr.ExtractProject(); err == nil && p != nil {
+		return ScopeInfo{
+			Kind: ScopeProject, ID: p.ID, Name: p.Name,
+			DomainID: p.Domain.ID, DomainName: p.Domain.Name,
+		}
 	}
-	return ProjectInfo{ID: p.ID, Name: p.Name, DomainID: p.Domain.ID}
+	if d, err := cr.ExtractDomain(); err == nil && d != nil {
+		return ScopeInfo{Kind: ScopeDomain, ID: d.ID, Name: d.Name}
+	}
+	var body struct {
+		System *struct {
+			All bool `json:"all"`
+		} `json:"system"`
+	}
+	if err := cr.ExtractInto(&body); err == nil && body.System != nil && body.System.All {
+		return ScopeInfo{Kind: ScopeSystem, ID: "all", Name: "all"}
+	}
+	return ScopeInfo{}
 }

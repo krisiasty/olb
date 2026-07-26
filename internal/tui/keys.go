@@ -18,7 +18,7 @@ type keyMap struct {
 	LBList   key.Binding // ctrl+home: active workspace root
 	TopLevel key.Binding // 1-9: switch view within the active area
 	Area     key.Binding // A/L/…: switch area (uppercase accelerators)
-	Switcher key.Binding // 0: open the area/view switcher overlay
+	Switcher key.Binding // space: open the area/view switcher overlay
 	Picker   key.Binding // h
 
 	YAML    key.Binding // y
@@ -32,8 +32,7 @@ type keyMap struct {
 	ShowIDs key.Binding // d
 	Sort    key.Binding // o
 
-	Project      key.Binding // p
-	ProjectAll   key.Binding // a inside the project selector
+	Scope        key.Binding // tab: authentication scope selector
 	Refresh      key.Binding // r
 	AutoRefresh  key.Binding // a
 	IntervalUp   key.Binding // + / =
@@ -65,7 +64,7 @@ func defaultKeys() keyMap {
 		LBList:   key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "view root")),
 		TopLevel: key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9"), key.WithHelp("1-9", "views")),
 		Area:     key.NewBinding(key.WithKeys(areaKeyStrings()...), key.WithHelp("S/A/L", "area")),
-		Switcher: key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "switch area")),
+		Switcher: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "switch area")),
 		Picker:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 
 		YAML:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "YAML")),
@@ -79,8 +78,7 @@ func defaultKeys() keyMap {
 		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
 		Sort:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
 
-		Project:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
-		ProjectAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all projects")),
+		Scope:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "scope")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
 		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),

@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/krisiasty/olb/internal/model"
 	"github.com/krisiasty/olb/internal/osclient"
@@ -453,7 +454,7 @@ func (m Model) tokenModalBox() string {
 	} else {
 		user := displayValue(t.UserName)
 		if t.UserDomain != "" {
-			user += "  @" + t.UserDomain
+			user += "  (domain: " + t.UserDomain + ")"
 		}
 		roles := "—"
 		if len(t.Roles) > 0 {
@@ -474,37 +475,105 @@ func (m Model) tokenModalBox() string {
 		}
 	}
 	iw := max(lipgloss.Width(title), lipgloss.Width(footer))
-	rendered := make([]string, len(rows))
-	for i, r := range rows {
+	for _, r := range rows {
 		text := r.v
 		if r.k != "" {
 			text = padRight(r.k, labelW) + "   " + r.v
 		}
-		rendered[i] = text
 		if w := lipgloss.Width(text); w > iw {
 			iw = w
 		}
 	}
+	// Keep the modal inside the terminal. Long role lists then wrap within the
+	// value column instead of making an over-wide box that gets clipped.
+	if available := m.width - m.st.modalFrame.GetHorizontalFrameSize() - 2; available > 0 && iw > available {
+		iw = available
+	}
+
 	lines := []string{m.st.modalTitle.Width(iw).Render(title), m.st.modalRow.Width(iw).Render("")}
-	for _, text := range rendered {
-		lines = append(lines, m.st.modalRow.Width(iw).Render(text))
+	for _, row := range rows {
+		for _, text := range wrapTokenModalRow(row.k, row.v, labelW, iw) {
+			lines = append(lines, m.st.modalRow.Width(iw).Render(text))
+		}
 	}
 	lines = append(lines, m.st.modalRow.Width(iw).Render(""), m.st.modalHelp.Width(iw).Render(footer))
 	return m.st.modalFrame.Render(strings.Join(lines, "\n"))
 }
 
+func wrapTokenModalRow(key, value string, labelWidth, width int) []string {
+	if width < 1 {
+		return []string{""}
+	}
+	if key == "" {
+		return strings.Split(ansi.Wrap(value, width, " "), "\n")
+	}
+
+	prefix := padRight(key, labelWidth) + "   "
+	prefixWidth := lipgloss.Width(prefix)
+	valueWidth := width - prefixWidth
+	if valueWidth < 1 {
+		// On an exceptionally narrow terminal, keep the label readable on its
+		// own line and give the value the full following line(s).
+		parts := strings.Split(ansi.Wrap(value, width, " "), "\n")
+		return append([]string{key}, parts...)
+	}
+	parts := wrapTokenModalValue(value, valueWidth, key == "Roles")
+	out := make([]string, 0, len(parts))
+	for i, part := range parts {
+		linePrefix := strings.Repeat(" ", prefixWidth)
+		if i == 0 {
+			linePrefix = prefix
+		}
+		out = append(out, linePrefix+part)
+	}
+	return out
+}
+
+func wrapTokenModalValue(value string, width int, commaSeparated bool) []string {
+	if !commaSeparated || !strings.Contains(value, ", ") {
+		return strings.Split(ansi.Wrap(value, width, " "), "\n")
+	}
+	items := strings.Split(value, ", ")
+	var lines []string
+	current := ""
+	for i, item := range items {
+		if i < len(items)-1 {
+			item += ","
+		}
+		candidate := item
+		if current != "" {
+			candidate = current + " " + item
+		}
+		if current == "" || lipgloss.Width(candidate) <= width {
+			current = candidate
+			continue
+		}
+		lines = append(lines, current)
+		current = item
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+
+	var out []string
+	for _, line := range lines {
+		out = append(out, strings.Split(ansi.Wrap(line, width, " "), "\n")...)
+	}
+	return out
+}
+
 func tokenScopeLine(t osclient.TokenInfo) string {
 	switch t.ScopeType {
 	case "project":
-		s := "project " + displayValue(t.ScopeName)
+		s := "project: " + displayValue(t.ScopeName)
 		if t.ScopeDomain != "" {
-			s += "  (domain " + t.ScopeDomain + ")"
+			s += "  (domain: " + t.ScopeDomain + ")"
 		}
 		return s
 	case "domain":
-		return "domain " + displayValue(t.ScopeName)
+		return "domain: " + displayValue(t.ScopeName)
 	case "system":
-		return "system"
+		return "system: " + displayValue(t.ScopeName)
 	default:
 		return "unscoped"
 	}

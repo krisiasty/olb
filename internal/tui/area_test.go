@@ -11,7 +11,7 @@ import (
 // Uppercase accelerators switch areas; the header chip and active workspace
 // follow, and the target area loads its first view.
 func TestUppercaseKeySwitchesArea(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	if areaOf(m.activeWorkspace) != areaLB {
 		t.Fatalf("startup area = %v, want areaLB", areaOf(m.activeWorkspace))
 	}
@@ -36,7 +36,7 @@ func TestUppercaseKeySwitchesArea(t *testing.T) {
 // Number keys are relative to the active area: they index that area's views, so
 // out-of-range digits are no-ops and do not leak across areas.
 func TestNumberKeysAreaRelative(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("3"))
 	if m.activeWorkspace != kindListener {
 		t.Fatalf("3 in the LB area should select listeners; active=%v", m.activeWorkspace)
@@ -59,7 +59,7 @@ func TestNumberKeysAreaRelative(t *testing.T) {
 
 // Returning to an area restores the view last active there rather than its first.
 func TestAreaLastViewRestored(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4")) // pools within the LB area
 	if m.activeWorkspace != kindPool {
 		t.Fatalf("setup: 4 should select pools; active=%v", m.activeWorkspace)
@@ -71,13 +71,13 @@ func TestAreaLastViewRestored(t *testing.T) {
 	}
 }
 
-// The switcher opens on 0, filters live, and enter jumps to the highlighted
+// The switcher opens on space, filters live, and enter jumps to the highlighted
 // area+view; esc cancels without navigating.
 func TestAreaSwitcherFilterAndJump(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("0"))
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press(" "))
 	if m.overlay != overlaySwitcher {
-		t.Fatalf("0 should open the switcher; overlay=%v", m.overlay)
+		t.Fatalf("space should open the switcher; overlay=%v", m.overlay)
 	}
 
 	m = upd(t, m, press("/"))
@@ -101,8 +101,8 @@ func TestAreaSwitcherFilterAndJump(t *testing.T) {
 // The switcher groups views under non-selectable area headers (with counts),
 // formatted like the related-objects list.
 func TestAreaSwitcherGroupsByArea(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("0"))
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press(" "))
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	if !strings.Contains(view, "LOAD BALANCERS 5") {
 		t.Fatalf("switcher should show the load-balancer area heading with its view count:\n%s", view)
@@ -122,8 +122,8 @@ func TestAreaSwitcherGroupsByArea(t *testing.T) {
 // Uppercase accelerators work inside the switcher too: pressing an area's key
 // jumps straight to it and closes the overlay.
 func TestAreaSwitcherAcceleratorJumps(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("0"))
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press(" "))
 	m = updExec(t, m, press("A"))
 	if m.overlay != overlayNone || m.activeWorkspace != kindDomain {
 		t.Fatalf("A in the switcher should jump to the identity area and close; overlay=%v active=%v", m.overlay, m.activeWorkspace)
@@ -131,9 +131,9 @@ func TestAreaSwitcherAcceleratorJumps(t *testing.T) {
 }
 
 func TestAreaSwitcherEscCancels(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	before := m.activeWorkspace
-	m = updExec(t, m, press("0"))
+	m = updExec(t, m, press(" "))
 	m = upd(t, m, press("esc"))
 	if m.overlay != overlayNone || m.activeWorkspace != before {
 		t.Fatalf("esc should close the switcher without navigating; overlay=%v active=%v", m.overlay, m.activeWorkspace)
@@ -143,7 +143,7 @@ func TestAreaSwitcherEscCancels(t *testing.T) {
 // The users list loads through the backend and, when RBAC denies it, degrades to
 // an explanatory empty list rather than an error.
 func TestUsersListLoadsAndDegrades(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("4")) // users
 	if len(m.entries) != 3 || m.entries[0].kind != entUser {
@@ -163,7 +163,7 @@ func TestUsersListLoadsAndDegrades(t *testing.T) {
 		t.Fatalf("users columns out of order (want NAME<DESCRIPTION<EMAIL<DOMAIN<ENABLED): %q", header)
 	}
 
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).usersErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("4")) // users
@@ -191,7 +191,7 @@ func TestUsersListSortableByAnyField(t *testing.T) {
 		return labels(m)
 	}
 
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("4")) // users
 
@@ -222,7 +222,7 @@ func TestUsersListSortableByAnyField(t *testing.T) {
 // The auth area's second view lists Keystone domains, loads through the backend,
 // degrades on RBAC denial, and opens a per-domain detail overview.
 func TestDomainsListAndDetail(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("1")) // domains
 	if m.activeWorkspace != kindDomain || len(m.entries) != 3 || m.entries[0].kind != entDomain {
@@ -247,7 +247,7 @@ func TestDomainsListAndDetail(t *testing.T) {
 	}
 
 	// RBAC denial degrades to an explanatory empty list.
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).domainsErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("1")) // domains
@@ -259,7 +259,7 @@ func TestDomainsListAndDetail(t *testing.T) {
 // The auth area's third view lists Keystone groups, loads through the backend,
 // degrades on RBAC denial, and opens a per-group detail overview.
 func TestGroupsListAndDetail(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A")) // users
 	m = updExec(t, m, press("3")) // groups
 	if m.activeWorkspace != kindGroup || len(m.entries) != 2 || m.entries[0].kind != entUserGroup {
@@ -282,7 +282,7 @@ func TestGroupsListAndDetail(t *testing.T) {
 		t.Fatalf("group overview should show details:\n%s", view)
 	}
 
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).groupsErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("3"))
@@ -294,7 +294,7 @@ func TestGroupsListAndDetail(t *testing.T) {
 // The auth area's fourth view is a browsable projects list (distinct from the
 // re-scoping selector), with a per-project detail overview.
 func TestProjectsListAndDetail(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("2")) // projects
 	if m.activeWorkspace != kindProject || len(m.entries) != 2 || m.entries[0].kind != entProject {
@@ -317,7 +317,7 @@ func TestProjectsListAndDetail(t *testing.T) {
 		t.Fatalf("project overview should show details and resolved domain:\n%s", view)
 	}
 
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).projectListEr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("2")) // projects
@@ -329,7 +329,7 @@ func TestProjectsListAndDetail(t *testing.T) {
 // The auth area's fifth view lists Keystone roles, with a per-role detail that
 // distinguishes global from domain-scoped roles.
 func TestRolesListAndDetail(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A")) // users
 	m = updExec(t, m, press("5")) // roles
 	if m.activeWorkspace != kindRole || len(m.entries) != 3 || m.entries[0].kind != entRole {
@@ -365,7 +365,7 @@ func TestRolesListAndDetail(t *testing.T) {
 		t.Fatalf("domain-scoped role overview should show its domain:\n%s", view)
 	}
 
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).rolesErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("5"))
@@ -376,7 +376,7 @@ func TestRolesListAndDetail(t *testing.T) {
 
 func TestRestrictedIdentityListsExplainTheirSelfServiceSource(t *testing.T) {
 	t.Run("current user's domain", func(t *testing.T) {
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		backend := m.backend.(*fakeBackend)
 		backend.domains = []osclient.Domain{{
 			ID: "default", Name: "Default", Partial: true,
@@ -389,13 +389,13 @@ func TestRestrictedIdentityListsExplainTheirSelfServiceSource(t *testing.T) {
 		if !strings.Contains(view, "showing current user's domain") || !strings.Contains(view, "Default") {
 			t.Fatalf("restricted domains view should show its source and current domain:\n%s", view)
 		}
-		if row := lineContaining(view, "Default"); !strings.Contains(row, "—") {
-			t.Fatalf("token-only domain should render unknown state: %q", row)
+		if len(m.entries) != 1 || !m.entries[0].domain.Partial {
+			t.Fatalf("token-only domain should remain marked partial: %+v", m.entries)
 		}
 	})
 
 	t.Run("current user", func(t *testing.T) {
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		backend := m.backend.(*fakeBackend)
 		backend.users = []osclient.User{{
 			ID: "u-1", Name: "admin", DomainID: "default", DomainName: "Default", Partial: true,
@@ -414,7 +414,7 @@ func TestRestrictedIdentityListsExplainTheirSelfServiceSource(t *testing.T) {
 	})
 
 	t.Run("current user's groups, including empty", func(t *testing.T) {
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		backend := m.backend.(*fakeBackend)
 		backend.groups = []osclient.Group{}
 		backend.groupsRestriction = "current user's groups"
@@ -428,7 +428,7 @@ func TestRestrictedIdentityListsExplainTheirSelfServiceSource(t *testing.T) {
 	})
 
 	t.Run("active-token roles", func(t *testing.T) {
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		backend := m.backend.(*fakeBackend)
 		backend.roles = []osclient.Role{{
 			ID: "r-2", Name: "member", TokenScoped: true,
@@ -465,7 +465,7 @@ func TestRestrictedIdentityListsExplainTheirSelfServiceSource(t *testing.T) {
 // A role detail lists the roles it implies and the assignments granting it;
 // opening an assignment jumps to its actor.
 func TestRoleRelations(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("5")) // roles
 	idx, ok := m.selectLabel("role:admin")
@@ -507,7 +507,7 @@ func TestRoleRelations(t *testing.T) {
 // inherited via group membership); opening an actor-side row jumps to the role,
 // and a target-side row jumps to the actor.
 func TestOwnerAssignments(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("4")) // users
 	idx, ok := m.selectLabel("user:alice")
@@ -562,7 +562,7 @@ func TestOwnerAssignments(t *testing.T) {
 	}
 
 	// The project side lists who holds a role there, and opens that actor.
-	m = start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("2")) // projects
 	if idx, ok := m.selectLabel("project:alpha"); ok {
@@ -592,7 +592,7 @@ func TestOwnerAssignments(t *testing.T) {
 	}
 
 	// A project reached only through an assignment (never listed) still opens.
-	bare := start(t, osclient.SwitchCapability{CanSwitch: true})
+	bare := start(t, switchCapability{CanSwitch: true})
 	bare = updExec(t, bare, press("A"))
 	bare = updExec(t, bare, press("4")) // users
 	if bi, ok := bare.selectLabel("user:alice"); ok {
@@ -610,7 +610,7 @@ func TestOwnerAssignments(t *testing.T) {
 	}
 
 	// An RBAC denial degrades to an empty section recorded per object.
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).assignmentErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("4")) // users
@@ -628,7 +628,7 @@ func TestOwnerAssignments(t *testing.T) {
 
 	// The authenticated user's accessible projects remain available through
 	// Keystone's self-service project endpoint even when assignments are denied.
-	current := start(t, osclient.SwitchCapability{CanSwitch: true})
+	current := start(t, switchCapability{CanSwitch: true})
 	current.backend.(*fakeBackend).assignmentErr = osclient.ErrAdminRequired
 	current = updExec(t, current, press("A"))
 	current = updExec(t, current, press("4")) // users
@@ -648,7 +648,7 @@ func TestOwnerAssignments(t *testing.T) {
 	}
 
 	// The same token roles are visible from the active project's target side.
-	activeProject := start(t, osclient.SwitchCapability{CanSwitch: true})
+	activeProject := start(t, switchCapability{CanSwitch: true})
 	activeProject.backend.(*fakeBackend).assignmentErr = osclient.ErrAdminRequired
 	activeProject = updExec(t, activeProject, press("A"))
 	activeProject = updExec(t, activeProject, press("2")) // projects
@@ -656,15 +656,15 @@ func TestOwnerAssignments(t *testing.T) {
 		activeProject.cursor = pi
 	}
 	activeProject = updExecAll(t, activeProject, press("enter"))
-	projectView := ansiRE.ReplaceAllString(activeProject.View(), "")
-	if !strings.Contains(projectView, "EFFECTIVE ROLE ASSIGNMENTS 2") ||
-		!strings.Contains(projectView, "◆ user:admin · as role:member") {
-		t.Fatalf("the active project should show effective active-token roles:\n%s", projectView)
+	scopeView := ansiRE.ReplaceAllString(activeProject.View(), "")
+	if !strings.Contains(scopeView, "EFFECTIVE ROLE ASSIGNMENTS 2") ||
+		!strings.Contains(scopeView, "◆ user:admin · as role:member") {
+		t.Fatalf("the active project should show effective active-token roles:\n%s", scopeView)
 	}
 
 	// Some Keystone policies conceal assignments with HTTP 200 + an empty list
 	// rather than 403. The token fallback must cover that response as well.
-	emptyProject := start(t, osclient.SwitchCapability{CanSwitch: true})
+	emptyProject := start(t, switchCapability{CanSwitch: true})
 	emptyProject.backend.(*fakeBackend).projectAssignments = map[string][]osclient.RoleAssignment{"p1": nil}
 	emptyProject = updExec(t, emptyProject, press("A"))
 	emptyProject = updExec(t, emptyProject, press("2"))
@@ -683,7 +683,7 @@ func TestOwnerAssignments(t *testing.T) {
 // the detail. Detection itself is the backend's job (tested there); the fake sets
 // the flag directly.
 func TestServiceAccountsFlagged(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m.backend.(*fakeBackend).users = []osclient.User{
 		{ID: "u-1", Name: "admin", DomainID: "default", DomainName: "Default", Enabled: true, Description: "cloud administrator"},
 		{ID: "u-9", Name: "glance", DomainID: "default", DomainName: "Default", Enabled: true, Description: "image store", Service: true},
@@ -724,7 +724,7 @@ func TestServiceAccountsFlagged(t *testing.T) {
 // Identity details show every expected related section even when a category is
 // empty (e.g. a group with no members shows "USERS 0").
 func TestIdentityEmptySectionHeadersShown(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("3")) // groups
 	// The fake's "operators" group (g-2) has no members.
@@ -752,7 +752,7 @@ func TestIdentityEmptySectionHeadersShown(t *testing.T) {
 // A domain lists its projects, groups, and users as related objects, loaded
 // lazily; opening one drills into that object's detail.
 func TestDomainRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("1")) // domains
 	if idx, ok := m.selectLabel("domain:Default"); ok {
@@ -798,7 +798,7 @@ func TestDomainRelatedObjects(t *testing.T) {
 // User, group, and project details each list their domain as a related object,
 // resolvable even when the domains list was never opened (a bare reference).
 func TestIdentityObjectsShowDomainRelated(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("2")) // projects
 	if idx, ok := m.selectLabel("project:alpha"); ok {
@@ -825,7 +825,7 @@ func TestIdentityObjectsShowDomainRelated(t *testing.T) {
 // A user's groups load lazily as related objects (the inverse of group
 // membership); opening one drills into that group, whose members then load.
 func TestUserGroupsAsRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("4")) // users
 	idx, ok := m.selectLabel("user:admin")
@@ -863,7 +863,7 @@ func TestUserGroupsAsRelatedObjects(t *testing.T) {
 	}
 
 	// RBAC denial on a user's groups is recorded per user and degrades to empty.
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).userGroupsErr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("4")) // users
@@ -891,7 +891,7 @@ func countEntryKind(m Model, k entryKind) int {
 // A group's member users load lazily as related objects; opening one drills into
 // that user's detail, and an RBAC denial is recorded per group.
 func TestGroupMembersAsRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("3"))
 	idx, ok := m.selectLabel("group:admins")
@@ -929,7 +929,7 @@ func TestGroupMembersAsRelatedObjects(t *testing.T) {
 	}
 
 	// RBAC denial on members is recorded per group and degrades to an empty list.
-	denied := start(t, osclient.SwitchCapability{CanSwitch: true})
+	denied := start(t, switchCapability{CanSwitch: true})
 	denied.backend.(*fakeBackend).groupMemberEr = osclient.ErrAdminRequired
 	denied = updExec(t, denied, press("A"))
 	denied = updExec(t, denied, press("3"))
@@ -946,7 +946,7 @@ func TestGroupMembersAsRelatedObjects(t *testing.T) {
 // Opening a user reparents to its detail overview, sourced from the list data
 // (identity objects have no load-balancer tree).
 func TestUserDetailOpens(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("A"))
 	m = updExec(t, m, press("4")) // users
 	idx, ok := m.selectLabel("user:admin")

@@ -38,8 +38,8 @@ func (m Model) View() string {
 		return m.helpView()
 	case overlayRaw:
 		return m.rawView()
-	case overlayProject:
-		return m.projectView()
+	case overlayScope:
+		return m.scopeView()
 	case overlaySwitcher:
 		return m.switcherView()
 	case overlayPicker:
@@ -172,22 +172,7 @@ func (m Model) fitBreadcrumb(parts []string) string {
 }
 
 func (m Model) subtitleLine() string {
-	scope := m.st.statusBar.Render("scope: project ") + m.st.title.Render(projectLabel(m.project))
-	if m.allProjects {
-		if m.backend.SwitchCapability().GlobalAdmin {
-			scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("global admin · all projects")
-		} else {
-			scope = m.st.statusBar.Render("scope: ") + m.st.title.Render("all projects")
-		}
-	} else if m.backend.SwitchCapability().GlobalAdmin {
-		label := "global admin · project " + projectLabel(m.project)
-		if m.filtered {
-			// The selection is a filter on the retained global token, not a
-			// re-scope, so certificate details are unavailable for this project.
-			label += " (filtered)"
-		}
-		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render(label)
-	}
+	scope := m.st.statusBar.Render("scope: ") + m.st.title.Render(m.scopeText())
 	parts := []string{scope, m.styledAutoRefreshLabel()}
 	if restriction := m.identityListRestriction(); restriction != "" {
 		parts = append(parts, m.st.statusBar.Render("showing "+restriction))
@@ -204,9 +189,6 @@ func (m Model) subtitleLine() string {
 	}
 	if v := m.filter.Value(); v != "" && !m.filtering && hasFilterableEntries(m.allEntries) {
 		parts = append(parts, m.st.statusBar.Render("filter: "+v))
-	}
-	if !m.backend.SwitchCapability().CanSwitch {
-		parts = append(parts, m.st.statusBar.Render("project-switch: disabled"))
 	}
 	if m.loading {
 		parts = append(parts, m.st.statusBar.Render(m.spinner.View()+" "+m.loadingLabel()))
@@ -1732,14 +1714,14 @@ func limitLines(lines []string, limit int) []string {
 }
 
 // lbColumnTitles are the load-balancer table headers; the project column
-// appears only in all-projects mode. The d toggle relabels the name/project
+// appears outside project scope. The d toggle relabels the name/project
 // columns to reflect whether they show IDs or names.
 func (m Model) lbColumnTitles() []string {
 	name := "NAME"
 	if m.showIDs {
 		name = "LOAD BALANCER ID"
 	}
-	if m.allProjects {
+	if m.multiProjectScope {
 		project := "PROJECT"
 		if m.showIDs {
 			project = "PROJECT ID"
@@ -1752,7 +1734,7 @@ func (m Model) lbColumnTitles() []string {
 func (m Model) lbRowCells(e entry) []string {
 	lb := e.lb
 	name := lbNameCell(lb.Name, lb.ID, m.showIDs)
-	if m.allProjects {
+	if m.multiProjectScope {
 		project := lbNameCell(lb.ProjectName, lb.ProjectID, m.showIDs)
 		return []string{name, project, lb.Provider, lb.VipAddress, lb.ProvisioningStatus, lb.OperatingStatus}
 	}
@@ -2403,7 +2385,7 @@ func (m Model) hintLine() string {
 		return m.clip(m.st.help.Render("type to filter · enter apply · esc clear"))
 	}
 	parts := []string{
-		"enter open", "←/esc/→ hist", "0 area", "1-9 views", "y/j raw", "i/n copy",
+		"enter open", "←/esc/→ hist", "space area", "1-9 views", "y/j raw", "i/n copy",
 	}
 	if m.loc.isTopLevelList() {
 		parts = append(parts, "d names/ids", "o sort")
@@ -2414,7 +2396,7 @@ func (m Model) hintLine() string {
 	if hasStatusEntries(m.allEntries) {
 		parts = append(parts, "s status")
 	}
-	parts = append(parts, "p project", "r refresh", "a auto")
+	parts = append(parts, "tab scope", "r refresh", "a auto")
 	if m.isStatsOverview() {
 		parts = append(parts, "+/- interval")
 	}
@@ -2600,100 +2582,97 @@ func (m Model) rawView() string {
 	return m.scrollLine(m.st.overlayTitle.Render(title), above) + "\n" + m.vp.View() + "\n" + m.scrollLine(footer, below)
 }
 
-func (m Model) projectView() string {
-	title := m.projectTitleLine()
-	cap := m.backend.SwitchCapability()
-	if !cap.CanSwitch {
-		body := m.st.flashErr.Render(cap.Reason) + "\n\n" + m.st.help.Render(cap.Suggest)
-		cur := "\n\ncurrent project: " + projectLabel(m.project)
-		return title + "\n\n" + body + cur + "\n\n" + m.st.help.Render("esc / q  close")
+func (m Model) scopeView() string {
+	title := m.scopeTitleLine()
+	if m.loading && len(m.scopes) == 0 {
+		return title + "\n\n" + m.spinner.View() + " loading available scopes…\n\n" + m.st.help.Render("esc cancel")
 	}
-	if m.loading && len(m.projects) == 0 {
-		kind := "accessible projects"
-		if cap.GlobalAdmin {
-			kind = "all projects"
-		}
-		footer := "esc cancel"
-		if cap.GlobalAdmin && cap.CanAllProjects {
-			footer = "a all projects · esc cancel"
-		}
-		return title + "\n\n" + m.spinner.View() + " loading " + kind + "…\n\n" + m.st.help.Render(footer)
-	}
-	fp := m.filteredProjects()
-	type prow struct {
-		label    string
-		current  bool
-		disabled bool
-	}
-	allSelectable := m.allProjectsSelectable()
-	rows := make([]prow, 0, len(fp)+1)
-	if m.hasAllProjectsRow() {
-		rows = append(rows, prow{label: "⟨ all projects ⟩", current: m.allProjects, disabled: !allSelectable})
-	}
-	for _, p := range fp {
-		label := p.Name
-		if label == "" {
-			label = p.ID
-		}
-		rows = append(rows, prow{label: label, current: !m.allProjects && p.ID == m.project.ID})
-	}
+	scopes := m.filteredScopes()
+	items := scopeSelectorItems(scopes)
+	errorLines := m.scopeErrorLines()
 
 	var b strings.Builder
 	b.WriteString(title)
 	b.WriteString("\n\n")
-	maxRows := m.projectPageSize()
+	maxRows := m.overlayPageSize() - len(errorLines)
+	if len(errorLines) > 0 {
+		maxRows-- // blank separator before the in-view error
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	selectedDisplay := 0
+	for i, item := range items {
+		if !item.header && item.scopeIndex == m.scopeCursor {
+			selectedDisplay = i
+			break
+		}
+	}
 	start := 0
-	if m.projCursor >= maxRows {
-		start = m.projCursor - maxRows + 1
+	if selectedDisplay >= maxRows {
+		start = selectedDisplay - maxRows + 1
 	}
 	end := start + maxRows
-	if end > len(rows) {
-		end = len(rows)
+	if end > len(items) {
+		end = len(items)
 	}
 	for i := start; i < end; i++ {
-		label := rows[i].label
-		if rows[i].disabled {
-			reason := cap.AllProjectsReason
-			if reason == "" {
-				reason = "requires --global-admin"
-			}
-			label += "  (" + reason + ")"
+		item := items[i]
+		if item.header {
+			b.WriteString(m.st.relatedGroup.Render(item.label))
+			b.WriteString("\n")
+			continue
 		}
-		if rows[i].current {
+		scope := scopes[item.scopeIndex]
+		label := item.label
+		if scope.Equal(m.scope) {
 			label += m.st.relationship.Render(" (current)")
 		}
-		if i == m.projCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("▸ "+label, m.width)))
-			b.WriteString("\n")
-		} else if rows[i].disabled {
-			b.WriteString("  ")
-			b.WriteString(m.st.disabled.Render(m.clip(label)))
+		if item.scopeIndex == m.scopeCursor {
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("    ▸ "+label, m.width)))
 			b.WriteString("\n")
 		} else {
-			b.WriteString("  ")
+			b.WriteString("      ")
 			b.WriteString(m.clip(label))
 			b.WriteString("\n")
 		}
 	}
-	if len(fp) == 0 && m.search.Value() != "" {
+	if len(scopes) == 0 {
 		b.WriteString("  ")
-		b.WriteString(m.st.disabled.Render("— no matching projects —"))
+		if m.search.Value() != "" {
+			b.WriteString(m.st.disabled.Render("— no matching scopes —"))
+		} else {
+			b.WriteString(m.st.disabled.Render("— no available scopes —"))
+		}
 		b.WriteString("\n")
 	}
-	if !cap.GlobalAdmin {
+	if len(errorLines) > 0 {
 		b.WriteString("\n")
-		b.WriteString(m.st.help.Render("global view: restart with --global-admin"))
+		for _, line := range errorLines {
+			b.WriteString(m.st.flashErr.Render("  " + line))
+			b.WriteString("\n")
+		}
 	}
 	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
-	if cap.GlobalAdmin && cap.CanAllProjects {
-		footer = "enter select · a all projects · arrows/page/home/end move · / filter · esc/q cancel"
-	}
 	if m.search.Focused() {
 		footer = "type to filter · enter apply · esc clear"
+	} else if m.loading && m.loadingWhat == "switching authentication scope" {
+		footer = m.spinner.View() + " switching authentication scope…"
 	}
 	b.WriteString("\n")
 	b.WriteString(m.st.help.Render(footer))
 	return b.String()
+}
+
+func (m Model) scopeErrorLines() []string {
+	if m.scopeError == "" {
+		return nil
+	}
+	width := m.width - 4
+	if width < 1 {
+		width = 1
+	}
+	return strings.Split(ansi.Wrap(m.scopeError, width, " "), "\n")
 }
 
 // filteredSwitcherRows returns the switcher rows matching the active filter (a
@@ -2766,7 +2745,7 @@ func (m Model) switcherView() string {
 	var b strings.Builder
 	b.WriteString(title)
 	b.WriteString("\n\n")
-	maxRows := m.projectPageSize()
+	maxRows := m.overlayPageSize()
 	start := 0
 	if selDisp >= maxRows {
 		start = selDisp - maxRows + 1
@@ -2827,8 +2806,8 @@ func (m Model) switcherTitleLine() string {
 	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
 }
 
-func (m Model) projectTitleLine() string {
-	title := m.st.overlayTitle.Render("Switch project")
+func (m Model) scopeTitleLine() string {
+	title := m.st.overlayTitle.Render("Switch authentication scope")
 	query := m.search.Value()
 	if !m.search.Focused() && query == "" {
 		return m.clip(title)
@@ -2846,47 +2825,92 @@ func (m Model) projectTitleLine() string {
 	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
 }
 
-func (m Model) projectPageSize() int {
+func (m Model) overlayPageSize() int {
 	rows := m.height - 6
-	if !m.backend.SwitchCapability().GlobalAdmin {
-		rows--
-	}
 	if rows < 1 {
 		return 1
 	}
 	return rows
 }
 
-func (m Model) allProjectsSelectable() bool {
-	cap := m.backend.SwitchCapability()
-	return cap.GlobalAdmin && cap.CanAllProjects
+type scopeSelectorItem struct {
+	header     bool
+	label      string
+	scopeIndex int
 }
 
-func (m Model) hasAllProjectsRow() bool {
-	return m.backend.SwitchCapability().GlobalAdmin
+func scopeSelectorItems(scopes []osclient.ScopeInfo) []scopeSelectorItem {
+	items := make([]scopeSelectorItem, 0, len(scopes)+4)
+	addGroup := func(header string, indexes []int) {
+		if len(indexes) == 0 {
+			return
+		}
+		items = append(items, scopeSelectorItem{header: true, label: header, scopeIndex: -1})
+		for _, index := range indexes {
+			scope := scopes[index]
+			label := scope.Label()
+			if scope.Kind == osclient.ScopeSystem {
+				label = "system:" + scope.Label()
+			}
+			items = append(items, scopeSelectorItem{label: label, scopeIndex: index})
+		}
+	}
+
+	var system, domain []int
+	projectGroups := make(map[string][]int)
+	projectOrder := make([]string, 0)
+	for i, scope := range scopes {
+		switch scope.Kind {
+		case osclient.ScopeSystem:
+			system = append(system, i)
+		case osclient.ScopeDomain:
+			domain = append(domain, i)
+		case osclient.ScopeProject:
+			group := scope.DomainName
+			if group == "" {
+				group = scope.DomainID
+			}
+			if group == "" {
+				group = "unknown"
+			}
+			if _, exists := projectGroups[group]; !exists {
+				projectOrder = append(projectOrder, group)
+			}
+			projectGroups[group] = append(projectGroups[group], i)
+		}
+	}
+	addGroup("SYSTEM", system)
+	addGroup("DOMAINS", domain)
+	for _, group := range projectOrder {
+		addGroup("PROJECTS · domain: "+group, projectGroups[group])
+	}
+	return items
 }
 
-func (m Model) firstProjectCursor() int {
-	if m.hasAllProjectsRow() && !m.allProjectsSelectable() && len(m.filteredProjects()) > 0 {
-		return 1
+func (m Model) filteredScopes() []osclient.ScopeInfo {
+	q := strings.ToLower(strings.TrimSpace(m.search.Value()))
+	if q == "" {
+		return m.scopes
+	}
+	out := make([]osclient.ScopeInfo, 0, len(m.scopes))
+	for _, scope := range m.scopes {
+		haystack := strings.Join([]string{
+			string(scope.Kind), scope.ID, scope.Name, scope.DomainID, scope.DomainName,
+		}, " ")
+		if strings.Contains(strings.ToLower(haystack), q) {
+			out = append(out, scope)
+		}
+	}
+	return out
+}
+
+func (m Model) currentScopeCursor() int {
+	for i, scope := range m.filteredScopes() {
+		if scope.Equal(m.scope) {
+			return i
+		}
 	}
 	return 0
-}
-
-func (m Model) currentProjectCursor() int {
-	offset := 0
-	if m.hasAllProjectsRow() {
-		if m.allProjects {
-			return 0
-		}
-		offset = 1
-	}
-	for i, project := range m.filteredProjects() {
-		if project.ID != "" && project.ID == m.project.ID {
-			return offset + i
-		}
-	}
-	return m.firstProjectCursor()
 }
 
 type pickItem struct {
@@ -3066,20 +3090,6 @@ func overlayCenter(base, box string, width, height int) string {
 	return strings.Join(baseLines, "\n")
 }
 
-func (m Model) filteredProjects() []osclient.ProjectInfo {
-	q := strings.ToLower(strings.TrimSpace(m.search.Value()))
-	if q == "" {
-		return m.projects
-	}
-	var out []osclient.ProjectInfo
-	for _, p := range m.projects {
-		if strings.Contains(strings.ToLower(p.Name+" "+p.ID), q) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // --- helpers --------------------------------------------------------------
 
 func (m Model) clip(s string) string {
@@ -3140,7 +3150,7 @@ Navigate
 
 Areas & views (drill into an item to open its detail)
   `+"`"+`                overview / home landing — scope, identity, areas (opens here)
-  0                switch area / view — searchable overlay
+  space            switch area / view — searchable overlay
   S / A / L        jump to the catalog / identity / load-balancer area
   1-9              switch view within the active area
   catalog area:        1 regions · 2 services · 3 endpoints
@@ -3156,7 +3166,7 @@ Inspect
   c                copy the displayed raw object (inside the YAML/JSON view)
 
 {{list_controls}}Global
-  p                project switcher
+  tab              authentication scope switcher
   *                current token (whoami) — user, scope, roles, expiry
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
@@ -3182,7 +3192,7 @@ Notes
 	  example, 5s/30s); COE cluster and Kubernetes service details show their
 	  Magnum cadence (60s), while other views show the fixed full cadence (30s).
 	• enter is the only descent key; arrows are reserved for history.
-	• number keys switch views within the active area; 0 (or A/L) switch areas.
+	• number keys switch views within the active area; space (or S/A/L) switches areas.
 	  Each view keeps its own history, cursor, and filters. Cross-area reference
 	  edges open in place and never change the active area.
   • esc clears an active filter first, otherwise it is back.

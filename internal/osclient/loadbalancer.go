@@ -34,7 +34,7 @@ type LB struct {
 	VipNetworkID       string
 	AdditionalVIPs     []model.AdditionalVIP
 	ProjectID          string
-	ProjectName        string // owning project's name (shown in all-projects mode)
+	ProjectName        string // owning project's name (shown outside project scope)
 	ProvisioningStatus string
 	OperatingStatus    string
 }
@@ -84,29 +84,31 @@ var ErrUnavailable = errors.New("service unavailable in this cloud/scope")
 // ErrAdminRequired marks a surface reachable only with admin RBAC (amphorae).
 var ErrAdminRequired = errors.New("requires admin")
 
-// ListLoadBalancers uses the active credential strategy. A concrete selection
-// is sent to Octavia as a project_id filter and also applied locally in case a
-// cloud ignores or broadens the server-side filter.
+// ListLoadBalancers follows the active token scope. Project tokens use a
+// defensive project filter; system and domain tokens query Octavia without an
+// invented aggregate or local target scope.
 func (c *Clients) ListLoadBalancers(ctx context.Context) ([]LB, error) {
 	c.mu.Lock()
-	allMode := c.allMode
-	selected := c.selected
+	scope := c.effectiveScopeLocked()
 	services := c.activeServices
 	if services == nil {
 		services = c.services
 	}
 	c.mu.Unlock()
+	if services == nil || services.lb == nil {
+		return nil, ErrUnavailable
+	}
 
-	queryProject := selected
-	if allMode {
-		queryProject = ProjectInfo{}
+	queryProject := ProjectInfo{}
+	if scope.Kind == ScopeProject {
+		queryProject = ProjectInfo{ID: scope.ID, Name: scope.Name, DomainID: scope.DomainID}
 	}
 	lbs, err := listWith(ctx, services, queryProject)
 	if err != nil {
 		return nil, err
 	}
-	if !allMode {
-		return filterLoadBalancers(lbs, selected), nil
+	if scope.Kind == ScopeProject {
+		return filterLoadBalancers(lbs, queryProject), nil
 	}
 
 	// Project enumeration is only for friendly names. Failure does not discard
@@ -140,6 +142,9 @@ func filterLoadBalancers(lbs []LB, project ProjectInfo) []LB {
 // listWith issues an Octavia list using the supplied scoped clients. proj
 // controls the optional server-side project_id query parameter.
 func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, error) {
+	if sc == nil || sc.lb == nil {
+		return nil, ErrUnavailable
+	}
 	opts := loadbalancers.ListOpts{ProjectID: proj.ID}
 	pages, err := loadbalancers.List(sc.lb, opts).AllPages(ctx)
 	if err != nil {
@@ -169,7 +174,7 @@ func listWith(ctx context.Context, sc *serviceClients, proj ProjectInfo) ([]LB, 
 // re-resolution) the get supplies VIP/provider and doubles as an existence
 // check — a 404 surfaces so the caller can mark a history entry dead.
 func (c *Clients) GetTree(ctx context.Context, lbID string, hint *model.LBMeta) (*model.Tree, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +247,7 @@ type DetailResult struct {
 // mutate the node or tree; the caller applies DetailResult on the UI goroutine.
 func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult, error) {
 	res := DetailResult{Attrs: map[string]string{}}
-	sc, err := c.clientsForLB(ctx, n.OwningLBID)
+	sc, err := c.activeLBClients(ctx, n.OwningLBID)
 	if err != nil {
 		return res, err
 	}
@@ -534,7 +539,7 @@ func (c *Clients) FetchDetail(ctx context.Context, n *model.Node) (DetailResult,
 // LBStats returns the byte/connection counters shown in the load-balancer
 // overview (distinct from status show).
 func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +558,7 @@ func (c *Clients) LBStats(ctx context.Context, lbID string) (map[string]any, err
 
 // ListenerStats returns the byte/connection counters for one listener.
 func (c *Clients) ListenerStats(ctx context.Context, lbID, listenerID string) (map[string]any, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +579,7 @@ func (c *Clients) ListenerStats(ctx context.Context, lbID, listenerID string) (m
 // single filtered request. The status tree contains listener identities and
 // health, but omits protocol and protocol_port.
 func (c *Clients) ListListenerSummaries(ctx context.Context, lbID string) (map[string]ListenerSummary, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +604,7 @@ func (c *Clients) ListListenerSummaries(ctx context.Context, lbID string) (map[s
 // filtered request. Besides enriching status-tree pools, this is an
 // authoritative fallback for deployments that omit loadbalancer.pools.
 func (c *Clients) ListPoolSummaries(ctx context.Context, lbID string) (map[string]PoolSummary, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +636,7 @@ func (c *Clients) ListPoolSummaries(ctx context.Context, lbID string) (map[strin
 // floating IP for each primary/additional address. The active credential
 // strategy determines whether the clients are project-scoped or global.
 func (c *Clients) ResolveFloatingIPs(ctx context.Context, lbID, portID string) (map[string]*model.Node, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -653,23 +658,22 @@ func (c *Clients) ResolveFloatingIPs(ctx context.Context, lbID, portID string) (
 }
 
 // ListFloatingIPMappings returns all floating-IP associations visible in the
-// current scope in one paginated Neutron request. A concrete project selection
-// is also sent as a server-side filter when global-admin clients are retained.
+// current scope in one paginated Neutron request. Project scope is also sent as
+// a server-side filter.
 func (c *Clients) ListFloatingIPMappings(ctx context.Context) ([]FloatingIPMapping, error) {
 	c.mu.Lock()
 	sc := c.activeServices
 	if sc == nil {
 		sc = c.services
 	}
-	selected := c.selected
-	allMode := c.allMode
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
 	if sc == nil || sc.network == nil {
 		return nil, ErrUnavailable
 	}
 	opts := floatingips.ListOpts{}
-	if !allMode {
-		opts.ProjectID = selected.ID
+	if scope.Kind == ScopeProject {
+		opts.ProjectID = scope.ID
 	}
 	pages, err := floatingips.List(sc.network, opts).AllPages(ctx)
 	if err != nil {
@@ -713,7 +717,7 @@ func floatingIPNodes(fips []floatingips.FloatingIP) map[string]*model.Node {
 // lbID selects the project scope. Best-effort: returns (nil, nil) if no server
 // matches, ErrUnavailable if Nova is not in scope.
 func (c *Clients) ResolveInstance(ctx context.Context, lbID, address string) (*model.Node, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}
@@ -748,7 +752,7 @@ func (c *Clients) ResolveInstance(ctx context.Context, lbID, address string) (*m
 // a 403 is translated to ErrAdminRequired so the caller can degrade gracefully
 // rather than surface a raw error. Not applicable to OVN-backed LBs.
 func (c *Clients) ListAmphorae(ctx context.Context, lbID string) ([]*model.Node, error) {
-	sc, err := c.clientsForLB(ctx, lbID)
+	sc, err := c.activeLBClients(ctx, lbID)
 	if err != nil {
 		return nil, err
 	}

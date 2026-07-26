@@ -41,17 +41,19 @@ type PoolRow struct {
 // scope, with a defensive local project filter for a concrete selection.
 func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 	c.mu.Lock()
-	allMode := c.allMode
-	selected := c.selected
+	scope := c.effectiveScopeLocked()
 	sc := c.activeServices
 	if sc == nil {
 		sc = c.services
 	}
 	c.mu.Unlock()
+	if sc == nil || sc.lb == nil {
+		return nil, ErrUnavailable
+	}
 
-	queryProjectID := selected.ID
-	if allMode {
-		queryProjectID = ""
+	queryProjectID := ""
+	if scope.Kind == ScopeProject {
+		queryProjectID = scope.ID
 	}
 	pages, err := listeners.List(sc.lb, listeners.ListOpts{ProjectID: queryProjectID}).AllPages(ctx)
 	if err != nil {
@@ -63,7 +65,7 @@ func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 	}
 	out := make([]ListenerRow, 0, len(items))
 	for _, l := range items {
-		if !allMode && selected.ID != "" && l.ProjectID != selected.ID {
+		if scope.Kind == ScopeProject && scope.ID != "" && l.ProjectID != scope.ID {
 			continue
 		}
 		out = append(out, ListenerRow{
@@ -79,17 +81,19 @@ func (c *Clients) ListListeners(ctx context.Context) ([]ListenerRow, error) {
 // the same defensive local project filter as ListListeners.
 func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 	c.mu.Lock()
-	allMode := c.allMode
-	selected := c.selected
+	scope := c.effectiveScopeLocked()
 	sc := c.activeServices
 	if sc == nil {
 		sc = c.services
 	}
 	c.mu.Unlock()
+	if sc == nil || sc.lb == nil {
+		return nil, ErrUnavailable
+	}
 
-	queryProjectID := selected.ID
-	if allMode {
-		queryProjectID = ""
+	queryProjectID := ""
+	if scope.Kind == ScopeProject {
+		queryProjectID = scope.ID
 	}
 	pages, err := pools.List(sc.lb, pools.ListOpts{ProjectID: queryProjectID}).AllPages(ctx)
 	if err != nil {
@@ -101,7 +105,7 @@ func (c *Clients) ListPools(ctx context.Context) ([]PoolRow, error) {
 	}
 	out := make([]PoolRow, 0, len(items))
 	for _, p := range items {
-		if !allMode && selected.ID != "" && p.ProjectID != selected.ID {
+		if scope.Kind == ScopeProject && scope.ID != "" && p.ProjectID != scope.ID {
 			continue
 		}
 		lbID := ""
@@ -128,6 +132,9 @@ func (c *Clients) ListAllAmphorae(ctx context.Context) ([]*model.Node, error) {
 		sc = c.services
 	}
 	c.mu.Unlock()
+	if sc == nil || sc.lb == nil {
+		return nil, ErrUnavailable
+	}
 
 	pages, err := amphorae.List(sc.lb, amphorae.ListOpts{}).AllPages(ctx)
 	if err != nil {

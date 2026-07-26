@@ -7,13 +7,15 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/krisiasty/olb/internal/osclient"
 )
 
 // homeView renders the launch / overview landing. Now that olb browses more than
 // load balancers, it opens here to orient the operator: the current scope and
 // identity (from the auth token — a local read, no network), then the browsable
 // areas. It is a base view (not an overlay, not a workspace); S/A/L enter an
-// area, 0 opens the switcher, and ` returns here.
+// area, space opens the switcher, and ` returns here.
 func (m Model) homeView() string {
 	tok := m.backend.CurrentToken()
 	lines := make([]string, 0, m.height)
@@ -61,30 +63,29 @@ func (m Model) homeView() string {
 	for len(lines) < m.height-1 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, m.clip(m.st.help.Render("S / A / L enter area · 0 switch · * token · ? help · q quit")))
+	lines = append(lines, m.clip(m.st.help.Render("S / A / L enter area · space switch · tab scope · * token · ? help · q quit")))
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
 	return strings.Join(lines, "\n")
 }
 
-// scopeText is the plain-text scope summary shown on the home view (project /
-// all-projects / global-admin), mirroring the subtitle line's scope logic.
+// scopeText is the plain-text summary of the active Keystone token scope.
 func (m Model) scopeText() string {
-	if m.allProjects {
-		if m.backend.SwitchCapability().GlobalAdmin {
-			return "global admin · all projects"
+	switch m.scope.Kind {
+	case osclient.ScopeSystem:
+		return "system:" + m.scope.Label()
+	case osclient.ScopeDomain:
+		return "domain " + m.scope.Label()
+	case osclient.ScopeProject:
+		label := "project "
+		if m.scope.DomainName != "" {
+			label += m.scope.DomainName + " / "
 		}
-		return "all projects"
+		return label + m.scope.Label()
+	default:
+		return "unscoped"
 	}
-	label := "project " + projectLabel(m.project)
-	if m.backend.SwitchCapability().GlobalAdmin {
-		label = "global admin · " + label
-		if m.filtered {
-			label += " (filtered)"
-		}
-	}
-	return label
 }
 
 // onHomeKey handles keys while on the overview landing: area accelerators enter
@@ -95,6 +96,8 @@ func (m Model) onHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.goArea(msg.String())
 	case key.Matches(msg, m.keys.Switcher):
 		return m.openSwitcher()
+	case key.Matches(msg, m.keys.Scope):
+		return m.openScope()
 	case key.Matches(msg, m.keys.Token):
 		return m.openToken()
 	case key.Matches(msg, m.keys.Telemetry):

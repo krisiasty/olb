@@ -37,11 +37,10 @@ type IdentityList[T any] struct {
 	Restriction string
 }
 
-// ListUsers lists Keystone users visible to the active credential. Identity
-// objects are domain-/system-scoped rather than Octavia-project-scoped, so the
-// global project selector does not filter this list. If collection access is
-// denied, it falls back to the authenticated user's self-readable record (or
-// the partial identity embedded in the token).
+// ListUsers lists Keystone users visible to the active token. A domain token
+// applies its domain explicitly. If collection access is denied, it falls back
+// to the authenticated user's self-readable record (or the partial identity
+// embedded in the token).
 func (c *Clients) ListUsers(ctx context.Context) (IdentityList[User], error) {
 	c.mu.Lock()
 	sc := c.activeServices
@@ -49,9 +48,14 @@ func (c *Clients) ListUsers(ctx context.Context) (IdentityList[User], error) {
 		sc = c.services
 	}
 	identity := sc.identity
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
 
-	pages, err := users.List(identity, users.ListOpts{}).AllPages(ctx)
+	opts := users.ListOpts{}
+	if scope.Kind == ScopeDomain {
+		opts.DomainID = scope.ID
+	}
+	pages, err := users.List(identity, opts).AllPages(ctx)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 403) {
 			items, fallbackErr := c.currentUser(ctx, identity)
@@ -129,7 +133,7 @@ func (c *Clients) ListGroupMembers(ctx context.Context, groupID string) ([]User,
 
 // resolveUsers maps gophercloud users to our summary type, resolving default-
 // project and domain IDs to names through the shared, cached name maps — the
-// same mechanism that labels all-projects load-balancer rows. Each map is looked
+// same mechanism that labels cross-project load-balancer rows. Each map is looked
 // up only when at least one user references it; best effort, so an unresolvable
 // ID simply leaves the name empty. Results are sorted by name.
 func (c *Clients) resolveUsers(ctx context.Context, items []users.User) []User {
@@ -329,9 +333,14 @@ func (c *Clients) ListGroups(ctx context.Context) (IdentityList[Group], error) {
 		sc = c.services
 	}
 	client := sc.identity
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
 
-	pages, err := groups.List(client, groups.ListOpts{}).AllPages(ctx)
+	opts := groups.ListOpts{}
+	if scope.Kind == ScopeDomain {
+		opts.DomainID = scope.ID
+	}
+	pages, err := groups.List(client, opts).AllPages(ctx)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 403) {
 			token := c.CurrentToken()
@@ -431,8 +440,8 @@ func (c *Clients) resolveGroups(ctx context.Context, items []groups.Group) []Gro
 }
 
 // Project is a Keystone project summary for the identity area's projects list
-// view. This is the browsable/inspectable list; it is distinct from ProjectInfo,
-// which drives the global project selector (re-scoping).
+// view. This is the browsable/inspectable list; it is distinct from ScopeInfo,
+// which drives authentication-scope switching.
 type Project struct {
 	ID          string
 	Name        string
@@ -444,12 +453,9 @@ type Project struct {
 	Enabled     bool
 }
 
-// ListProjectsDetailed lists projects for the identity area's explore view, with
-// full attributes. It mirrors the selector's enumeration strategy — global-admin
-// lists every project (GET /v3/projects), otherwise the token's own accessible
-// projects (GET /v3/auth/projects) — but returns the richer Project type and
-// resolves domain and parent names. Domain entries (is_domain) are excluded;
-// they have their own view. A 403 degrades to ErrAdminRequired.
+// ListProjectsDetailed lists projects visible in the active token scope. System
+// scope uses the normal collection, domain scope restricts that collection to
+// the active domain, and project scope uses the user's available-project list.
 func (c *Clients) ListProjectsDetailed(ctx context.Context) ([]Project, error) {
 	c.mu.Lock()
 	sc := c.activeServices
@@ -457,12 +463,15 @@ func (c *Clients) ListProjectsDetailed(ctx context.Context) ([]Project, error) {
 		sc = c.services
 	}
 	client := sc.identity
-	globalAdmin := c.globalAdmin
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
 
 	pager := projects.ListAvailable(client)
-	if globalAdmin {
+	switch scope.Kind {
+	case ScopeSystem:
 		pager = projects.List(client, projects.ListOpts{})
+	case ScopeDomain:
+		pager = projects.List(client, projects.ListOpts{DomainID: scope.ID})
 	}
 	pages, err := pager.AllPages(ctx)
 	if err != nil {
@@ -623,9 +632,14 @@ func (c *Clients) ListRoles(ctx context.Context) (IdentityList[Role], error) {
 		sc = c.services
 	}
 	client := sc.identity
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
 
-	pages, err := roles.List(client, roles.ListOpts{}).AllPages(ctx)
+	opts := roles.ListOpts{}
+	if scope.Kind == ScopeDomain {
+		opts.DomainID = scope.ID
+	}
+	pages, err := roles.List(client, opts).AllPages(ctx)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 403) {
 			token := c.CurrentToken()
@@ -889,20 +903,69 @@ func (c *Clients) ListDomains(ctx context.Context) (IdentityList[Domain], error)
 		sc = c.services
 	}
 	client := sc.identity
+	scope := c.effectiveScopeLocked()
 	c.mu.Unlock()
+
+	// A domain-scoped token represents exactly one identity boundary. Fetch that
+	// object directly rather than depending on a deployment to filter a
+	// collection response consistently.
+	if scope.Kind == ScopeDomain {
+		domain, err := domains.Get(ctx, client, scope.ID).Extract()
+		if err == nil && domain != nil {
+			name := firstNonEmpty(domain.Name, scope.Name)
+			return IdentityList[Domain]{Items: []Domain{{
+				ID: domain.ID, Name: name, Description: domain.Description,
+				Enabled: domain.Enabled,
+			}}}, nil
+		}
+		if err != nil && !gophercloud.ResponseCodeIs(err, 403) {
+			return IdentityList[Domain]{}, err
+		}
+		return IdentityList[Domain]{Items: []Domain{{
+			ID: scope.ID, Name: scope.Name, Partial: true,
+		}}, Restriction: "active domain"}, nil
+	}
 
 	pages, err := domains.List(client, domains.ListOpts{}).AllPages(ctx)
 	if err != nil {
 		if gophercloud.ResponseCodeIs(err, 403) {
 			token := c.CurrentToken()
-			if !token.Available || token.UserDomainID == "" {
+			names := tokenDomainNameMap(token)
+			partial := make(map[string]Domain)
+			if token.UserDomainID != "" {
+				partial[token.UserDomainID] = Domain{
+					ID: token.UserDomainID, Name: token.UserDomainName, Partial: true,
+				}
+			}
+			// Project-access discovery is self-service and reveals every owning
+			// domain relevant to this user, including domains other than the
+			// user's identity domain.
+			if availablePages, availableErr := projects.ListAvailable(client).AllPages(ctx); availableErr == nil {
+				if available, extractErr := projects.ExtractProjects(availablePages); extractErr == nil {
+					for _, project := range available {
+						if project.DomainID == "" {
+							continue
+						}
+						partial[project.DomainID] = Domain{
+							ID: project.DomainID, Name: names[project.DomainID], Partial: true,
+						}
+					}
+				}
+			}
+			if len(partial) == 0 {
 				return IdentityList[Domain]{}, ErrAdminRequired
 			}
+			items := make([]Domain, 0, len(partial))
+			for _, domain := range partial {
+				items = append(items, domain)
+			}
+			sort.Slice(items, func(i, j int) bool {
+				li := firstNonEmpty(items[i].Name, items[i].ID)
+				lj := firstNonEmpty(items[j].Name, items[j].ID)
+				return li < lj
+			})
 			return IdentityList[Domain]{
-				Items: []Domain{{
-					ID: token.UserDomainID, Name: token.UserDomainName, Partial: true,
-				}},
-				Restriction: "current user's domain",
+				Items: items, Restriction: "domains available to current user",
 			}, nil
 		}
 		return IdentityList[Domain]{}, err

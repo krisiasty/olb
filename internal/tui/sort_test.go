@@ -43,7 +43,7 @@ func TestSortOverlaySortsByNameAscending(t *testing.T) {
 // The catalog lists (services, endpoints, regions) are sortable like the other
 // top-level views: o opens the picker and a chosen column reorders the rows.
 func TestCatalogListsAreSortable(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("S"))
 	m = updExec(t, m, press("2")) // services (arrive in Type order: compute, identity, image)
 	if got := firstLabels(m); got[0] != "service:compute" {

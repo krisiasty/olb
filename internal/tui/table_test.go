@@ -15,7 +15,7 @@ var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func lbListModel(t *testing.T, all bool) Model {
 	t.Helper()
-	m := New(&fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}, all: all}, Config{HistoryCap: 50, AllProjects: all})
+	m := New(&fakeBackend{cap: switchCapability{CanSwitch: true}, all: all}, Config{HistoryCap: 50})
 	m.Init()
 	nm, _ := m.Update(tea.WindowSizeMsg{Width: 96, Height: 16})
 	m = nm.(Model)
@@ -198,7 +198,7 @@ func TestLayoutColumnWidthsKeepsNarrowColumnsReadable(t *testing.T) {
 }
 
 func TestResourceNavigationRows(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // open first load balancer
 	amphorae, err := m.backend.ListAmphorae(context.Background(), "lb-1")
 	if err != nil {
@@ -245,7 +245,7 @@ func TestResourceNavigationRows(t *testing.T) {
 }
 
 func TestListenerPoolsAndPoolListenersUseRelatedRepresentations(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // load balancer
 	i, ok := m.selectLabel("listener:http")
 	if !ok {
@@ -280,7 +280,7 @@ func TestListenerPoolsAndPoolListenersUseRelatedRepresentations(t *testing.T) {
 }
 
 func TestResourceNavigationRowsHandleNarrowWidths(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	for width := 1; width <= 12; width++ {
 		m.width = width

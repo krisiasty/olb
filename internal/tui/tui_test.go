@@ -35,11 +35,17 @@ const sampleStatus = `
      "members":[{"address":"10.0.0.5","protocol_port":80,"id":"mem-1","operating_status":"ERROR","provisioning_status":"ACTIVE"}]}]
 }}}`
 
+type switchCapability struct {
+	CanSwitch bool
+	Reason    string
+	Suggest   string
+}
+
 type fakeBackend struct {
-	cap                osclient.SwitchCapability
+	cap                switchCapability
 	all                bool
-	filtered           bool // reported by Filtered(); set by SwitchProject when scopeDenied
-	scopeDenied        bool // when true, SwitchProject falls back to a filtered selection
+	scopeDenied        bool
+	scope              osclient.ScopeInfo
 	telemetry          *telemetry.Collector
 	amphoraeErr        error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
 	users              []osclient.User
@@ -663,26 +669,34 @@ func (f *fakeBackend) CurrentToken() osclient.TokenInfo {
 	}
 }
 
-func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, error) {
-	return []osclient.ProjectInfo{{ID: "p1", Name: "alpha"}, {ID: "p2", Name: "beta"}}, nil
+func (f *fakeBackend) ListScopes(context.Context) ([]osclient.ScopeInfo, error) {
+	return []osclient.ScopeInfo{
+		{Kind: osclient.ScopeSystem, ID: "all", Name: "all"},
+		{Kind: osclient.ScopeDomain, ID: "default", Name: "Default"},
+		{Kind: osclient.ScopeProject, ID: "p1", Name: "alpha", DomainID: "default", DomainName: "Default"},
+		{Kind: osclient.ScopeProject, ID: "p2", Name: "beta", DomainID: "default", DomainName: "Default"},
+	}, nil
 }
 
-func (f *fakeBackend) SwitchProject(_ context.Context, p osclient.ProjectInfo) error {
-	f.all = false
-	f.filtered = f.scopeDenied
+func (f *fakeBackend) SwitchScope(_ context.Context, scope osclient.ScopeInfo) error {
+	if f.scopeDenied {
+		return errors.New("scope denied")
+	}
+	f.scope = scope
+	f.all = scope.Kind != osclient.ScopeProject
 	return nil
 }
-func (f *fakeBackend) EnterAllProjects(context.Context) error {
-	f.all = true
-	f.filtered = false
-	return nil
+
+func (f *fakeBackend) CurrentScope() osclient.ScopeInfo {
+	if f.scope.Kind != "" {
+		return f.scope
+	}
+	if f.all {
+		return osclient.ScopeInfo{Kind: osclient.ScopeSystem, ID: "all", Name: "all"}
+	}
+	return osclient.ScopeInfo{Kind: osclient.ScopeProject, ID: "p1", Name: "alpha", DomainID: "default", DomainName: "Default"}
 }
-func (f *fakeBackend) CurrentProject() osclient.ProjectInfo {
-	return osclient.ProjectInfo{ID: "p1", Name: "alpha"}
-}
-func (f *fakeBackend) AllProjects() bool                           { return f.all }
-func (f *fakeBackend) Filtered() bool                              { return f.filtered }
-func (f *fakeBackend) SwitchCapability() osclient.SwitchCapability { return f.cap }
+
 func (f *fakeBackend) TelemetrySnapshot() telemetry.Snapshot {
 	if f.telemetry == nil {
 		return telemetry.Snapshot{SlowThreshold: telemetry.DefaultSlowThreshold}
@@ -697,7 +711,7 @@ func (f *fakeBackend) ResetTelemetry() {
 
 // --- driver helpers -------------------------------------------------------
 
-func start(t *testing.T, cap osclient.SwitchCapability) Model {
+func start(t *testing.T, cap switchCapability) Model {
 	t.Helper()
 	m := New(&fakeBackend{cap: cap}, Config{PrintMode: true, HistoryCap: 50})
 	m.Init() // schedules initial list loading; New initializes workspace histories
@@ -782,6 +796,8 @@ func press(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "up":
@@ -803,7 +819,7 @@ func (m Model) selectLabel(label string) (int, bool) {
 // --- tests ----------------------------------------------------------------
 
 func TestListAndDrillDown(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	if len(m.entries) != 2 {
 		t.Fatalf("want 2 LBs, got %d", len(m.entries))
 	}
@@ -822,7 +838,7 @@ func TestListAndDrillDown(t *testing.T) {
 }
 
 func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	if m.statsSpinner.Spinner.FPS != time.Second {
 		t.Fatalf("stats cadence spinner interval = %s, want 1s", m.statsSpinner.Spinner.FPS)
 	}
@@ -894,7 +910,7 @@ func TestAutoRefreshControlsAndStaleTimerInvalidation(t *testing.T) {
 }
 
 func TestAutoStatsRefreshAndInteractionPause(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 1}})
 
@@ -937,7 +953,7 @@ func TestClosingRawOverlayRestartsAndReconcilesAutoRefresh(t *testing.T) {
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	newOverview := func(t *testing.T) Model {
 		t.Helper()
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		m = updExec(t, m, press("enter"))
 		m.clock = func() time.Time { return now }
 		m.overlay = overlayRaw
@@ -1001,7 +1017,7 @@ func TestClosingRawOverlayRestartsAndReconcilesAutoRefresh(t *testing.T) {
 }
 
 func TestStatsAreHumanizedAndRatesUseElapsedSampleTime(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	firstAt := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	m = upd(t, m, statsMsg{
@@ -1079,7 +1095,7 @@ func statFieldValues(fields []overviewField) map[string]string {
 }
 
 func TestReenablingAutoRefreshImmediatelyRefreshesStaleStats(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
 	m = updExec(t, m, press("enter"))
@@ -1107,7 +1123,7 @@ func TestReenablingAutoRefreshImmediatelyRefreshesStaleStats(t *testing.T) {
 }
 
 func TestAutomaticFullRefreshAvoidsOverlapAndCompletesSilently(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m.autoStatsLoading["lb-1"] = true
 	next, cmd := m.Update(autoFullTickMsg{generation: m.autoGeneration})
 	m = next.(Model)
@@ -1131,7 +1147,7 @@ func TestAutomaticFullRefreshAvoidsOverlapAndCompletesSilently(t *testing.T) {
 }
 
 func TestRefreshTreeDoesNotReusePotentiallyStaleListMetadata(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	backend := m.backend.(*fakeBackend)
 	if msg := m.getTreeCmd("lb-1", model.Identity{}, false)(); msg == nil {
 		t.Fatal("initial tree command returned no message")
@@ -1186,7 +1202,7 @@ func TestLBRelatedObjectsAreGroupedAndSorted(t *testing.T) {
 }
 
 func TestLBRelatedObjectHeadingsAreCountedFilteredAndSkipped(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 
 	pools, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
@@ -1293,7 +1309,7 @@ func TestRelatedIssueCountsUseHighestSeverityAndSkipHeadings(t *testing.T) {
 }
 
 func TestReferenceAndBackReferenceNavigation(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // into LB
 
 	// Drill into the listener.
@@ -1333,7 +1349,7 @@ func TestReferenceAndBackReferenceNavigation(t *testing.T) {
 }
 
 func TestHistoryNavigationRestoresSelectedRelatedObject(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // LB overview
 
 	listenerIndex, ok := m.selectLabel("listener:http")
@@ -1372,7 +1388,7 @@ func TestHistoryNavigationRestoresSelectedRelatedObject(t *testing.T) {
 }
 
 func TestListenerRefreshCompletesAfterNavigatingBackToLoadBalancer(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	listenerIndex, ok := m.selectLabel("listener:http")
 	if !ok {
@@ -1417,7 +1433,7 @@ func TestListenerRefreshCompletesAfterNavigatingBackToLoadBalancer(t *testing.T)
 }
 
 func TestBreadcrumbTruncationPreservesCurrentObject(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m.width = 38
 	m.hist = newHistory(50)
 	m.hist.root = model.LBListIdentity
@@ -1441,7 +1457,7 @@ func TestBreadcrumbTruncationPreservesCurrentObject(t *testing.T) {
 }
 
 func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m.clock = func() time.Time { return time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC) }
 	m = updExec(t, m, press("enter"))
 	i, ok := m.selectLabel("listener:http")
@@ -1474,7 +1490,7 @@ func TestListenerOverviewShowsStatsCertificateAndRelatedObjects(t *testing.T) {
 }
 
 func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("3"))
 	m = updExec(t, m, press("enter"))
 	listener := m.loc.node
@@ -1588,7 +1604,7 @@ func TestListenerRefreshReloadsRelatedPoolSummaries(t *testing.T) {
 }
 
 func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4"))
 	m = updExec(t, m, press("enter"))
 	if m.loc.node == nil || m.loc.node.Type != model.TypePool {
@@ -1664,7 +1680,7 @@ func TestPoolOverviewShowsTwoColumnDetailsAndGroupedRelatedObjects(t *testing.T)
 }
 
 func TestHealthMonitorOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4"))
 	m = updExec(t, m, press("enter"))
 	pool := m.loc.node
@@ -1752,7 +1768,7 @@ func TestHealthMonitorOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
 }
 
 func TestMemberOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	if i, ok := m.selectLabel("pool:web"); ok {
 		m.cursor = i
@@ -1817,7 +1833,7 @@ func TestMemberOverviewShowsDetailsWithoutRelatedObjects(t *testing.T) {
 }
 
 func TestPoolRefreshReloadsAllEnrichedRelatedData(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4"))
 	m = updExec(t, m, press("enter"))
 	pool := m.loc.node
@@ -1919,7 +1935,7 @@ func TestPoolRefreshReloadsAllEnrichedRelatedData(t *testing.T) {
 }
 
 func TestAutomaticPoolRefreshUsesCompleteRefreshTransaction(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("4"))
 	m = updExec(t, m, press("enter"))
 	pool := m.loc.node
@@ -2007,7 +2023,7 @@ func TestCertificateExpiryColors(t *testing.T) {
 }
 
 func TestListenerCertificateErrorUsesConciseLabel(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	i, ok := m.selectLabel("listener:http")
 	if !ok {
@@ -2036,7 +2052,7 @@ func TestListenerCertificateErrorUsesConciseLabel(t *testing.T) {
 }
 
 func TestInspectCopyAndOverlays(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // into LB (loc.node = LB)
 
 	// The LB view embeds independently-loaded details and stats above the
@@ -2188,7 +2204,7 @@ func TestDisplayTimestampIsHumanReadableUTC(t *testing.T) {
 func TestCopyRawShowsConfirmationInOverlayFooter(t *testing.T) {
 	for _, format := range []string{"yaml", "json"} {
 		t.Run(format, func(t *testing.T) {
-			m := start(t, osclient.SwitchCapability{CanSwitch: true})
+			m := start(t, switchCapability{CanSwitch: true})
 			var clipboardOutput strings.Builder
 			m.cfg.PrintMode = false
 			m.cfg.Stdout = &clipboardOutput
@@ -2226,7 +2242,7 @@ func TestCopyRawShowsConfirmationInOverlayFooter(t *testing.T) {
 }
 
 func TestHelpIncludesStatusColoredLegend(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = upd(t, m, press("?"))
 	if m.overlay != overlayHelp {
 		t.Fatalf("? should open help, overlay=%v", m.overlay)
@@ -2270,7 +2286,7 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	collector.Observe("GET octavia /v2/lbaas/loadbalancers", 2*time.Second, telemetry.Success)
 	collector.Observe("GET neutron /v2.0/floatingips?port_id", 30*time.Second, telemetry.Timeout)
 	backend := &fakeBackend{
-		cap: osclient.SwitchCapability{CanSwitch: true}, telemetry: collector,
+		cap: switchCapability{CanSwitch: true}, telemetry: collector,
 	}
 	m := New(backend, Config{PrintMode: true, HistoryCap: 50})
 	m.Init()
@@ -2410,7 +2426,7 @@ func TestTelemetryFractionsUseTwoDigits(t *testing.T) {
 }
 
 func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	m = upd(t, m, detailMsg{
 		nodeID: "lb-1", lbID: "lb-1", intent: intentOverview,
@@ -2535,7 +2551,7 @@ func TestRefreshKeepsAndAtomicallyReplacesLBOverview(t *testing.T) {
 }
 
 func TestLBOverviewResponsiveLayout(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 
 	wide := ansiRE.ReplaceAllString(m.View(), "")
@@ -2549,7 +2565,7 @@ func TestLBOverviewResponsiveLayout(t *testing.T) {
 	if !strings.Contains(m.View(), m.st.title.Render(projectLabel(m.project))) {
 		t.Fatalf("project name should use emphasized styling: %q", wideLines[1])
 	}
-	if !strings.Contains(wideLines[1], "scope: project alpha") {
+	if !strings.Contains(wideLines[1], "scope: project Default / alpha") {
 		t.Fatalf("single-project subtitle should use consistent scope wording: %q", wideLines[1])
 	}
 	lastField := -1
@@ -2638,7 +2654,7 @@ func TestUpperOverviewValuesWrapWithAlignedContinuations(t *testing.T) {
 }
 
 func TestLBOverviewPanelsFailIndependently(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	m = upd(t, m, detailMsg{nodeID: "lb-1", lbID: "lb-1", intent: intentOverview, err: errors.New("detail denied")})
 	m = upd(t, m, statsMsg{lbID: "lb-1", stats: map[string]any{"active_connections": 7}})
@@ -2656,7 +2672,7 @@ func TestLBOverviewPanelsFailIndependently(t *testing.T) {
 }
 
 func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
 	m = updExec(t, m, press("enter"))
@@ -2753,7 +2769,7 @@ func TestLBOverviewFreshnessAgesIndependently(t *testing.T) {
 }
 
 func TestFailedRefreshRetainsTimestampsAndMarksSectionsStale(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	now := time.Date(2026, time.July, 19, 12, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
 	m = updExec(t, m, press("enter"))
@@ -2797,7 +2813,7 @@ func TestFailedRefreshRetainsTimestampsAndMarksSectionsStale(t *testing.T) {
 }
 
 func TestHistoryBackForwardAndTruncation(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // LB
 	if i, ok := m.selectLabel("listener:http"); ok {
 		m.cursor = i
@@ -2832,7 +2848,7 @@ func TestHistoryBackForwardAndTruncation(t *testing.T) {
 }
 
 func TestFilterAndStatus(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	// Substring filter on the LB list.
 	m = upd(t, m, press("/"))
 	if !m.filtering {
@@ -2878,194 +2894,148 @@ func TestFilterAndStatus(t *testing.T) {
 	}
 }
 
-func TestProjectSwitcherDisabled(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: false, Reason: "bare token", Suggest: "use creds"})
-	m = upd(t, m, press("p"))
-	if m.overlay != overlayProject {
-		t.Fatal("p should open the project overlay")
+func TestScopeSwitcherUsesAvailableScopes(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: false, Reason: "bare token", Suggest: "use creds"})
+	m = updExec(t, m, press("tab"))
+	if m.overlay != overlayScope || len(m.scopes) != 4 {
+		t.Fatalf("tab should load available authentication scopes; overlay=%v scopes=%d", m.overlay, len(m.scopes))
 	}
-	if !strings.Contains(m.View(), "bare token") {
-		t.Errorf("disabled switcher should show the reason; view=%q", m.View())
-	}
-	m = upd(t, m, press("esc"))
 }
 
-func TestProjectSwitcherKey(t *testing.T) {
-	// p opens the project selector; 0 no longer aliases it (it opens the area
-	// switcher — see TestAreaSwitcherOpensOnZero).
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("p"))
-	if m.overlay != overlayProject || len(m.projects) != 2 {
-		t.Fatalf("p should open and load the project selector; overlay=%v projects=%d", m.overlay, len(m.projects))
+func TestScopeSwitcherKey(t *testing.T) {
+	// Tab opens the scope selector; space remains the area/view switcher.
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("tab"))
+	if m.overlay != overlayScope || len(m.scopes) != 4 {
+		t.Fatalf("tab should open and load the scope selector; overlay=%v scopes=%d", m.overlay, len(m.scopes))
 	}
 
-	m = start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("0"))
+	m = start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press(" "))
 	if m.overlay != overlaySwitcher {
-		t.Fatalf("0 should open the area/view switcher, not the project selector; overlay=%v", m.overlay)
+		t.Fatalf("space should open the area/view switcher, not the scope selector; overlay=%v", m.overlay)
 	}
 }
 
-func TestProjectSwitcherEnabled(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = updExec(t, m, press("p")) // loads projects
-	if m.overlay != overlayProject || len(m.projects) != 2 {
-		t.Fatalf("p should load projects, got overlay=%v projects=%d", m.overlay, len(m.projects))
+func TestScopeSwitcherFiltering(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("tab"))
+	if m.overlay != overlayScope || len(m.scopes) != 4 {
+		t.Fatalf("tab should load scopes, got overlay=%v scopes=%d", m.overlay, len(m.scopes))
 	}
 	if m.search.Focused() {
-		t.Fatal("project filtering should be inactive until / is pressed")
+		t.Fatal("scope filtering should be inactive until / is pressed")
 	}
 	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if first := strings.Split(plain, "\n")[0]; first != "Switch project" {
-		t.Fatalf("inactive project title = %q, want no filter prompt", first)
+	if first := strings.Split(plain, "\n")[0]; first != "Switch authentication scope" {
+		t.Fatalf("inactive scope title = %q, want no filter prompt", first)
 	}
 	if strings.Contains(plain, "search:") {
-		t.Fatalf("project selector should not render a search prompt:\n%s", plain)
+		t.Fatalf("scope selector should not render a search prompt:\n%s", plain)
 	}
 	m = upd(t, m, press("ignored"))
-	if m.search.Value() != "" || m.projCursor != 0 {
-		t.Fatalf("ordinary key changed inactive project filter or cursor: query=%q cursor=%d", m.search.Value(), m.projCursor)
+	if m.search.Value() != "" || m.scopeCursor != 2 {
+		t.Fatalf("ordinary key changed inactive scope filter or cursor: query=%q cursor=%d", m.search.Value(), m.scopeCursor)
 	}
 
 	m = upd(t, m, press("/"))
 	if !m.search.Focused() {
-		t.Fatal("/ should activate project filtering")
+		t.Fatal("/ should activate scope filtering")
 	}
 	view := m.View()
 	first := strings.Split(view, "\n")[0]
-	if plainFirst := ansiRE.ReplaceAllString(first, ""); !strings.Contains(plainFirst, "Switch project  filter: ") {
-		t.Fatalf("focused project filter missing from title: %q", plainFirst)
+	if plainFirst := ansiRE.ReplaceAllString(first, ""); !strings.Contains(plainFirst, "Switch authentication scope  filter: ") {
+		t.Fatalf("focused scope filter missing from title: %q", plainFirst)
 	}
 	if !strings.Contains(first, m.st.filterPrompt.Render("filter: ")) {
-		t.Fatalf("project filter prompt is not yellow: %q", first)
+		t.Fatalf("scope filter prompt is not yellow: %q", first)
 	}
 	m = upd(t, m, press("beta"))
-	if got := len(m.filteredProjects()); got != 1 {
-		t.Fatalf("filtered project count = %d, want 1", got)
+	if got := len(m.filteredScopes()); got != 1 {
+		t.Fatalf("filtered scope count = %d, want 1", got)
 	}
 	m = upd(t, m, press("enter"))
-	if m.search.Focused() || m.search.Value() != "beta" || m.overlay != overlayProject {
-		t.Fatalf("enter should apply and retain project filter: focused=%v query=%q overlay=%v", m.search.Focused(), m.search.Value(), m.overlay)
+	if m.search.Focused() || m.search.Value() != "beta" || m.overlay != overlayScope {
+		t.Fatalf("enter should apply and retain scope filter: focused=%v query=%q overlay=%v", m.search.Focused(), m.search.Value(), m.overlay)
 	}
 	m = upd(t, m, press("esc"))
-	if m.search.Value() != "" || m.overlay != overlayProject {
-		t.Fatalf("first esc should clear retained project filter: query=%q overlay=%v", m.search.Value(), m.overlay)
+	if m.search.Value() != "" || m.overlay != overlayScope {
+		t.Fatalf("first esc should clear retained scope filter: query=%q overlay=%v", m.search.Value(), m.overlay)
 	}
 	m = upd(t, m, press("esc"))
 	if m.overlay != overlayNone {
-		t.Fatalf("second esc should close project selector, overlay=%v", m.overlay)
+		t.Fatalf("second esc should close scope selector, overlay=%v", m.overlay)
 	}
 }
 
-func TestProjectSwitcherStartsAtCurrentProject(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m = upd(t, m, projectsMsg{projects: []osclient.ProjectInfo{
-		{ID: "p2", Name: "beta"},
-		{ID: "p1", Name: "alpha"},
+func TestScopeSwitcherStartsAtCurrentScope(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = upd(t, m, scopesMsg{scopes: []osclient.ScopeInfo{
+		{Kind: osclient.ScopeProject, ID: "p2", Name: "beta"},
+		{Kind: osclient.ScopeProject, ID: "p1", Name: "alpha"},
 	}})
-	if m.projCursor != 1 {
-		t.Fatalf("initial project cursor = %d, want current project row 1", m.projCursor)
+	if m.scopeCursor != 1 {
+		t.Fatalf("initial scope cursor = %d, want current scope row 1", m.scopeCursor)
 	}
 }
 
-func TestProjectSwitcherPageAndBoundaryNavigation(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
-	m.height = 12 // five project rows are visible without the global-admin hint
-	m = updExec(t, m, press("p"))
-	m.projects = make([]osclient.ProjectInfo, 13)
-	for i := range m.projects {
-		m.projects[i] = osclient.ProjectInfo{ID: fmt.Sprintf("p-%02d", i), Name: fmt.Sprintf("project-%02d", i)}
+func TestScopeSwitcherPageAndBoundaryNavigation(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m.height = 12
+	m = updExec(t, m, press("tab"))
+	m.scopes = make([]osclient.ScopeInfo, 13)
+	for i := range m.scopes {
+		m.scopes[i] = osclient.ScopeInfo{Kind: osclient.ScopeProject, ID: fmt.Sprintf("p-%02d", i), Name: fmt.Sprintf("project-%02d", i)}
 	}
-	m.projCursor = 0
-	last := len(m.projects) - 1
+	m.scopeCursor = 0
+	last := len(m.scopes) - 1
 
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.projCursor != 5 {
-		t.Fatalf("page down cursor = %d, want 5", m.projCursor)
+	if m.scopeCursor != 6 {
+		t.Fatalf("page down cursor = %d, want 6", m.scopeCursor)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.projCursor != last {
-		t.Fatalf("page down past end cursor = %d, want %d", m.projCursor, last)
+	if m.scopeCursor != last {
+		t.Fatalf("page down past end cursor = %d, want %d", m.scopeCursor, last)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
-	if want := last - 5; m.projCursor != want {
-		t.Fatalf("page up cursor = %d, want %d", m.projCursor, want)
+	if want := last - 6; m.scopeCursor != want {
+		t.Fatalf("page up cursor = %d, want %d", m.scopeCursor, want)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})
-	if m.projCursor != 0 {
-		t.Fatalf("home cursor = %d, want 0", m.projCursor)
+	if m.scopeCursor != 0 {
+		t.Fatalf("home cursor = %d, want 0", m.scopeCursor)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyEnd})
-	if m.projCursor != last {
-		t.Fatalf("end cursor = %d, want %d", m.projCursor, last)
+	if m.scopeCursor != last {
+		t.Fatalf("end cursor = %d, want %d", m.scopeCursor, last)
 	}
 
 	m = upd(t, m, press("/"))
 	m = upd(t, m, press("project-10"))
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyCtrlA})
-	if m.search.Position() != 0 || m.projCursor != m.firstProjectCursor() {
-		t.Fatalf("home should edit focused filter, position=%d project cursor=%d", m.search.Position(), m.projCursor)
+	if m.search.Position() != 0 || m.scopeCursor != 0 {
+		t.Fatalf("home should edit focused filter, position=%d scope cursor=%d", m.search.Position(), m.scopeCursor)
 	}
 }
 
-func TestProjectSwitcherHidesAllProjectsWithoutGlobalAdmin(t *testing.T) {
-	capability := osclient.SwitchCapability{
-		CanSwitch: true, AllProjectsChecked: true,
-		AllProjectsReason: "start olb with --global-admin",
-	}
-	m := start(t, capability)
-	m = updExec(t, m, press("p"))
-	if m.projCursor != 0 {
-		t.Fatalf("project cursor = %d, want first accessible project", m.projCursor)
-	}
+func TestScopeSwitcherGroupsProjectsByDomain(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("tab"))
 	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if strings.Contains(plain, "⟨ all projects ⟩") {
-		t.Fatalf("all-projects row should be hidden without --global-admin:\n%s", plain)
+	for _, want := range []string{"SYSTEM", "system:all", "DOMAINS", "PROJECTS · domain: Default", "alpha (current)", "beta"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("scope selector missing %q:\n%s", want, plain)
+		}
 	}
-	if !strings.Contains(plain, "global view: restart with --global-admin") {
-		t.Fatalf("global-admin hint missing:\n%s", plain)
-	}
-	if strings.Contains(plain, "a all projects") {
-		t.Fatalf("non-global selector should not advertise the all-projects shortcut:\n%s", plain)
-	}
-
-	next, shortcutCmd := m.Update(press("a"))
-	m = next.(Model)
-	if shortcutCmd != nil || m.overlay != overlayProject || m.allProjects {
-		t.Fatal("a should not select all projects without global-admin mode")
-	}
-
-	next, cmd := m.Update(press("enter"))
-	m = next.(Model)
-	if cmd == nil || m.overlay != overlayNone || m.allProjects {
-		t.Fatal("first visible project was not selectable at row zero")
-	}
-}
-
-func TestProjectSwitcherAllProjectsShortcut(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{
-		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
-	})
-	m = updExec(t, m, press("p"))
-	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if !strings.Contains(plain, "a all projects") {
-		t.Fatalf("global-admin selector should advertise the all-projects shortcut:\n%s", plain)
-	}
-
-	next, cmd := m.Update(press("a"))
-	m = next.(Model)
-	if cmd == nil || m.overlay != overlayNone || m.loadingWhat != "all projects" {
-		t.Fatalf("a shortcut did not start all-projects selection: overlay=%v loading=%q cmd=%v", m.overlay, m.loadingWhat, cmd != nil)
-	}
-	m = upd(t, m, cmd())
-	if !m.allProjects {
-		t.Fatal("a shortcut should enter all-projects scope")
+	if strings.Contains(plain, "current ·") || strings.Contains(plain, "a all projects") || strings.Contains(plain, "global-admin") {
+		t.Fatalf("scope selector retained obsolete status/aggregate UI:\n%s", plain)
 	}
 }
 
 func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
 	m = updExec(t, m, press("enter")) // LB
@@ -3205,7 +3175,7 @@ func TestLBOverviewListsAmphoraVMsDirectly(t *testing.T) {
 }
 
 func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	items, err := m.backend.ListListenerSummaries(context.Background(), "lb-1")
 	if err != nil {
@@ -3240,7 +3210,7 @@ func TestListenerRowsShowNormalizedProtocolEndpoint(t *testing.T) {
 }
 
 func TestPoolRowsShowProtocolAlgorithmMemberAndListenerCounts(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	items, err := m.backend.ListPoolSummaries(context.Background(), "lb-1")
 	if err != nil {
@@ -3269,28 +3239,27 @@ func TestPoolRowsShowProtocolAlgorithmMemberAndListenerCounts(t *testing.T) {
 	}
 }
 
-func TestAllProjectsMode(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{
-		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
-	})
-	m = updExec(t, m, press("p")) // open switcher, load projects (cursor on current project)
+func TestSystemScope(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("tab"))
 
-	// Move to and select the "all projects" row (index 0).
+	// The explicit system:all scope is the first selectable scope.
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})
 	nm, cmd := m.Update(press("enter"))
 	m = nm.(Model)
 	if cmd == nil {
-		t.Fatal("selecting ALL should return a command")
+		t.Fatal("selecting system:all should return a command")
 	}
-	m = upd(t, m, cmd()) // enterAllProjects -> switchedMsg -> onSwitched
-	if !m.allProjects {
-		t.Fatal("should be in all-projects mode after selecting ALL")
+	m = upd(t, m, cmd())
+	if m.scope.Kind != osclient.ScopeSystem || !m.multiProjectScope {
+		t.Fatalf("scope = %+v, want system:all", m.scope)
 	}
 
-	// The aggregated list now spans projects and tags each row with its project.
+	// A system-scoped Octavia list can span projects and tags each row with its
+	// owning project.
 	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
 	if len(m.entries) != 3 {
-		t.Fatalf("all-projects list should aggregate across projects; got %d", len(m.entries))
+		t.Fatalf("system-scope list should span visible projects; got %d", len(m.entries))
 	}
 	var tagged bool
 	for _, e := range m.entries {
@@ -3301,8 +3270,8 @@ func TestAllProjectsMode(t *testing.T) {
 	if !tagged {
 		t.Errorf("cross-project LB should be tagged with its project; entries=%v", labels(m))
 	}
-	if !strings.Contains(m.View(), "global admin · all projects") {
-		t.Errorf("subtitle should indicate all-projects scope")
+	if !strings.Contains(m.View(), "system:all") {
+		t.Errorf("subtitle should indicate system scope")
 	}
 
 	// The global scope does not identify the selected LB's owner, so the inline
@@ -3314,19 +3283,20 @@ func TestAllProjectsMode(t *testing.T) {
 			t.Fatalf("all-projects LB overview missing owner %q:\n%s", owner, overview)
 		}
 	}
-	if !strings.Contains(strings.Split(overview, "\n")[1], "scope: global admin · all projects") {
-		t.Fatalf("LB overview should retain the global scope subtitle:\n%s", overview)
+	if !strings.Contains(strings.Split(overview, "\n")[1], "scope: system:all") {
+		t.Fatalf("LB overview should retain the system scope subtitle:\n%s", overview)
 	}
 	m = upd(t, m, press("esc"))
 
-	// Selecting a concrete project exits all-projects mode.
-	m = updExec(t, m, press("p"))
-	m = upd(t, m, press("down")) // move off the ALL row onto the first project
+	// Selecting a concrete project replaces the system token with a project token.
+	m = updExec(t, m, press("tab"))
+	m = upd(t, m, press("down"))
+	m = upd(t, m, press("down"))
 	nm, cmd = m.Update(press("enter"))
 	m = nm.(Model)
 	m = upd(t, m, cmd())
-	if m.allProjects {
-		t.Errorf("selecting a concrete project should exit all-projects mode")
+	if m.scope.Kind != osclient.ScopeProject || m.multiProjectScope {
+		t.Errorf("selecting a project should activate a project token: %+v", m.scope)
 	}
 }
 

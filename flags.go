@@ -14,7 +14,7 @@ func newFlagSet() *flag.FlagSet {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "OLB — OpenStack Live Browser")
 		fmt.Fprintln(os.Stderr, "OLB — Browse your OpenStack cloud live.")
-		fmt.Fprintln(os.Stderr, "\nUsage: olb [flags]\n\nWith no arguments, lists the load balancers in the current project.")
+		fmt.Fprintln(os.Stderr, "\nUsage: olb [flags]\n\nWith no arguments, opens the browser in the credential's active scope.")
 		fmt.Fprintln(os.Stderr, "\nFlags:")
 		fs.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "\nAuthentication mirrors python-openstackclient (OS_* env vars, clouds.yaml,")
@@ -30,8 +30,7 @@ func registerAuthFlags(fs *flag.FlagSet) *osclient.Options {
 	o := &osclient.Options{}
 	fs.StringVar(&o.Cloud, "os-cloud", "", "clouds.yaml entry to use (or $OS_CLOUD)")
 	fs.StringVar(&o.Region, "os-region-name", "", "region to use (or $OS_REGION_NAME)")
-	fs.StringVar(&o.Project, "project", "", "initial project selection (name or ID)")
-	fs.BoolVar(&o.GlobalAdmin, "global-admin", false, "treat credentials as a global administrator; starts in the all-projects view and retains their scope when selecting projects, unless --project is given")
+	fs.StringVar(&o.Project, "project", "", "initial project scope (name or ID)")
 
 	fs.StringVar(&o.AuthURL, "os-auth-url", "", "Keystone auth URL (or $OS_AUTH_URL)")
 	fs.StringVar(&o.Username, "os-username", "", "username (or $OS_USERNAME)")
@@ -45,11 +44,4 @@ func registerAuthFlags(fs *flag.FlagSet) *osclient.Options {
 	fs.StringVar(&o.ApplicationCredentialName, "os-application-credential-name", "", "application credential name (or $OS_APPLICATION_CREDENTIAL_NAME)")
 	fs.StringVar(&o.ApplicationCredentialSecret, "os-application-credential-secret", "", "application credential secret (or $OS_APPLICATION_CREDENTIAL_SECRET)")
 	return o
-}
-
-// allProjectsMode reports whether olb should start in the all-projects view: a
-// global administrator that did not request a specific project. A concrete
-// --project always scopes to that project, even in global-admin mode.
-func allProjectsMode(o *osclient.Options) bool {
-	return o.GlobalAdmin && o.Project == ""
 }

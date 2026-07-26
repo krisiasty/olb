@@ -5,13 +5,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/krisiasty/olb/internal/osclient"
 )
 
 func homeModel(t *testing.T) Model {
 	t.Helper()
-	m := New(&fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}}, Config{PrintMode: true, HistoryCap: 50})
+	m := New(&fakeBackend{cap: switchCapability{CanSwitch: true}}, Config{PrintMode: true, HistoryCap: 50})
 	m.Init()
 	m = upd(t, m, tea.WindowSizeMsg{Width: 90, Height: 20})
 	return m
@@ -26,7 +24,7 @@ func TestHomeLanding(t *testing.T) {
 	}
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"OLB — OpenStack Live Browser", "project alpha", "admin, member",
+		"OLB — OpenStack Live Browser", "project Default / alpha", "admin, member",
 		"service catalog", "identity & access", "load balancers",
 	} {
 		if !strings.Contains(view, want) {
@@ -76,5 +74,13 @@ func TestHomeAreaNavigation(t *testing.T) {
 	fresh = updExec(t, fresh, press("L"))
 	if fresh.home || areaOf(fresh.activeWorkspace) != areaLB {
 		t.Fatalf("L from home should show the load-balancer list; home=%v active=%v", fresh.home, fresh.activeWorkspace)
+	}
+}
+
+func TestHomeOpensScopeSelector(t *testing.T) {
+	m := homeModel(t)
+	m = updExec(t, m, press("tab"))
+	if m.overlay != overlayScope || len(m.scopes) == 0 {
+		t.Fatalf("tab from home should open the scope selector: overlay=%v scopes=%d", m.overlay, len(m.scopes))
 	}
 }

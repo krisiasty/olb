@@ -13,39 +13,22 @@ func TestAPILogBodiesRequiresAPILogPath(t *testing.T) {
 	}
 }
 
-func TestAllProjectsModeDerivation(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{"global admin, no project → all projects", []string{"--global-admin"}, true},
-		{"global admin with project → scoped", []string{"--global-admin", "--project", "demo"}, false},
-		{"project only → scoped", []string{"--project", "demo"}, false},
-		{"no flags → scoped", nil, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := newFlagSet()
-			opts := registerAuthFlags(fs)
-			if err := fs.Parse(tc.args); err != nil {
-				t.Fatal(err)
-			}
-			if got := allProjectsMode(opts); got != tc.want {
-				t.Fatalf("allProjectsMode = %v, want %v", got, tc.want)
-			}
-		})
+func TestGlobalAdminFlagWasRemoved(t *testing.T) {
+	fs := newFlagSet()
+	registerAuthFlags(fs)
+	if err := fs.Parse([]string{"--global-admin"}); err == nil {
+		t.Fatal("obsolete --global-admin flag was unexpectedly accepted")
 	}
 }
 
-func TestGlobalAdminFlagPopulatesAuthOptions(t *testing.T) {
+func TestProjectFlagSelectsInitialProjectScope(t *testing.T) {
 	fs := newFlagSet()
 	opts := registerAuthFlags(fs)
-	if err := fs.Parse([]string{"--global-admin"}); err != nil {
+	if err := fs.Parse([]string{"--project", "demo"}); err != nil {
 		t.Fatal(err)
 	}
-	if !opts.GlobalAdmin {
-		t.Fatal("--global-admin did not populate auth options")
+	if opts.Project != "demo" {
+		t.Fatalf("project = %q, want demo", opts.Project)
 	}
 }
 

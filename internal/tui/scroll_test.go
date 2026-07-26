@@ -13,7 +13,7 @@ import (
 // The main list shows "▲ more"/"▼ more" scroll hints when it overflows the
 // visible region, and neither when it fits.
 func TestMainListScrollMarkers(t *testing.T) {
-	fb := &fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}}
+	fb := &fakeBackend{cap: switchCapability{CanSwitch: true}}
 	for i := 0; i < 30; i++ {
 		fb.users = append(fb.users, osclient.User{
 			ID: fmt.Sprintf("u-%02d", i), Name: fmt.Sprintf("user%02d", i),
@@ -44,7 +44,7 @@ func TestMainListScrollMarkers(t *testing.T) {
 // An identity overview's group heading stays pinned when its related list is
 // scrolled past that heading, so the visible rows are always labelled.
 func TestIdentityOverviewStickyHeading(t *testing.T) {
-	fb := &fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}}
+	fb := &fakeBackend{cap: switchCapability{CanSwitch: true}}
 	for i := 0; i < 15; i++ {
 		fb.projectList = append(fb.projectList, osclient.Project{
 			ID: fmt.Sprintf("p%02d", i), Name: fmt.Sprintf("proj%02d", i),
@@ -85,7 +85,7 @@ func TestIdentityOverviewStickyHeading(t *testing.T) {
 // scrolled back to the top even past a pinned heading, and on a wide screen the
 // hint is mirrored on both edges.
 func TestRelatedListScrollMarkers(t *testing.T) {
-	fb := &fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}}
+	fb := &fakeBackend{cap: switchCapability{CanSwitch: true}}
 	for i := 0; i < 15; i++ {
 		fb.projectList = append(fb.projectList, osclient.Project{
 			ID: fmt.Sprintf("p%02d", i), Name: fmt.Sprintf("proj%02d", i),
@@ -147,7 +147,7 @@ func TestRelatedListScrollMarkers(t *testing.T) {
 
 // A list that fits shows no scroll markers.
 func TestMainListNoScrollMarkersWhenFits(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true}) // two load balancers
+	m := start(t, switchCapability{CanSwitch: true}) // two load balancers
 	if view := ansiRE.ReplaceAllString(m.View(), ""); strings.Contains(view, "▲ more") || strings.Contains(view, "▼ more") {
 		t.Fatalf("a list that fits should show no scroll markers:\n%s", view)
 	}

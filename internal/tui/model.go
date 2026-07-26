@@ -23,10 +23,10 @@ const (
 	overlayNone overlayKind = iota
 	overlayHelp
 	overlayRaw      // y / j raw object view
-	overlayProject  // p project switcher
+	overlayScope    // tab authentication scope switcher
 	overlayPicker   // h history picker
 	overlaySort     // o sort-column picker (top-level lists)
-	overlaySwitcher // 0 area/view switcher
+	overlaySwitcher // space area/view switcher
 	overlayTelemetry
 	overlayToken // * current-token / whoami
 )
@@ -45,9 +45,6 @@ type Config struct {
 	// PrintMode routes copy actions to an on-screen value the user can select,
 	// instead of emitting OSC 52 — the escape hatch for terminals without it.
 	PrintMode bool
-	// AllProjects starts the tool with its original authentication scope and no
-	// local project filter (the backend must already be in that view mode).
-	AllProjects bool
 	// CacheSize bounds the LRU of status trees; CacheTTL bounds staleness.
 	CacheSize int
 	CacheTTL  time.Duration
@@ -128,7 +125,7 @@ type Model struct {
 	// when an unprivileged current user cannot enumerate role assignments.
 	userProjects map[string][]osclient.Project
 	// projectList is the identity area's browsable projects list, distinct from
-	// the global project selector's `projects` (ProjectInfo, re-scoping).
+	// the authentication scopes shown by the global selector.
 	projectList       []osclient.Project
 	projectListLoaded bool
 	projectListErr    string
@@ -189,7 +186,7 @@ type Model struct {
 	loc  location
 
 	// Number keys select persistent workspaces within the active area; uppercase
-	// accelerators (and the 0 switcher) select areas. The active workspace is
+	// accelerators (and the space switcher) select areas. The active workspace is
 	// projected into hist/loc/list fields so the existing navigation and rendering
 	// code can stay focused on one browser-like stack at a time. Keyed by listKind
 	// so adding a view/area needs no fixed-size bookkeeping.
@@ -271,14 +268,15 @@ type Model struct {
 	telemetryIntervalIndex int
 	telemetryGeneration    uint64
 
-	// Overlay search (project switcher / history picker), kept separate from the
+	// Overlay search (scope switcher / history picker), kept separate from the
 	// list filter so opening an overlay doesn't clobber an active list filter.
 	search       textinput.Model
-	projects     []osclient.ProjectInfo
-	projCursor   int
+	scopes       []osclient.ScopeInfo
+	scopeCursor  int
+	scopeError   string
 	pickCursor   int
 	sortCursor   int // highlighted row in the sort-column overlay
-	switchCursor int // highlighted row in the 0 area/view switcher overlay
+	switchCursor int // highlighted row in the space area/view switcher overlay
 
 	// tokenInfo snapshots the current auth token for the * whoami overlay; it is
 	// read from the backend (no network) each time the overlay opens.
@@ -322,12 +320,12 @@ type Model struct {
 	refreshCursor            int
 	refreshAutomatic         bool
 
-	project     osclient.ProjectInfo
-	allProjects bool // global-admin listing without a concrete project filter
-	filtered    bool // global-admin selection served by a filter, not a re-scope
-	showIDs     bool // list columns show object/project IDs instead of names
-	quitting    bool
-	clock       func() time.Time
+	project           osclient.ProjectInfo
+	multiProjectScope bool // active scope may expose resources from multiple projects
+	scope             osclient.ScopeInfo
+	showIDs           bool // list columns show object/project IDs instead of names
+	quitting          bool
+	clock             func() time.Time
 }
 
 // New builds the root model. backend must be authenticated.
@@ -362,6 +360,11 @@ func New(backend Backend, cfg Config) Model {
 	se.Prompt = "search: "
 	se.CharLimit = 128
 
+	scope := backend.CurrentScope()
+	project := osclient.ProjectInfo{}
+	if scope.Kind == osclient.ScopeProject {
+		project = osclient.ProjectInfo{ID: scope.ID, Name: scope.Name, DomainID: scope.DomainID}
+	}
 	m := Model{
 		backend:                backend,
 		keys:                   defaultKeys(),
@@ -374,9 +377,9 @@ func New(backend Backend, cfg Config) Model {
 		search:                 se,
 		vp:                     viewport.New(0, 0),
 		cache:                  cache.New(cfg.CacheSize, cfg.CacheTTL),
-		project:                backend.CurrentProject(),
-		allProjects:            cfg.AllProjects,
-		filtered:               backend.Filtered(),
+		project:                project,
+		multiProjectScope:      scope.Kind != "" && scope.Kind != osclient.ScopeProject,
+		scope:                  scope,
 		lbStats:                map[string]map[string]any{},
 		lbStatsChanges:         map[string]map[string]statChange{},
 		lbStatsSampledAt:       map[string]time.Time{},

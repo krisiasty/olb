@@ -2,8 +2,8 @@ package tui
 
 // areaKind is a top-level functional area — a group of related views. Areas are
 // the navigation dimension above workspaces: within an area, number keys 1-n
-// switch views; uppercase accelerator keys (or the 0 switcher overlay) switch
-// areas. The project selector stays global across every area.
+// switch views; uppercase accelerator keys (or the space switcher overlay) switch
+// areas. The authentication-scope selector stays global across every area.
 type areaKind int
 
 const (
@@ -100,7 +100,7 @@ func allViews() []listKind {
 	return out
 }
 
-// switcherRow is one selectable entry in the 0 area/view switcher overlay.
+// switcherRow is one selectable entry in the space area/view switcher overlay.
 type switcherRow struct {
 	area  areaKind
 	view  listKind

@@ -48,13 +48,9 @@ type Backend interface {
 	ListEndpoints(ctx context.Context) ([]osclient.Endpoint, error)
 	ListRegions(ctx context.Context) ([]osclient.Region, error)
 	CurrentToken() osclient.TokenInfo
-	ListProjects(ctx context.Context) ([]osclient.ProjectInfo, error)
-	SwitchProject(ctx context.Context, target osclient.ProjectInfo) error
-	EnterAllProjects(ctx context.Context) error
-	CurrentProject() osclient.ProjectInfo
-	AllProjects() bool
-	Filtered() bool
-	SwitchCapability() osclient.SwitchCapability
+	ListScopes(ctx context.Context) ([]osclient.ScopeInfo, error)
+	SwitchScope(ctx context.Context, target osclient.ScopeInfo) error
+	CurrentScope() osclient.ScopeInfo
 }
 
 // TelemetryBackend is optional so alternate/testing backends can run without

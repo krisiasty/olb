@@ -30,6 +30,10 @@ func TestIdentityListsFallBackToCurrentToken(t *testing.T) {
 				{"id":"g2","name":"operators","domain_id":"default"},
 				{"id":"g1","name":"developers","domain_id":"default","description":"application developers"}
 			],"links":{"next":null}}`))
+		case "/v3/auth/projects":
+			_, _ = w.Write([]byte(`{"projects":[
+				{"id":"p1","name":"alpha","domain_id":"default"}
+			],"links":{"next":null}}`))
 		default:
 			t.Errorf("unexpected request path %q", r.URL.Path)
 			http.NotFound(w, r)
@@ -75,8 +79,8 @@ func TestIdentityListsFallBackToCurrentToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if domainList.Restriction != "current user's domain" || len(domainList.Items) != 1 {
-		t.Fatalf("domain fallback = %+v, want current user's domain", domainList)
+	if domainList.Restriction != "domains available to current user" || len(domainList.Items) != 1 {
+		t.Fatalf("domain fallback = %+v, want current user's available domain", domainList)
 	}
 	if d := domainList.Items[0]; d.ID != "default" || d.Name != "Default" || !d.Partial {
 		t.Fatalf("token domain mapped incorrectly: %+v", d)
@@ -151,8 +155,15 @@ func TestUnprivilegedDomainAndProjectDomainStayDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(domainList.Items) != 1 || domainList.Items[0].ID != "user-domain" || domainList.Items[0].Name != "Users" {
-		t.Fatalf("domain fallback = %+v, want authenticated user's domain", domainList)
+	if len(domainList.Items) != 2 {
+		t.Fatalf("domain fallback = %+v, want both identity and accessible-project domains", domainList)
+	}
+	gotDomains := map[string]string{}
+	for _, domain := range domainList.Items {
+		gotDomains[domain.ID] = domain.Name
+	}
+	if gotDomains["user-domain"] != "Users" || gotDomains["project-domain"] != "Projects" {
+		t.Fatalf("domain fallback = %+v, want user and active-project domain names", domainList)
 	}
 
 	projectList, err := c.ListProjectsDetailed(context.Background())
@@ -169,6 +180,70 @@ func TestUnprivilegedDomainAndProjectDomainStayDistinct(t *testing.T) {
 	}
 	if len(relatedProjects) != 1 || relatedProjects[0].ID != "p1" || relatedProjects[0].DomainName != "Projects" {
 		t.Fatalf("related projects = %+v, want available projects filtered to selected domain", relatedProjects)
+	}
+}
+
+func TestDomainScopeRestrictsIdentityCollections(t *testing.T) {
+	seen := map[string][]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = append(seen[r.URL.Path], r.URL.Query().Get("domain_id"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/users":
+			_, _ = w.Write([]byte(`{"users":[],"links":{"next":null}}`))
+		case "/v3/groups":
+			_, _ = w.Write([]byte(`{"groups":[],"links":{"next":null}}`))
+		case "/v3/roles":
+			_, _ = w.Write([]byte(`{"roles":[],"links":{"next":null}}`))
+		case "/v3/projects":
+			_, _ = w.Write([]byte(`{"projects":[],"links":{"next":null}}`))
+		case "/v3/domains/d1":
+			_, _ = w.Write([]byte(`{"domain":{"id":"d1","name":"Domain One","enabled":true}}`))
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	identity := &gophercloud.ServiceClient{
+		ProviderClient: &gophercloud.ProviderClient{},
+		Endpoint:       server.URL + "/v3/",
+	}
+	scope := ScopeInfo{Kind: ScopeDomain, ID: "d1", Name: "Domain One"}
+	sc := &serviceClients{identity: identity, scope: scope}
+	c := &Clients{services: sc, activeServices: sc, scope: scope}
+	ctx := context.Background()
+
+	if _, err := c.ListUsers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListGroups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListRoles(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListProjectsDetailed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	domainList, err := c.ListDomains(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domainList.Items) != 1 || domainList.Items[0].ID != "d1" {
+		t.Fatalf("domain list = %+v, want active domain only", domainList)
+	}
+
+	for _, path := range []string{"/v3/users", "/v3/groups", "/v3/roles", "/v3/projects"} {
+		if len(seen[path]) == 0 {
+			t.Errorf("%s was not requested", path)
+			continue
+		}
+		for _, domainID := range seen[path] {
+			if domainID != "d1" {
+				t.Errorf("%s domain_id = %q, want d1", path, domainID)
+			}
+		}
 	}
 }
 

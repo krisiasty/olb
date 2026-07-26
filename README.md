@@ -67,12 +67,13 @@ go install github.com/krisiasty/olb@latest
 
 ## Usage
 
-With no arguments, `olb` lists the load balancers in your current project:
+With no arguments, `olb` opens its overview in the authentication scope selected
+by your OpenStack credentials:
 
 ```sh
 olb                        # uses OS_* env / clouds.yaml
 olb --os-cloud mycloud     # pick a clouds.yaml entry
-olb --project other-proj   # select an initial project filter (name or ID)
+olb --project other-proj   # select an initial project scope (name or ID)
 olb --print                # copy actions show the value instead of OSC 52
 olb --api-log api.jsonl    # append sanitized API metadata for debugging
 olb --licenses             # print embedded third-party notices
@@ -86,13 +87,9 @@ unchanged: `OS_*` environment variables, `clouds.yaml` (via `--os-cloud` /
 `OS_CLOUD`), and CLI flags (`--os-auth-url`, `--os-username`, …). Precedence is
 **CLI flags > environment > clouds.yaml**.
 
-`--project` selects the initial TUI project. In regular mode this exchanges the
-startup token for a token scoped to that project. With `--global-admin`, it first
-tries to re-scope the startup credential to that project and otherwise falls back
-to a server-side filter (see [Project switching](#project-switching)); a global
-administrator that omits `--project` starts in the all-projects view. Use
-`--os-project-name` or `--os-project-id` to set the startup authentication
-scope itself.
+`--project` is a convenience for selecting an initial project scope by name or
+ID. Use `--os-project-name` or `--os-project-id` to set the startup
+authentication scope itself.
 
 ### API debugging log
 
@@ -121,30 +118,35 @@ a second log file, for example:
 jq 'select(.event == "response" and (.slow or .outcome != "success"))' api.jsonl
 ```
 
-### Project switching
+### Authentication scope switching
 
-Press `p` to change the active project without leaving the tool. Regular mode
-populates the selector from Keystone `GET /v3/auth/projects`. A selection
-exchanges the startup token for a fresh project-scoped token and creates
-matching Octavia, Neutron, Nova, Barbican, and optional Magnum clients.
+Press `Tab` to switch the active Keystone authentication scope without leaving
+the tool. The selector combines scopes returned by `GET /v3/auth/system`,
+`GET /v3/auth/domains`, and `GET /v3/auth/projects`:
 
-Pass `--global-admin` to explicitly treat the startup credentials as globally
-privileged. This mode validates administrative Keystone project enumeration and
-a bounded cross-project Octavia read, and always populates the selector from
-`GET /v3/projects` using the startup credentials. Selecting a project first tries
-to **re-scope** the credential to it — a real project-scoped token, so
-project-scoped resources such as listener TLS certificates become readable. When
-the credential cannot be re-scoped to the target (typically a policy-only
-administrator with no role assignment on it), the selection falls back to an
-Octavia `project_id` **filter** on the retained global token: the scope header
-marks it `(filtered)` and certificate details are unavailable for that project.
+```text
+SYSTEM
+    system:all
+DOMAINS
+    Default
+PROJECTS · domain: Default
+    alpha (current)
+    beta
+```
 
-In `--global-admin` mode, the switcher's first entry is
-**⟨ all projects ⟩**. Regular mode omits that row and shows a footer hint to
-restart with `--global-admin` for the global view. A global administrator starts
-in this all-projects view unless `--project` requests a specific project.
-Changing the selected project clears all five workspace histories and returns to
-the load-balancer list because previous objects may not exist in the new view.
+Only scope rows are selectable; headings are not. Projects are grouped by their
+owning domain. If a domain name cannot be resolved, its ID is used. The current
+token scope is labelled `(current)`, while the highlighted row uses the same
+arrow and background as other selectors.
+
+Selecting a row obtains a real system-, domain-, or project-scoped token and
+builds matching service clients. The new token replaces the active state only
+after authentication succeeds. A failure leaves the current scope and view
+unchanged. There is no synthetic aggregate mode: a system- or domain-scoped
+token sees exactly what each OpenStack service authorizes for that token.
+Switching scope clears
+scope-dependent data and histories, while retaining the current area and
+returning its active view to the root.
 
 ### Keybindings
 
@@ -156,7 +158,7 @@ the load-balancer list because previous objects may not exist in the new view.
 | | `→` | Forward (history) |
 | | `ctrl+home` | Jump to the active view's pinned root history entry |
 | | `h` | History picker overlay |
-| Areas | `0` | Area/view switcher — a searchable overlay of every area and view |
+| Areas | `Space` | Area/view switcher — a searchable overlay of every area and view |
 | | `A` / `L` | Jump to the auth / load-balancer area (uppercase accelerators) |
 | | `1`–`9` | Switch view within the active area |
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
@@ -165,7 +167,7 @@ the load-balancer list because previous objects may not exist in the new view.
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
 | | `o` | Sort a top-level list by a name/id/IP column, ascending (esc cancels, enter selects) |
-| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit |
+| Global | `Tab` `r` `a` `t` `?` `q` | Scope · refresh · auto-refresh · telemetry · help · quit |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
@@ -177,7 +179,7 @@ reference jump.
 olb opens on a **home overview** that orients you before you dive in: your
 current scope, the authenticated identity and roles (read from the token, no API
 call), and the browsable areas with their accelerators. Press an area key
-(`S`/`A`/`L`), `0` for the switcher, or `` ` `` to return to the overview at any
+(`S`/`A`/`L`), `Space` for the switcher, or `` ` `` to return to the overview at any
 time.
 
 Views are grouped into **areas**. The load-balancer area (`L`) holds the load
@@ -185,13 +187,12 @@ balancer, VIP, listener, pool, and amphora views; the identity & access area
 (`A`) holds the Keystone identity views (users, domains, groups, a browsable
 projects list, roles); and the service catalog area (`S`) holds the services,
 endpoints, and regions. That projects view is for exploring/inspecting projects
-and is distinct
-from the global project selector (`p`), which re-scopes the load-balancer and
-other resource views. Uppercase accelerators jump straight to an area, `0` opens a searchable
+and is distinct from the global authentication-scope selector (`Tab`), which
+re-authenticates the service clients. Uppercase accelerators jump straight to an area, `Space` opens a searchable
 switcher over every area and view, and number keys `1`–`9` select a view *within
 the active area* (so the same digit means a different view per area). Returning
 to an area restores the view you last used there. The area is shown as a chip at
-the start of the breadcrumb, and the project selector stays global across every
+the start of the breadcrumb, and the scope selector stays global across every
 area. Each view is a persistent workspace with its own back/forward history,
 selection, scroll position, and filters, switched without adding history
 entries; cross-area reference edges (an LB member → its Nova instance, an LB →
@@ -206,15 +207,18 @@ groups, and users; a **user** shows its domain and the groups it belongs to; a
 and a **role** shows the roles it implies and its **assignments** (which user or
 group holds it on which project/domain).
 
-When Keystone policy denies full identity collections, olb falls back to
-self-service data instead of leaving the domains, users, groups, and roles views
-empty: the domains view shows the authenticated user's domain, the users view
-shows the authenticated user, the groups view shows that user's memberships,
-and the roles view shows the roles effective in the active token scope. Each
-restricted view labels its source explicitly. Group members, role assignments,
-and the complete role catalog can still require elevated RBAC. Token-backed role
-rows therefore use **source** and **scope** columns, and their detail view omits
-the unavailable implied-role and assignment sections.
+Identity collections follow the active token scope. A system token requests
+global collections; a domain token restricts users, groups, projects, and
+domain-specific roles to that domain; a project token uses the self-service
+available-project view where appropriate. When policy denies full collections,
+olb falls back to self-service data instead of leaving views empty: users shows
+the authenticated user, groups shows that user's memberships, domains shows the
+user's identity domain plus domains owning accessible projects, and roles shows
+roles effective in the active token. Each restricted view labels its source.
+Group members, role assignments, and the complete role catalog can still
+require elevated RBAC. Token-backed role rows therefore use **source** and
+**scope** columns, and their detail view omits unavailable implied-role and
+assignment sections.
 
 **Role assignments** are surfaced from every side, so both "what can this user
 do" and "who has access here" are one drill-in away:
@@ -228,7 +232,8 @@ do" and "who has access here" are one drill-in away:
   they hold a role on are also listed as a **projects** section, so you can jump
   straight to a project you have access to — even one outside the current scope;
 - a **project** and **domain** list their assignments as `<actor> as role:X`,
-  opening the actor;
+  opening the actor. A domain shows grants scoped directly to that domain, not
+  every project grant inside it;
 - a role from the full **role catalog** lists its assignments as `<actor> on
   <target>`, opening the actor.
 

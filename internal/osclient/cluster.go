@@ -29,7 +29,7 @@ type COECluster struct {
 // ListCOEClusters lists Magnum clusters once for the active credential scope.
 // Magnum is optional so clouds without it still retain the complete Octavia UI.
 func (c *Clients) ListCOEClusters(ctx context.Context) ([]COECluster, error) {
-	sc, err := c.clientsForLB(ctx, "")
+	sc, err := c.activeClients()
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ type COEClusterDetail struct {
 // endpoint the list call does not populate). Callers fetch it lazily and cache
 // it by UUID.
 func (c *Clients) GetCOECluster(ctx context.Context, id string) (COEClusterDetail, error) {
-	sc, err := c.clientsForLB(ctx, "")
+	sc, err := c.activeClients()
 	if err != nil {
 		return COEClusterDetail{}, err
 	}

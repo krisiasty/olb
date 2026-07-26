@@ -184,16 +184,21 @@ type domainContentsMsg struct {
 	err      error
 }
 
-type projectsMsg struct {
-	projects []osclient.ProjectInfo
-	err      error
+type scopesMsg struct {
+	scopes []osclient.ScopeInfo
+	err    error
+}
+
+type switchedScopeMsg struct {
+	target osclient.ScopeInfo
+	scope  osclient.ScopeInfo
+	err    error
 }
 
 type switchedMsg struct {
-	project  osclient.ProjectInfo
-	all      bool
-	filtered bool // global-admin selection served by a filter (not a re-scope)
-	err      error
+	project      osclient.ProjectInfo
+	multiProject bool
+	err          error
 }
 
 type statsMsg struct {
@@ -571,7 +576,7 @@ func (m *Model) startCOEClustersLoad() tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), coeRequestTimeout)
 	m.coeCancel = cancel
 	b := m.backend
-	projectID, all := m.project.ID, m.allProjects
+	projectID, all := m.project.ID, m.multiProjectScope
 	return func() tea.Msg {
 		defer cancel()
 		items, err := b.ListCOEClusters(ctx)
@@ -705,33 +710,23 @@ func (m Model) loadAmphoraeCmd(lbID string, refresh bool) tea.Cmd {
 	}
 }
 
-func (m Model) loadProjectsCmd() tea.Cmd {
+func (m Model) loadScopesCmd() tea.Cmd {
 	b := m.backend
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		ps, err := b.ListProjects(ctx)
-		return projectsMsg{projects: ps, err: err}
+		scopes, err := b.ListScopes(ctx)
+		return scopesMsg{scopes: scopes, err: err}
 	}
 }
 
-func (m Model) switchProjectCmd(target osclient.ProjectInfo) tea.Cmd {
+func (m Model) switchScopeCmd(target osclient.ScopeInfo) tea.Cmd {
 	b := m.backend
 	return func() tea.Msg {
 		ctx, cancel := ctxTimeout()
 		defer cancel()
-		err := b.SwitchProject(ctx, target)
-		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), filtered: b.Filtered(), err: err}
-	}
-}
-
-func (m Model) enterAllProjectsCmd() tea.Cmd {
-	b := m.backend
-	return func() tea.Msg {
-		ctx, cancel := ctxTimeout()
-		defer cancel()
-		err := b.EnterAllProjects(ctx)
-		return switchedMsg{project: b.CurrentProject(), all: b.AllProjects(), filtered: b.Filtered(), err: err}
+		err := b.SwitchScope(ctx, target)
+		return switchedScopeMsg{target: target, scope: b.CurrentScope(), err: err}
 	}
 }
 

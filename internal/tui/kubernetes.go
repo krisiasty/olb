@@ -218,9 +218,9 @@ func (m *Model) applyKubernetesRelations(tree *model.Tree) {
 	if found && cluster.ProjectID == "" {
 		// Magnum's cluster-list response commonly omits project_id. The related
 		// cluster is identified from this load balancer, whose Octavia metadata
-		// carries the authoritative owning project even in all-projects mode.
+		// carries the authoritative owning project outside project scope.
 		cluster.ProjectID = tree.Meta.ProjectID
-		if cluster.ProjectID == "" && !m.allProjects {
+		if cluster.ProjectID == "" && !m.multiProjectScope {
 			cluster.ProjectID = m.project.ID
 		}
 	}

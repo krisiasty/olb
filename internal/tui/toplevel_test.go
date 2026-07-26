@@ -37,7 +37,7 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 		{"1", "load balancers", "PROVIDER", []string{"NAME", "PROVIDER", "VIP"}, "lb1"},
 	}
 	for _, tt := range tests {
-		m := start(t, osclient.SwitchCapability{CanSwitch: true})
+		m := start(t, switchCapability{CanSwitch: true})
 		m = updExec(t, m, press(tt.key))
 		view := ansiRE.ReplaceAllString(m.View(), "")
 
@@ -60,7 +60,7 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 }
 
 func TestVIPTablePlacesFloatingIPAfterAddress(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))
 	if len(m.entries) == 0 || m.entries[0].kind != entVIP {
 		t.Fatal("VIP list has no VIP row")
@@ -76,7 +76,7 @@ func TestVIPTablePlacesFloatingIPAfterAddress(t *testing.T) {
 }
 
 func TestVIPListRefreshReloadsFloatingIPColumn(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))
 	if got := m.rowCells(m.entries[0])[1]; got != "198.51.100.7" {
 		t.Fatalf("initial floating IP = %q", got)
@@ -110,7 +110,7 @@ func TestVIPListRefreshReloadsFloatingIPColumn(t *testing.T) {
 }
 
 func TestListenerTableHumanizesTerminatedHTTPS(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("3"))
 	for _, e := range m.entries {
 		if e.kind != entListener || e.listener.ID != "lsn-2" {
@@ -142,7 +142,7 @@ func TestAmphoraEntriesFilterThroughVisibleLoadBalancers(t *testing.T) {
 }
 
 func TestTopLevelWorkspacesKeepIndependentHistory(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	lbHistory := m.hist
 	m = updExec(t, m, press("enter")) // LB workspace: LB overview
 	if idx, ok := m.selectLabel("listener:http"); ok {
@@ -202,7 +202,7 @@ func TestTopLevelWorkspacesKeepIndependentHistory(t *testing.T) {
 }
 
 func TestTopLevelWorkspacesRestoreSelectionAndFilters(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	if idx, ok := m.selectLabel("lb2"); ok {
 		m.cursor = idx
 	} else {
@@ -232,7 +232,7 @@ func TestTopLevelWorkspacesRestoreSelectionAndFilters(t *testing.T) {
 }
 
 func TestActiveTopLevelKeyIsNoOpAndCtrlHomeUsesWorkspaceRoot(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("3"))
 	if idx, ok := m.selectLabel("listener:http"); ok {
 		m.cursor = idx
@@ -268,7 +268,7 @@ func TestActiveTopLevelKeyIsNoOpAndCtrlHomeUsesWorkspaceRoot(t *testing.T) {
 }
 
 func TestHistoryPickerPageAndBoundaryNavigation(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m.height = 12 // five history rows are visible in the picker
 	for i := 0; i < 11; i++ {
 		m.hist.navigate(histEntry{id: model.Identity{
@@ -353,7 +353,7 @@ func TestWorkspaceHistoryRetainsRootIdentityAfterCapEviction(t *testing.T) {
 }
 
 func TestProjectScopeChangeResetsEveryWorkspaceHistoryAndKeepsActiveView(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter"))
 	m = updExec(t, m, press("3"))
 	if idx, ok := m.selectLabel("listener:http"); ok {
@@ -394,7 +394,7 @@ func TestProjectScopeChangeKeepsEachTopLevelView(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.kind.rootLabel(), func(t *testing.T) {
-			m := start(t, osclient.SwitchCapability{CanSwitch: true})
+			m := start(t, switchCapability{CanSwitch: true})
 			if tt.kind != kindLB {
 				m = updExec(t, m, press(tt.key))
 			}
@@ -410,7 +410,7 @@ func TestProjectScopeChangeKeepsEachTopLevelView(t *testing.T) {
 }
 
 func TestAsyncReferenceCompletionStaysInOriginatingWorkspace(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // cache lb-1 tree in the LB workspace
 	lbHistory := m.hist
 	listenerCount := len(m.workspaces[kindListener].hist.entries)
@@ -436,7 +436,7 @@ func TestAsyncReferenceCompletionStaysInOriginatingWorkspace(t *testing.T) {
 }
 
 func TestVIPViewExpandsAdditionalVIPs(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	// lb-1 contributes its primary VIP and one additional VIP.
@@ -448,7 +448,7 @@ func TestVIPViewExpandsAdditionalVIPs(t *testing.T) {
 }
 
 func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))
 	m = updExec(t, m, press("enter"))
 	if m.loc.node == nil || m.loc.node.Type != model.TypeVIP {
@@ -550,7 +550,7 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 }
 
 func TestVIPRefreshReloadsNeutronDetailAndFloatingIP(t *testing.T) {
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))
 	m = updExec(t, m, press("enter"))
 	vip := m.loc.node
@@ -625,7 +625,7 @@ func TestVIPRefreshReloadsNeutronDetailAndFloatingIP(t *testing.T) {
 
 func TestTopLevelDrillIn(t *testing.T) {
 	// Listener drills into its own node; the breadcrumb keeps the listeners root.
-	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("3"))
 	if idx, ok := m.selectLabel("listener:http"); ok {
 		m.cursor = idx
@@ -642,7 +642,7 @@ func TestTopLevelDrillIn(t *testing.T) {
 
 	// Amphora drills directly into a detailed view; the selected list object is
 	// attached to its owning status tree after that tree loads.
-	m = start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("5"))
 	m.cursor = firstSelectableIndex(m.entries)
 	m = updExec(t, m, press("enter"))
@@ -655,7 +655,7 @@ func TestTopLevelDrillIn(t *testing.T) {
 }
 
 func TestAmphoraeAdminRequiredMessage(t *testing.T) {
-	m := New(&fakeBackend{cap: osclient.SwitchCapability{CanSwitch: true}, amphoraeErr: osclient.ErrAdminRequired}, Config{HistoryCap: 50})
+	m := New(&fakeBackend{cap: switchCapability{CanSwitch: true}, amphoraeErr: osclient.ErrAdminRequired}, Config{HistoryCap: 50})
 	m.Init()
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
@@ -666,48 +666,54 @@ func TestAmphoraeAdminRequiredMessage(t *testing.T) {
 	}
 }
 
-func TestGlobalAdminFilteredSelectionSurfacedInHeader(t *testing.T) {
-	capab := osclient.SwitchCapability{CanSwitch: true, GlobalAdmin: true, CanAllProjects: true, AllProjectsChecked: true}
-
-	t.Run("re-scope denied falls back to a filtered selection", func(t *testing.T) {
-		backend := &fakeBackend{cap: capab, scopeDenied: true}
-		m := New(backend, Config{AllProjects: true})
+func TestAuthenticationScopeSwitchIsExplicit(t *testing.T) {
+	t.Run("denied scope leaves the current token active", func(t *testing.T) {
+		backend := &fakeBackend{scopeDenied: true}
+		m := New(backend, Config{})
 		m.width, m.height = 120, 40
-
-		msg, ok := m.switchProjectCmd(osclient.ProjectInfo{ID: "p2", Name: "beta"})().(switchedMsg)
-		if !ok || msg.err != nil {
-			t.Fatalf("switch result = %+v", msg)
+		m = upd(t, m, scopesMsg{scopes: []osclient.ScopeInfo{
+			{Kind: osclient.ScopeProject, ID: "p1", Name: "alpha", DomainName: "Default"},
+			{Kind: osclient.ScopeProject, ID: "p2", Name: "beta", DomainName: "Default"},
+		}})
+		m.scopeCursor = 1
+		m = updExec(t, m, press("enter"))
+		if m.scope.ID != "p1" || !strings.Contains(m.subtitleLine(), "project Default / alpha") {
+			t.Fatalf("denied authentication changed scope: %+v / %q", m.scope, m.subtitleLine())
 		}
-		if !msg.filtered {
-			t.Fatal("switchedMsg.filtered = false, want true when re-scope is denied")
+		if m.overlay != overlayScope || m.loading {
+			t.Fatalf("denied authentication closed selector: overlay=%v loading=%v", m.overlay, m.loading)
 		}
-		m = upd(t, m, msg)
-		if !m.filtered {
-			t.Fatal("model did not record the filtered selection")
+		view := ansiRE.ReplaceAllString(m.View(), "")
+		if !strings.Contains(view, `Could not switch to project "beta"`) {
+			t.Fatalf("selector does not contain a friendly error:\n%s", view)
 		}
-		if !strings.Contains(m.subtitleLine(), "(filtered)") {
-			t.Fatalf("header missing filtered marker: %q", m.subtitleLine())
+		for _, leaked := range []string{"scope denied", "Expected HTTP response code"} {
+			if strings.Contains(view, leaked) {
+				t.Fatalf("selector leaked backend error %q:\n%s", leaked, view)
+			}
+		}
+		if m.flash != "" {
+			t.Fatalf("scope failure escaped into the global flash line: %q", m.flash)
+		}
+		m = upd(t, m, press("esc"))
+		if m.overlay != overlayNone {
+			t.Fatalf("esc did not cancel selector after failed switch: overlay=%v", m.overlay)
 		}
 	})
 
-	t.Run("successful re-scope is not marked filtered", func(t *testing.T) {
-		backend := &fakeBackend{cap: capab}
-		m := New(backend, Config{AllProjects: true})
+	t.Run("successful switch reports the new token scope", func(t *testing.T) {
+		backend := &fakeBackend{}
+		m := New(backend, Config{})
 		m.width, m.height = 120, 40
 
-		msg, ok := m.switchProjectCmd(osclient.ProjectInfo{ID: "p2", Name: "beta"})().(switchedMsg)
+		target := osclient.ScopeInfo{Kind: osclient.ScopeDomain, ID: "default", Name: "Default"}
+		msg, ok := m.switchScopeCmd(target)().(switchedScopeMsg)
 		if !ok || msg.err != nil {
 			t.Fatalf("switch result = %+v", msg)
 		}
-		if msg.filtered {
-			t.Fatal("switchedMsg.filtered = true, want false when re-scope succeeds")
-		}
 		m = upd(t, m, msg)
-		if m.filtered {
-			t.Fatal("scoped selection was incorrectly marked filtered")
-		}
-		if strings.Contains(m.subtitleLine(), "(filtered)") {
-			t.Fatalf("scoped header shows filtered marker: %q", m.subtitleLine())
+		if !m.scope.Equal(target) || !strings.Contains(m.subtitleLine(), "domain Default") {
+			t.Fatalf("scope/header = %+v / %q", m.scope, m.subtitleLine())
 		}
 	})
 }

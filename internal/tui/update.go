@@ -120,10 +120,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onRefResolve(msg)
 	case amphoraeMsg:
 		return m.onAmphorae(msg)
-	case projectsMsg:
-		return m.onProjects(msg)
+	case scopesMsg:
+		return m.onScopes(msg)
 	case switchedMsg:
 		return m.onSwitched(msg)
+	case switchedScopeMsg:
+		return m.onScopeSwitched(msg)
 	case flashClearMsg:
 		if msg.token == m.flashToken {
 			m.flash, m.flashErr = "", false
@@ -2048,7 +2050,7 @@ func (m Model) onAmphorae(msg amphoraeMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onCOEClusters(msg coeClustersMsg) (tea.Model, tea.Cmd) {
-	if msg.projectID != m.project.ID || msg.all != m.allProjects {
+	if msg.projectID != m.project.ID || msg.all != m.multiProjectScope {
 		// A stale-scope result; a newer load (if any) owns coeCancel, so leave it.
 		return m, nil
 	}
@@ -2204,20 +2206,60 @@ func (m *Model) applyPoolSummaries(lbID string, items map[string]osclient.PoolSu
 	}
 }
 
-func (m Model) onProjects(msg projectsMsg) (tea.Model, tea.Cmd) {
+func (m Model) onScopes(msg scopesMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	if msg.err != nil {
-		m.overlay = overlayNone
-		return m, m.setFlash(msg.err.Error(), true)
+		m.scopeError = "Could not load available authentication scopes."
+		m.overlay = overlayScope
+		return m, nil
 	}
 	m.search.Prompt = "filter: "
 	m.search.PromptStyle = m.st.filterPrompt
 	m.search.SetValue("")
 	m.search.Blur()
-	m.projects = msg.projects
-	m.projCursor = m.currentProjectCursor()
-	m.overlay = overlayProject
+	m.scopes = msg.scopes
+	m.scopeCursor = m.currentScopeCursor()
+	m.scopeError = ""
+	m.overlay = overlayScope
 	return m, nil
+}
+
+func (m Model) onScopeSwitched(msg switchedScopeMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.loading = false
+		m.loadingWhat = ""
+		m.scopeError = scopeSwitchErrorMessage(msg.target, msg.err)
+		m.overlay = overlayScope
+		return m, nil
+	}
+	m.scopeError = ""
+	m.scope = msg.scope
+	project := osclient.ProjectInfo{}
+	if msg.scope.Kind == osclient.ScopeProject {
+		project = osclient.ProjectInfo{ID: msg.scope.ID, Name: msg.scope.Name, DomainID: msg.scope.DomainID}
+	}
+	return m.onSwitched(switchedMsg{
+		project:      project,
+		multiProject: msg.scope.Kind != osclient.ScopeProject,
+	})
+}
+
+func scopeSwitchErrorMessage(target osclient.ScopeInfo, err error) string {
+	var scopeErr *osclient.ScopeSwitchError
+	if errors.As(err, &scopeErr) {
+		return scopeErr.Error()
+	}
+	label := target.Label()
+	switch target.Kind {
+	case osclient.ScopeDomain:
+		return fmt.Sprintf("Could not switch to domain %q. Authentication for that scope failed.", label)
+	case osclient.ScopeProject:
+		return fmt.Sprintf("Could not switch to project %q. Authentication for that scope failed.", label)
+	case osclient.ScopeSystem:
+		return "Could not switch to system scope. Authentication for that scope failed."
+	default:
+		return "Could not switch authentication scope."
+	}
 }
 
 func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
@@ -2248,8 +2290,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	// A new project scope means a different visible object set: drop caches and
 	// history so objects from the previous authorization context cannot leak in.
 	m.project = msg.project
-	m.allProjects = msg.all
-	m.filtered = msg.filtered
+	m.multiProjectScope = msg.multiProject
 	m.cache = cache.New(m.cfg.CacheSize, m.cfg.CacheTTL)
 	m.lbStats = map[string]map[string]any{}
 	m.lbStatsChanges = map[string]map[string]statChange{}
@@ -2335,13 +2376,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 		// name, which comes from the LB list rather than their own API response.
 		loadCmd = tea.Batch(loadCmd, m.loadLBsCmd())
 	}
-	scope := "project " + projectLabel(msg.project)
-	if msg.all {
-		scope = "all projects"
-	}
-	if m.backend.SwitchCapability().GlobalAdmin {
-		scope = "global admin · " + scope
-	}
+	scope := m.scopeText()
 	// Re-warm the Magnum cluster list for the new scope; the switch invalidated
 	// the previous project's pre-warmed list. Without this the COE overview would
 	// sit at "obtaining cluster data…" until a drill-in triggered a lazy fetch,
@@ -2790,7 +2825,7 @@ func (m *Model) setTopLevelEntries() {
 	case kindPool:
 		m.allEntries = poolEntries(m.pools, m.lbNameByID())
 	case kindAmphora:
-		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID(), !m.allProjects)
+		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID(), !m.multiProjectScope)
 	case kindUser:
 		m.allEntries = userEntries(m.users)
 	case kindDomain:
@@ -2808,7 +2843,7 @@ func (m *Model) setTopLevelEntries() {
 	case kindRegion:
 		m.allEntries = regionEntries(m.regions)
 	default:
-		m.allEntries = lbEntries(m.lbs, m.allProjects)
+		m.allEntries = lbEntries(m.lbs, m.multiProjectScope)
 	}
 	m.entries = nil
 	m.cursor, m.top = 0, 0

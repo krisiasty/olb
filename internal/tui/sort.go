@@ -32,7 +32,7 @@ func (m Model) sortColumns() []sortColumn {
 			{key: "name", label: "Name", value: func(e entry) string { return e.lb.Name }},
 			{key: "id", label: "Load balancer ID", value: func(e entry) string { return e.lb.ID }},
 		}
-		if m.allProjects {
+		if m.multiProjectScope {
 			cols = append(cols, sortColumn{key: "project", label: "Project", value: func(e entry) string {
 				if e.lb.ProjectName != "" {
 					return e.lb.ProjectName
@@ -166,7 +166,7 @@ func enabledSortValue(enabled bool) string {
 
 // activeSortColumn resolves the workspace's stored sort key to a live column for
 // the current view. It reports false for the default order and for a stored key
-// that no longer applies (e.g. "project" after leaving the all-projects view).
+// that no longer applies (e.g. "project" after entering a project scope).
 func (m Model) activeSortColumn() (sortColumn, bool) {
 	if m.sortKey == "" {
 		return sortColumn{}, false

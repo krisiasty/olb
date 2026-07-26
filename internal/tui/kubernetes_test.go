@@ -92,7 +92,7 @@ func TestCAPIAPILoadBalancerMatchesClusterStackID(t *testing.T) {
 func TestCOEClusterProjectFallsBackToOwningLoadBalancer(t *testing.T) {
 	cluster := testCOECluster()
 	cluster.ProjectID = ""
-	m := New(&fakeBackend{}, Config{AllProjects: true})
+	m := New(&fakeBackend{all: true}, Config{})
 	m.coeClusters = []osclient.COECluster{cluster}
 	m.coeClustersLoaded = true
 	tree := newTree()
@@ -548,7 +548,7 @@ func TestDrillInDuringPrewarmDedupesAndAnimates(t *testing.T) {
 func TestProjectSwitchRewarmsCOEClusters(t *testing.T) {
 	backend := &fakeBackend{
 		coeClusters: []osclient.COECluster{testCOECluster()},
-		cap:         osclient.SwitchCapability{CanSwitch: true},
+		cap:         switchCapability{CanSwitch: true},
 	}
 	m := New(backend, Config{})
 	// A completed startup pre-warm for the initial project.
@@ -612,7 +612,7 @@ func TestNavigatingRebuildsStaleCOENode(t *testing.T) {
 }
 
 func TestProjectSwitchCancelsInFlightCOELoad(t *testing.T) {
-	backend := &fakeBackend{coeBlock: true, cap: osclient.SwitchCapability{CanSwitch: true}}
+	backend := &fakeBackend{coeBlock: true, cap: switchCapability{CanSwitch: true}}
 	m := New(backend, Config{})
 
 	// Start the pre-warm; ListCOEClusters blocks until its context is cancelled.

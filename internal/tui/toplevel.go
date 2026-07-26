@@ -9,8 +9,8 @@ import (
 )
 
 // listKind identifies which top-level list view is active. Each is reached by a
-// number key (1-5) and rendered as a table; the LB list is the historical
-// default and the others are cross-cutting views of the same objects.
+// number key within its area (see area.go) and rendered as a table; the LB list
+// is the historical default and the others are cross-cutting views.
 type listKind int
 
 const (
@@ -19,11 +19,15 @@ const (
 	kindListener
 	kindPool
 	kindAmphora
+	kindUser
+	kindDomain
+	kindGroup
+	kindProject
+	kindRole
+	kindService
+	kindEndpoint
+	kindRegion
 )
-
-// topLevelKinds is the number-key order: 1=LB, 2=VIP, 3=listener, 4=pool,
-// 5=amphora. The index is the key digit minus one.
-var topLevelKinds = [...]listKind{kindLB, kindVIP, kindListener, kindPool, kindAmphora}
 
 // listIdentity is the synthetic history identity for a top-level list kind.
 func (k listKind) identity() model.Identity {
@@ -36,6 +40,22 @@ func (k listKind) identity() model.Identity {
 		return model.PoolListIdentity
 	case kindAmphora:
 		return model.AmphoraListIdentity
+	case kindUser:
+		return model.UserListIdentity
+	case kindDomain:
+		return model.DomainListIdentity
+	case kindGroup:
+		return model.GroupListIdentity
+	case kindProject:
+		return model.ProjectListIdentity
+	case kindRole:
+		return model.RoleListIdentity
+	case kindService:
+		return model.ServiceListIdentity
+	case kindEndpoint:
+		return model.EndpointListIdentity
+	case kindRegion:
+		return model.RegionListIdentity
 	default:
 		return model.LBListIdentity
 	}
@@ -52,6 +72,22 @@ func (k listKind) rootLabel() string {
 		return "pools"
 	case kindAmphora:
 		return "amphorae"
+	case kindUser:
+		return "users"
+	case kindDomain:
+		return "domains"
+	case kindGroup:
+		return "groups"
+	case kindProject:
+		return "projects"
+	case kindRole:
+		return "roles"
+	case kindService:
+		return "services"
+	case kindEndpoint:
+		return "endpoints"
+	case kindRegion:
+		return "regions"
 	default:
 		return "load balancers"
 	}
@@ -69,6 +105,22 @@ func listKindOf(id model.Identity) listKind {
 		return kindPool
 	case model.TypeAmphora:
 		return kindAmphora
+	case model.TypeUser:
+		return kindUser
+	case model.TypeDomain:
+		return kindDomain
+	case model.TypeGroup:
+		return kindGroup
+	case model.TypeProject:
+		return kindProject
+	case model.TypeRole:
+		return kindRole
+	case model.TypeService:
+		return kindService
+	case model.TypeEndpoint:
+		return kindEndpoint
+	case model.TypeRegion:
+		return kindRegion
 	default:
 		return kindLB
 	}
@@ -243,6 +295,22 @@ func (m Model) columnTitles() []string {
 		return []string{obj, "PROTOCOL", "ALGORITHM", "MEMBERS", m.lbColTitle(), "PROVISIONING", "OPERATING"}
 	case kindAmphora:
 		return []string{"AMPHORA ID", "ROLE", "STATUS", "LB NETWORK IP", "HA IP", m.lbColTitle(), "COMPUTE ID"}
+	case kindUser:
+		return userColumnTitles(m.showIDs)
+	case kindDomain:
+		return domainColumnTitles(m.showIDs)
+	case kindGroup:
+		return groupColumnTitles(m.showIDs)
+	case kindProject:
+		return projectColumnTitles(m.showIDs)
+	case kindRole:
+		return roleColumnTitles(m.showIDs, m.rolesRestriction != "")
+	case kindService:
+		return serviceColumnTitles(m.showIDs)
+	case kindEndpoint:
+		return endpointColumnTitles(m.showIDs)
+	case kindRegion:
+		return regionColumnTitles(m.showIDs)
 	default:
 		return m.lbColumnTitles()
 	}
@@ -276,6 +344,22 @@ func (m Model) rowCells(e entry) []string {
 		return []string{idCell(n.ID, m.showIDs), n.Attrs["role"], n.Attrs["status"],
 			n.Attrs["lb_network_ip"], n.Attrs["ha_ip"], lbNameCell(e.lbName, n.OwningLBID, m.showIDs),
 			idCell(n.Attrs["compute_id"], m.showIDs)}
+	case entUser:
+		return userRowCells(e, m.showIDs)
+	case entDomain:
+		return domainRowCells(e, m.showIDs)
+	case entUserGroup:
+		return groupRowCells(e, m.showIDs)
+	case entProject:
+		return projectRowCells(e, m.showIDs)
+	case entRole:
+		return roleRowCells(e, m.showIDs)
+	case entService:
+		return serviceRowCells(e, m.showIDs)
+	case entEndpoint:
+		return endpointRowCells(e, m.showIDs)
+	case entRegion:
+		return regionRowCells(e, m.showIDs)
 	default:
 		return m.lbRowCells(e)
 	}
@@ -286,7 +370,7 @@ func (m Model) rowCells(e entry) []string {
 // STATUS column for amphorae, and none for VIPs.
 func (m Model) statusColumnSet(ncols int) map[int]bool {
 	switch m.loc.listKind() {
-	case kindVIP:
+	case kindVIP, kindUser, kindDomain, kindGroup, kindProject, kindRole, kindService, kindEndpoint, kindRegion:
 		return map[int]bool{}
 	case kindAmphora:
 		return map[int]bool{2: true} // STATUS

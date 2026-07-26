@@ -23,6 +23,9 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.overlay != overlayNone {
 		return m.onOverlayKey(msg)
 	}
+	if m.home {
+		return m.onHomeKey(msg)
+	}
 	return m.onListKey(msg)
 }
 
@@ -51,9 +54,9 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Down):
 		m.moveCursor(1)
 	case key.Matches(msg, m.keys.PageUp):
-		m.moveCursor(-m.visibleRows())
+		m.moveCursor(-m.listContentRows())
 	case key.Matches(msg, m.keys.PageDown):
-		m.moveCursor(m.visibleRows())
+		m.moveCursor(m.listContentRows())
 	case key.Matches(msg, m.keys.Home):
 		if first := firstSelectableIndex(m.entries); first >= 0 {
 			m.cursor = first
@@ -89,6 +92,13 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.goWorkspaceRoot()
 	case key.Matches(msg, m.keys.TopLevel):
 		return m.goTopLevel(msg.String())
+	case key.Matches(msg, m.keys.Area):
+		return m.goArea(msg.String())
+	case key.Matches(msg, m.keys.Switcher):
+		return m.openSwitcher()
+	case key.Matches(msg, m.keys.HomeView):
+		m.home = true
+		return m, nil
 	case key.Matches(msg, m.keys.Picker):
 		return m.openPicker()
 
@@ -141,6 +151,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.changeAutoRefreshInterval(-1)
 	case key.Matches(msg, m.keys.Telemetry):
 		return m.openTelemetry()
+	case key.Matches(msg, m.keys.Token):
+		return m.openToken()
 	case key.Matches(msg, m.keys.Help):
 		m.overlay = overlayHelp
 		m.setupHelpViewport()
@@ -199,18 +211,43 @@ func (m Model) goWorkspaceRoot() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// goTopLevel switches persistent workspaces without adding either root to a
-// navigation stack. Pressing the active workspace's key is deliberately a no-op;
-// ctrl+home is the explicit action for returning to that workspace's root.
+// goTopLevel switches persistent workspaces within the active area without
+// adding either root to a navigation stack. The digit indexes the active area's
+// views (1-based), so the same number selects a different view per area. Pressing
+// the active workspace's key is a no-op; ctrl+home returns to its root.
 func (m Model) goTopLevel(digit string) (tea.Model, tea.Cmd) {
-	if len(digit) != 1 || digit[0] < '1' || digit[0] > '5' {
+	if len(digit) != 1 || digit[0] < '1' || digit[0] > '9' {
 		return m, nil
 	}
+	views := viewsInArea(areaOf(m.activeWorkspace))
 	idx := int(digit[0] - '1')
-	if idx >= len(topLevelKinds) {
+	if idx >= len(views) {
 		return m, nil
 	}
-	target := topLevelKinds[idx]
+	return m.switchWorkspace(views[idx])
+}
+
+// goArea switches to another area via its uppercase accelerator, restoring the
+// view last active there (or the area's first view on first entry).
+func (m Model) goArea(key string) (tea.Model, tea.Cmd) {
+	if len(key) != 1 {
+		return m, nil
+	}
+	area, ok := areaByKey(rune(key[0]))
+	if !ok || len(area.views) == 0 {
+		return m, nil
+	}
+	target := area.views[0]
+	if last, ok := m.areaLastView[area.kind]; ok {
+		target = last
+	}
+	return m.switchWorkspace(target)
+}
+
+// switchWorkspace projects the target workspace onto the flat Model fields. A
+// no-op when it is already active.
+func (m Model) switchWorkspace(target listKind) (tea.Model, tea.Cmd) {
+	m.home = false // any deliberate view switch leaves the overview landing
 	if target == m.activeWorkspace {
 		return m, nil
 	}
@@ -236,12 +273,80 @@ func (m Model) refresh() (tea.Model, tea.Cmd) {
 	return next, cmd
 }
 
+// refreshAssignmentsCmd drops an identity object's cached role assignments and
+// returns the command to re-fetch them, used by a manual refresh on a user,
+// group, project, or domain detail.
+func (m *Model) refreshAssignmentsCmd(owner ownerKind, id string) tea.Cmd {
+	key := assignmentKey{owner: owner, id: id}
+	delete(m.assignments, key)
+	m.assignmentsLoaded[key] = false
+	m.assignmentsLoading[key] = true
+	return m.loadAssignmentsCmd(key)
+}
+
 func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 	if m.refreshing {
 		return m, nil
 	}
 	if automatic && (m.isCOEClusterOverview() || m.isKubernetesServiceOverview()) {
 		return m, m.ensureCOEClustersCmd(false)
+	}
+	// An identity detail's only refreshable data is its related list (a group's
+	// members, a user's groups); reload it directly rather than through the
+	// load-balancer refresh transaction. These don't auto-refresh — that would
+	// repeatedly re-list on every tick.
+	if m.isGroupOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		gid := m.loc.node.ID
+		delete(m.groupMembers, gid)
+		m.groupMembersLoaded[gid] = false
+		m.groupMembersLoading[gid] = true
+		return m, tea.Batch(m.loadGroupMembersCmd(gid), m.refreshAssignmentsCmd(ownerGroup, gid))
+	}
+	if m.isUserOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		uid := m.loc.node.ID
+		delete(m.userGroups, uid)
+		m.userGroupsLoaded[uid] = false
+		m.userGroupsLoading[uid] = true
+		return m, tea.Batch(m.loadUserGroupsCmd(uid), m.refreshAssignmentsCmd(ownerUser, uid))
+	}
+	if m.isProjectOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		return m, m.refreshAssignmentsCmd(ownerProject, m.loc.node.ID)
+	}
+	if m.isDomainOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		did := m.loc.node.ID
+		delete(m.domainContents, did)
+		m.domainContentsLoaded[did] = false
+		m.domainContentsLoading[did] = true
+		return m, tea.Batch(m.loadDomainContentsCmd(did), m.refreshAssignmentsCmd(ownerDomain, did))
+	}
+	if m.isRoleOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		rid := m.loc.node.ID
+		delete(m.roleRelations, rid)
+		m.roleRelationsLoaded[rid] = false
+		m.roleRelationsLoading[rid] = true
+		return m, m.loadRoleRelationsCmd(rid)
+	}
+	if (m.isServiceOverview() || m.isRegionOverview()) && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		m.endpoints, m.endpointsLoaded, m.endpointsLoading = nil, false, true
+		return m, m.loadEndpointsCmd(false)
 	}
 	m.hist.pruneDead()
 	m.refreshing = true
@@ -262,6 +367,23 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 			return m, m.loadPoolsCmd(true)
 		case kindAmphora:
 			return m, m.loadAmphoraeListCmd(true)
+		case kindUser:
+			return m, m.loadUsersCmd(true)
+		case kindDomain:
+			return m, m.loadDomainsCmd(true)
+		case kindGroup:
+			return m, m.loadGroupsCmd(true)
+		case kindProject:
+			return m, m.loadProjectListCmd(true)
+		case kindRole:
+			return m, m.loadRolesCmd(true)
+		case kindService:
+			return m, m.loadServicesCmd(true)
+		case kindEndpoint:
+			m.endpointsLoading = true
+			return m, m.loadEndpointsCmd(true)
+		case kindRegion:
+			return m, m.loadRegionsCmd(true)
 		default:
 			return m, m.loadLBsCmd()
 		}
@@ -502,12 +624,22 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case overlayProject:
 		return m.onProjectKey(msg)
+	case overlaySwitcher:
+		return m.onSwitcherKey(msg)
 	case overlayPicker:
 		return m.onPickerKey(msg)
 	case overlaySort:
 		return m.onSortKey(msg)
 	case overlayTelemetry:
 		return m.onTelemetryKey(msg)
+
+	case overlayToken:
+		switch {
+		case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Token), key.Matches(msg, m.keys.Quit):
+			m.overlay = overlayNone
+			return m, nil
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -568,6 +700,114 @@ func (m Model) onSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.overlay = overlayNone
 		return m, nil
+	}
+	return m, nil
+}
+
+// openSwitcher opens the area/view switcher overlay, pre-selecting the current
+// view. Rows come from the areas table, so it needs no backend call.
+func (m Model) openSwitcher() (tea.Model, tea.Cmd) {
+	m.overlay = overlaySwitcher
+	m.search.Prompt = "filter: "
+	m.search.PromptStyle = m.st.filterPrompt
+	m.search.SetValue("")
+	m.search.Blur()
+	m.switchCursor = 0
+	for i, r := range m.filteredSwitcherRows() {
+		if r.view == m.activeWorkspace {
+			m.switchCursor = i
+			break
+		}
+	}
+	return m, nil
+}
+
+// onSwitcherKey drives the area/view switcher: it mirrors the project switcher's
+// modal filtering (/ edits, enter applies, esc clears then closes) and reuses the
+// list navigation keys. Enter jumps to the highlighted area+view.
+func (m Model) onSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.search.Focused() {
+		switch {
+		case key.Matches(msg, m.keys.Cancel):
+			m.search.SetValue("")
+			m.search.Blur()
+			m.switchCursor = 0
+			return m, nil
+		case key.Matches(msg, m.keys.Accept):
+			m.search.Blur()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		m.switchCursor = 0
+		return m, cmd
+	}
+
+	rows := m.filteredSwitcherRows()
+	last := len(rows) - 1
+	switch {
+	case key.Matches(msg, m.keys.Cancel):
+		if m.search.Value() != "" {
+			m.search.SetValue("")
+			m.switchCursor = 0
+			return m, nil
+		}
+		m.overlay = overlayNone
+		m.search.Blur()
+		return m, nil
+	case key.Matches(msg, m.keys.Quit):
+		m.overlay = overlayNone
+		m.search.Blur()
+		return m, nil
+	case key.Matches(msg, m.keys.Filter):
+		m.search.Focus()
+		return m, textinput.Blink
+	case key.Matches(msg, m.keys.Area):
+		// Uppercase accelerators jump straight to their area, exactly as they do
+		// from the main list — the switcher is just another place they work.
+		m.overlay = overlayNone
+		m.search.Blur()
+		return m.goArea(msg.String())
+	case key.Matches(msg, m.keys.Up):
+		if m.switchCursor > 0 {
+			m.switchCursor--
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Down):
+		if m.switchCursor < last {
+			m.switchCursor++
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.PageUp):
+		if m.switchCursor -= m.pickerPageSize(); m.switchCursor < 0 {
+			m.switchCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.PageDown):
+		if m.switchCursor += m.pickerPageSize(); m.switchCursor > last {
+			m.switchCursor = last
+		}
+		if m.switchCursor < 0 {
+			m.switchCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Home):
+		m.switchCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.End):
+		m.switchCursor = last
+		if m.switchCursor < 0 {
+			m.switchCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Accept):
+		if m.switchCursor < 0 || m.switchCursor > last {
+			return m, nil
+		}
+		target := rows[m.switchCursor].view
+		m.overlay = overlayNone
+		m.search.Blur()
+		return m.switchWorkspace(target)
 	}
 	return m, nil
 }

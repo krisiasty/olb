@@ -14,16 +14,25 @@ import (
 type entryKind int
 
 const (
-	entLB       entryKind = iota // a load balancer in the top-level list
-	entVIP                       // a VIP in the top-level VIPs list
-	entListener                  // a listener in the top-level listeners list
-	entPool                      // a pool in the top-level pools list
-	entAmphora                   // an amphora in the top-level amphorae list
-	entChild                     // a containment child of the current node
-	entRelated                   // a directly related object rendered as a normal link
-	entRef                       // an outgoing reference edge ("→")
-	entBackRef                   // an incoming back-reference ("←")
-	entGroup                     // a non-selectable related-object group heading
+	entLB         entryKind = iota // a load balancer in the top-level list
+	entVIP                         // a VIP in the top-level VIPs list
+	entListener                    // a listener in the top-level listeners list
+	entPool                        // a pool in the top-level pools list
+	entAmphora                     // an amphora in the top-level amphorae list
+	entUser                        // a Keystone user in the top-level users list
+	entDomain                      // a Keystone domain in the top-level domains list
+	entUserGroup                   // a Keystone group in the top-level groups list
+	entProject                     // a Keystone project in the top-level projects list
+	entRole                        // a Keystone role in the top-level roles list
+	entService                     // a Keystone catalog service
+	entEndpoint                    // a Keystone catalog endpoint
+	entRegion                      // a Keystone catalog region
+	entAssignment                  // a role assignment (actor holds a role on a target)
+	entChild                       // a containment child of the current node
+	entRelated                     // a directly related object rendered as a normal link
+	entRef                         // an outgoing reference edge ("→")
+	entBackRef                     // an incoming back-reference ("←")
+	entGroup                       // a non-selectable related-object group heading
 )
 
 // entry is one visible row. Selectable rows follow their containment child or
@@ -31,13 +40,23 @@ const (
 type entry struct {
 	kind entryKind
 
-	lb       osclient.LB          // set for entLB
-	vip      vipRow               // set for entVIP
-	listener osclient.ListenerRow // set for entListener
-	pool     osclient.PoolRow     // set for entPool
-	lbName   string               // owning load balancer name for resource rows
-	node     *model.Node          // child node, resolved edge target, or amphora row
-	edge     *model.Edge          // set for entRef / entBackRef
+	lb              osclient.LB             // set for entLB
+	vip             vipRow                  // set for entVIP
+	listener        osclient.ListenerRow    // set for entListener
+	pool            osclient.PoolRow        // set for entPool
+	user            osclient.User           // set for entUser
+	domain          osclient.Domain         // set for entDomain
+	group           osclient.Group          // set for entUserGroup
+	project         osclient.Project        // set for entProject
+	role            osclient.Role           // set for entRole
+	service         osclient.Service        // set for entService
+	endpoint        osclient.Endpoint       // set for entEndpoint
+	region          osclient.Region         // set for entRegion
+	assignment      osclient.RoleAssignment // set for entAssignment
+	assignmentPivot assignmentPivot         // set for entAssignment: which side it is viewed from
+	lbName          string                  // owning load balancer name for resource rows
+	node            *model.Node             // child node, resolved edge target, or amphora row
+	edge            *model.Edge             // set for entRef / entBackRef
 
 	label         string // target label, e.g. "pool:backend-v2"
 	relationship  string // edge relationship, e.g. "default pool"
@@ -113,6 +132,63 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 		return lbIdentity(e.vip.lbID, e.lbName), false, false
 	case entAmphora:
 		return e.node.Identity(), false, false
+	case entUser:
+		name := e.user.Name
+		if name == "" {
+			name = shortID(e.user.ID)
+		}
+		return model.Identity{Type: model.TypeUser, ID: e.user.ID, Label: "user:" + name}, false, false
+	case entDomain:
+		name := e.domain.Name
+		if name == "" {
+			name = shortID(e.domain.ID)
+		}
+		return model.Identity{Type: model.TypeDomain, ID: e.domain.ID, Label: "domain:" + name}, false, false
+	case entUserGroup:
+		name := e.group.Name
+		if name == "" {
+			name = shortID(e.group.ID)
+		}
+		return model.Identity{Type: model.TypeGroup, ID: e.group.ID, Label: "group:" + name}, false, false
+	case entProject:
+		name := e.project.Name
+		if name == "" {
+			name = shortID(e.project.ID)
+		}
+		return model.Identity{Type: model.TypeProject, ID: e.project.ID, Label: "project:" + name}, false, false
+	case entRole:
+		name := e.role.Name
+		if name == "" {
+			name = shortID(e.role.ID)
+		}
+		return model.Identity{Type: model.TypeRole, ID: e.role.ID, Label: "role:" + name}, false, false
+	case entService:
+		return model.Identity{Type: model.TypeService, ID: e.service.ID, Label: "service:" + serviceLabelName(e.service)}, false, false
+	case entEndpoint:
+		return model.Identity{Type: model.TypeEndpoint, ID: e.endpoint.ID, Label: "endpoint:" + endpointLabelName(e.endpoint)}, false, false
+	case entRegion:
+		return model.Identity{Type: model.TypeRegion, ID: e.region.ID, Label: "region:" + e.region.ID}, false, false
+	case entAssignment:
+		a := e.assignment
+		if e.assignmentPivot == pivotActor {
+			// On a user/group detail the actor is the object we're already on, so
+			// opening the assignment jumps to the role it grants.
+			role := a.RoleName
+			if role == "" {
+				role = shortID(a.RoleID)
+			}
+			return model.Identity{Type: model.TypeRole, ID: a.RoleID, Label: "role:" + role}, true, false
+		}
+		// Otherwise (role, project, or domain detail) jump to the actor holding the
+		// role; the elided dimension is shown inline.
+		name := a.ActorName
+		if name == "" {
+			name = shortID(a.ActorID)
+		}
+		if a.ActorType == "group" {
+			return model.Identity{Type: model.TypeGroup, ID: a.ActorID, Label: "group:" + name}, true, false
+		}
+		return model.Identity{Type: model.TypeUser, ID: a.ActorID, Label: "user:" + name}, true, false
 	case entChild:
 		return e.node.Identity(), false, false
 	case entRelated:
@@ -326,7 +402,58 @@ func withRelatedGroupHeadings(entries []entry) []entry {
 	return out
 }
 
+// relatedSection is one expected related-object group in a detail view, matched
+// to entries by the key relatedObjectGroup returns.
+type relatedSection struct {
+	key   string
+	title string
+}
+
+// withExpectedGroupHeadings groups related entries under a fixed, ordered set of
+// section headings, emitting every expected section — including empty ones (e.g.
+// "USERS 0") — so a detail view's related-object structure stays visible even
+// when a category has no objects. Counts reflect the currently visible (filtered)
+// rows, like withRelatedGroupHeadings.
+func withExpectedGroupHeadings(entries []entry, sections []relatedSection) []entry {
+	byKey := make(map[string][]entry, len(sections))
+	for _, e := range entries {
+		key, _ := relatedObjectGroup(e)
+		byKey[key] = append(byKey[key], e)
+	}
+	out := make([]entry, 0, len(entries)+len(sections))
+	for _, sec := range sections {
+		group := byKey[sec.key]
+		errors, degraded := relatedIssueCounts(group)
+		out = append(out, entry{
+			kind: entGroup, label: fmt.Sprintf("%s %d", sec.title, len(group)),
+			issueErrors: errors, issueDegraded: degraded,
+		})
+		out = append(out, group...)
+	}
+	return out
+}
+
 func relatedObjectGroup(e entry) (key, title string) {
+	switch e.kind {
+	case entProject:
+		return "projects", "PROJECTS"
+	case entUserGroup:
+		return "groups", "GROUPS"
+	case entUser:
+		return "users", "USERS"
+	case entDomain:
+		return "domain", "DOMAIN"
+	case entRole:
+		return "roles", "ROLES"
+	case entService:
+		return "services", "SERVICES"
+	case entEndpoint:
+		return "endpoints", "ENDPOINTS"
+	case entRegion:
+		return "regions", "REGIONS"
+	case entAssignment:
+		return "assignments", "ASSIGNMENTS"
+	}
 	switch e.kind {
 	case entRelated:
 		if e.node != nil {

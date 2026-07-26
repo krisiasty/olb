@@ -36,21 +36,57 @@ const sampleStatus = `
 }}}`
 
 type fakeBackend struct {
-	cap          osclient.SwitchCapability
-	all          bool
-	filtered     bool // reported by Filtered(); set by SwitchProject when scopeDenied
-	scopeDenied  bool // when true, SwitchProject falls back to a filtered selection
-	telemetry    *telemetry.Collector
-	amphoraeErr  error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
-	lastTreeHint *model.LBMeta
-	coeClusters  []osclient.COECluster
-	coeErr       error
-	coeCalls     int
-	coeDeadline  time.Duration
-	coeBlock     bool // when true, ListCOEClusters blocks until its context is cancelled
-	coeDetails   map[string]osclient.COEClusterDetail
-	coeDetailErr error
-	coeGetCalls  int
+	cap                osclient.SwitchCapability
+	all                bool
+	filtered           bool // reported by Filtered(); set by SwitchProject when scopeDenied
+	scopeDenied        bool // when true, SwitchProject falls back to a filtered selection
+	telemetry          *telemetry.Collector
+	amphoraeErr        error // when set, ListAllAmphorae returns it (e.g. ErrAdminRequired)
+	users              []osclient.User
+	usersErr           error // when set, ListUsers returns it (e.g. ErrAdminRequired)
+	usersRestriction   string
+	domains            []osclient.Domain
+	domainsErr         error // when set, ListDomains returns it (e.g. ErrAdminRequired)
+	domainsRestriction string
+	groups             []osclient.Group
+	groupsErr          error // when set, ListGroups returns it (e.g. ErrAdminRequired)
+	groupsRestriction  string
+	groupMembers       map[string][]osclient.User
+	groupMemberEr      error // when set, ListGroupMembers returns it (e.g. ErrAdminRequired)
+	userGroups         map[string][]osclient.Group
+	userGroupsErr      error // when set, ListUserGroups returns it (e.g. ErrAdminRequired)
+	projectList        []osclient.Project
+	projectListEr      error // when set, ListProjectsDetailed returns it (e.g. ErrAdminRequired)
+	roles              []osclient.Role
+	rolesErr           error // when set, ListRoles returns it (e.g. ErrAdminRequired)
+	rolesRestriction   string
+	roleAssignments    map[string][]osclient.RoleAssignment
+	impliedRoles       map[string][]osclient.Role
+	roleRelErr         error // when set, role assignment/implied lookups return it
+	// Service catalog fixtures; nil slices fall back to built-in defaults.
+	services     []osclient.Service
+	servicesErr  error
+	endpoints    []osclient.Endpoint
+	endpointsErr error
+	regions      []osclient.Region
+	regionsErr   error
+	token        *osclient.TokenInfo // when set, overrides the default whoami
+	// Owner-side role assignments (the mirror of roleAssignments): keyed by the
+	// user/group/project/domain ID. Nil maps fall back to built-in defaults.
+	userAssignments    map[string][]osclient.RoleAssignment
+	groupAssignments   map[string][]osclient.RoleAssignment
+	projectAssignments map[string][]osclient.RoleAssignment
+	domainAssignments  map[string][]osclient.RoleAssignment
+	assignmentErr      error // when set, owner-side assignment lookups return it
+	lastTreeHint       *model.LBMeta
+	coeClusters        []osclient.COECluster
+	coeErr             error
+	coeCalls           int
+	coeDeadline        time.Duration
+	coeBlock           bool // when true, ListCOEClusters blocks until its context is cancelled
+	coeDetails         map[string]osclient.COEClusterDetail
+	coeDetailErr       error
+	coeGetCalls        int
 }
 
 func newTree() *model.Tree {
@@ -325,6 +361,308 @@ func (f *fakeBackend) ListAllAmphorae(_ context.Context) ([]*model.Node, error) 
 	return []*model.Node{a}, nil
 }
 
+func (f *fakeBackend) ListUsers(context.Context) (osclient.IdentityList[osclient.User], error) {
+	if f.usersErr != nil {
+		return osclient.IdentityList[osclient.User]{}, f.usersErr
+	}
+	if f.users != nil {
+		return osclient.IdentityList[osclient.User]{Items: f.users, Restriction: f.usersRestriction}, nil
+	}
+	return osclient.IdentityList[osclient.User]{Items: []osclient.User{
+		{ID: "u-1", Name: "admin", DomainID: "default", DomainName: "Default", Enabled: true, Email: "admin@example.com", Description: "cloud administrator", DefaultProjectID: "p1", DefaultProjectName: "alpha"},
+		{ID: "u-2", Name: "alice", DomainID: "default", DomainName: "Default", Enabled: true, Email: "alice@example.com"},
+		{ID: "u-3", Name: "bob", DomainID: "default", DomainName: "Default", Enabled: false},
+	}, Restriction: f.usersRestriction}, nil
+}
+
+func (f *fakeBackend) ListDomains(context.Context) (osclient.IdentityList[osclient.Domain], error) {
+	if f.domainsErr != nil {
+		return osclient.IdentityList[osclient.Domain]{}, f.domainsErr
+	}
+	if f.domains != nil {
+		return osclient.IdentityList[osclient.Domain]{Items: f.domains, Restriction: f.domainsRestriction}, nil
+	}
+	return osclient.IdentityList[osclient.Domain]{Items: []osclient.Domain{
+		{ID: "default", Name: "Default", Enabled: true, Description: "the default domain"},
+		{ID: "d-2", Name: "ops", Enabled: true},
+		{ID: "d-3", Name: "legacy", Enabled: false},
+	}, Restriction: f.domainsRestriction}, nil
+}
+
+func (f *fakeBackend) ListGroups(context.Context) (osclient.IdentityList[osclient.Group], error) {
+	if f.groupsErr != nil {
+		return osclient.IdentityList[osclient.Group]{}, f.groupsErr
+	}
+	if f.groups != nil {
+		return osclient.IdentityList[osclient.Group]{Items: f.groups, Restriction: f.groupsRestriction}, nil
+	}
+	return osclient.IdentityList[osclient.Group]{Items: []osclient.Group{
+		{ID: "g-1", Name: "admins", DomainID: "default", DomainName: "Default", Description: "cloud administrators"},
+		{ID: "g-2", Name: "operators", DomainID: "default", DomainName: "Default"},
+	}, Restriction: f.groupsRestriction}, nil
+}
+
+func (f *fakeBackend) ListGroupMembers(_ context.Context, groupID string) ([]osclient.User, error) {
+	if f.groupMemberEr != nil {
+		return nil, f.groupMemberEr
+	}
+	if f.groupMembers != nil {
+		return f.groupMembers[groupID], nil
+	}
+	// admins has two members; other groups are empty.
+	if groupID == "g-1" {
+		return []osclient.User{
+			{ID: "u-1", Name: "admin", DomainID: "default", DomainName: "Default", Enabled: true, Email: "admin@example.com"},
+			{ID: "u-2", Name: "alice", DomainID: "default", DomainName: "Default", Enabled: true, Email: "alice@example.com"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListUserGroups(_ context.Context, userID string) ([]osclient.Group, error) {
+	if f.userGroupsErr != nil {
+		return nil, f.userGroupsErr
+	}
+	if f.userGroups != nil {
+		return f.userGroups[userID], nil
+	}
+	// admin belongs to the admins group; others belong to none.
+	if userID == "u-1" {
+		return []osclient.Group{
+			{ID: "g-1", Name: "admins", DomainID: "default", DomainName: "Default", Description: "cloud administrators"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListUsersInDomain(ctx context.Context, domainID string) ([]osclient.User, error) {
+	all, err := f.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []osclient.User
+	for _, u := range all.Items {
+		if u.DomainID == domainID {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeBackend) ListGroupsInDomain(ctx context.Context, domainID string) ([]osclient.Group, error) {
+	all, err := f.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []osclient.Group
+	for _, g := range all.Items {
+		if g.DomainID == domainID {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeBackend) ListProjectsInDomain(ctx context.Context, domainID string) ([]osclient.Project, error) {
+	all, err := f.ListProjectsDetailed(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []osclient.Project
+	for _, p := range all {
+		if p.DomainID == domainID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeBackend) ListProjectsDetailed(context.Context) ([]osclient.Project, error) {
+	if f.projectListEr != nil {
+		return nil, f.projectListEr
+	}
+	if f.projectList != nil {
+		return f.projectList, nil
+	}
+	return []osclient.Project{
+		{ID: "p1", Name: "alpha", Description: "payments", DomainID: "default", DomainName: "Default", Enabled: true},
+		{ID: "p2", Name: "beta", DomainID: "default", DomainName: "Default", Enabled: true},
+	}, nil
+}
+
+func (f *fakeBackend) ListRoles(context.Context) (osclient.IdentityList[osclient.Role], error) {
+	if f.rolesErr != nil {
+		return osclient.IdentityList[osclient.Role]{}, f.rolesErr
+	}
+	if f.roles != nil {
+		return osclient.IdentityList[osclient.Role]{Items: f.roles, Restriction: f.rolesRestriction}, nil
+	}
+	return osclient.IdentityList[osclient.Role]{Items: []osclient.Role{
+		{ID: "r-1", Name: "admin", Description: "cloud administrator"},
+		{ID: "r-2", Name: "member"},
+		{ID: "r-3", Name: "reader", DomainID: "default", DomainName: "Default"},
+	}, Restriction: f.rolesRestriction}, nil
+}
+
+func (f *fakeBackend) ListRoleAssignments(_ context.Context, roleID string) ([]osclient.RoleAssignment, error) {
+	if f.roleRelErr != nil {
+		return nil, f.roleRelErr
+	}
+	if f.roleAssignments != nil {
+		return f.roleAssignments[roleID], nil
+	}
+	// "admin" (r-1) is held by alice on a project and by the admins group on a domain.
+	if roleID == "r-1" {
+		return []osclient.RoleAssignment{
+			{ActorType: "user", ActorID: "u-2", ActorName: "alice", TargetType: "project", TargetID: "p1", TargetName: "alpha"},
+			{ActorType: "group", ActorID: "g-1", ActorName: "admins", TargetType: "domain", TargetID: "default", TargetName: "Default"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListImpliedRoles(_ context.Context, roleID string) ([]osclient.Role, error) {
+	if f.roleRelErr != nil {
+		return nil, f.roleRelErr
+	}
+	if f.impliedRoles != nil {
+		return f.impliedRoles[roleID], nil
+	}
+	// "admin" implies "member".
+	if roleID == "r-1" {
+		return []osclient.Role{{ID: "r-2", Name: "member"}}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListUserAssignments(_ context.Context, userID string) ([]osclient.RoleAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if f.userAssignments != nil {
+		return f.userAssignments[userID], nil
+	}
+	// alice (u-2) holds admin on project alpha directly and, effectively, member
+	// on project beta inherited via the admins group she belongs to.
+	if userID == "u-2" {
+		return []osclient.RoleAssignment{
+			{RoleID: "r-1", RoleName: "admin", ActorType: "user", ActorID: "u-2", ActorName: "alice", TargetType: "project", TargetID: "p1", TargetName: "alpha"},
+			{RoleID: "r-2", RoleName: "member", ActorType: "user", ActorID: "u-2", ActorName: "alice", TargetType: "project", TargetID: "p2", TargetName: "beta", Inherited: true},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListGroupAssignments(_ context.Context, groupID string) ([]osclient.RoleAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if f.groupAssignments != nil {
+		return f.groupAssignments[groupID], nil
+	}
+	// the admins group holds member on project beta; its members inherit it.
+	if groupID == "g-1" {
+		return []osclient.RoleAssignment{
+			{RoleID: "r-2", RoleName: "member", ActorType: "group", ActorID: "g-1", ActorName: "admins", TargetType: "project", TargetID: "p2", TargetName: "beta"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListProjectAssignments(_ context.Context, projectID string) ([]osclient.RoleAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if f.projectAssignments != nil {
+		return f.projectAssignments[projectID], nil
+	}
+	switch projectID {
+	case "p1": // alpha: alice holds admin
+		return []osclient.RoleAssignment{
+			{RoleID: "r-1", RoleName: "admin", ActorType: "user", ActorID: "u-2", ActorName: "alice", TargetType: "project", TargetID: "p1", TargetName: "alpha"},
+		}, nil
+	case "p2": // beta: the admins group holds member
+		return []osclient.RoleAssignment{
+			{RoleID: "r-2", RoleName: "member", ActorType: "group", ActorID: "g-1", ActorName: "admins", TargetType: "project", TargetID: "p2", TargetName: "beta"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListDomainAssignments(_ context.Context, domainID string) ([]osclient.RoleAssignment, error) {
+	if f.assignmentErr != nil {
+		return nil, f.assignmentErr
+	}
+	if f.domainAssignments != nil {
+		return f.domainAssignments[domainID], nil
+	}
+	// the admins group holds admin on the default domain itself.
+	if domainID == "default" {
+		return []osclient.RoleAssignment{
+			{RoleID: "r-1", RoleName: "admin", ActorType: "group", ActorID: "g-1", ActorName: "admins", TargetType: "domain", TargetID: "default", TargetName: "Default"},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) ListServices(context.Context) ([]osclient.Service, error) {
+	if f.servicesErr != nil {
+		return nil, f.servicesErr
+	}
+	if f.services != nil {
+		return f.services, nil
+	}
+	return []osclient.Service{
+		{ID: "svc-compute", Type: "compute", Name: "nova", Description: "compute service", Enabled: true},
+		{ID: "svc-identity", Type: "identity", Name: "keystone", Description: "identity service", Enabled: true},
+		{ID: "svc-image", Type: "image", Name: "glance", Enabled: true},
+	}, nil
+}
+
+func (f *fakeBackend) ListEndpoints(context.Context) ([]osclient.Endpoint, error) {
+	if f.endpointsErr != nil {
+		return nil, f.endpointsErr
+	}
+	if f.endpoints != nil {
+		return f.endpoints, nil
+	}
+	return []osclient.Endpoint{
+		{ID: "ep-1", ServiceID: "svc-compute", ServiceType: "compute", ServiceName: "nova", Interface: "public", RegionID: "RegionOne", URL: "https://nova.example.com/v2.1", Enabled: true},
+		{ID: "ep-2", ServiceID: "svc-compute", ServiceType: "compute", ServiceName: "nova", Interface: "internal", RegionID: "RegionOne", URL: "https://nova.internal/v2.1", Enabled: true},
+		{ID: "ep-3", ServiceID: "svc-image", ServiceType: "image", ServiceName: "glance", Interface: "public", RegionID: "RegionOne", URL: "https://glance.example.com", Enabled: true},
+		{ID: "ep-4", ServiceID: "svc-identity", ServiceType: "identity", ServiceName: "keystone", Interface: "public", RegionID: "RegionTwo", URL: "https://keystone.example.com/v3", Enabled: true},
+	}, nil
+}
+
+func (f *fakeBackend) ListRegions(context.Context) ([]osclient.Region, error) {
+	if f.regionsErr != nil {
+		return nil, f.regionsErr
+	}
+	if f.regions != nil {
+		return f.regions, nil
+	}
+	return []osclient.Region{
+		{ID: "RegionOne", Description: "primary region"},
+		{ID: "RegionTwo", Description: "secondary region", ParentRegionID: "RegionOne"},
+	}, nil
+}
+
+func (f *fakeBackend) CurrentToken() osclient.TokenInfo {
+	if f.token != nil {
+		return *f.token
+	}
+	return osclient.TokenInfo{
+		Available: true, UserName: "admin", UserID: "u-1", UserDomain: "Default",
+		ScopeType: "project", ScopeName: "alpha", ScopeID: "p1", ScopeDomain: "Default",
+		Roles: []string{"admin", "member"},
+		RoleDetails: []osclient.TokenRole{
+			{ID: "r-1", Name: "admin"},
+			{ID: "r-2", Name: "member"},
+		},
+		ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
 func (f *fakeBackend) ListProjects(context.Context) ([]osclient.ProjectInfo, error) {
 	return []osclient.ProjectInfo{{ID: "p1", Name: "alpha"}, {ID: "p2", Name: "beta"}}, nil
 }
@@ -365,6 +703,9 @@ func start(t *testing.T, cap osclient.SwitchCapability) Model {
 	m.Init() // schedules initial list loading; New initializes workspace histories
 	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	// The app now opens on the overview landing; most tests assume the load-balancer
+	// list, so leave it (as pressing L would) before returning.
+	m.home = false
 	return m
 }
 
@@ -400,6 +741,37 @@ func updExec(t *testing.T, m Model, msg tea.Msg) Model {
 				m = upd(t, m, next)
 			}
 		}
+	}
+	return m
+}
+
+// updExecAll is updExec for actions that fire several immediate data loads at
+// once via tea.Batch (e.g. an identity detail that loads its members/groups and
+// its role assignments together). It drains every sub-command and feeds each
+// resulting message back. Use only where the batch is known to contain no timer
+// commands (spinner/flash/auto-refresh), which would block.
+func updExecAll(t *testing.T, m Model, msg tea.Msg) Model {
+	t.Helper()
+	nm, cmd := m.Update(msg)
+	m = nm.(Model)
+	_ = m.View()
+	if cmd == nil {
+		return m
+	}
+	next := cmd()
+	if batch, ok := next.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if sm := sub(); sm != nil {
+				m = upd(t, m, sm)
+			}
+		}
+		return m
+	}
+	if next != nil {
+		m = upd(t, m, next)
 	}
 	return m
 }
@@ -2518,15 +2890,19 @@ func TestProjectSwitcherDisabled(t *testing.T) {
 	m = upd(t, m, press("esc"))
 }
 
-func TestProjectSwitcherKeyAliases(t *testing.T) {
-	for _, alias := range []string{"p", "0"} {
-		t.Run(alias, func(t *testing.T) {
-			m := start(t, osclient.SwitchCapability{CanSwitch: true})
-			m = updExec(t, m, press(alias))
-			if m.overlay != overlayProject || len(m.projects) != 2 {
-				t.Fatalf("%s should open and load the project selector; overlay=%v projects=%d", alias, m.overlay, len(m.projects))
-			}
-		})
+func TestProjectSwitcherKey(t *testing.T) {
+	// p opens the project selector; 0 no longer aliases it (it opens the area
+	// switcher — see TestAreaSwitcherOpensOnZero).
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("p"))
+	if m.overlay != overlayProject || len(m.projects) != 2 {
+		t.Fatalf("p should open and load the project selector; overlay=%v projects=%d", m.overlay, len(m.projects))
+	}
+
+	m = start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("0"))
+	if m.overlay != overlaySwitcher {
+		t.Fatalf("0 should open the area/view switcher, not the project selector; overlay=%v", m.overlay)
 	}
 }
 
@@ -2671,7 +3047,7 @@ func TestProjectSwitcherAllProjectsShortcut(t *testing.T) {
 	m := start(t, osclient.SwitchCapability{
 		CanSwitch: true, GlobalAdmin: true, AllProjectsChecked: true, CanAllProjects: true,
 	})
-	m = updExec(t, m, press("0"))
+	m = updExec(t, m, press("p"))
 	plain := ansiRE.ReplaceAllString(m.View(), "")
 	if !strings.Contains(plain, "a all projects") {
 		t.Fatalf("global-admin selector should advertise the all-projects shortcut:\n%s", plain)

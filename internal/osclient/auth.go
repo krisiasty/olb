@@ -148,6 +148,16 @@ type Clients struct {
 	// so repeated (auto-)refreshes don't re-enumerate Keystone every time.
 	projNames   map[string]string
 	projNamesAt time.Time
+	// domainNames caches the domain ID→name map used to label identity objects,
+	// on the same TTL as projNames.
+	domainNames   map[string]string
+	domainNamesAt time.Time
+	// serviceUserIDs caches the set of user IDs holding a role on the service
+	// project (the convention that marks a user as a service/system account), on
+	// the same TTL as projNames. A nil map means "not yet computed / unavailable";
+	// detection then falls back to the well-known-name heuristic alone.
+	serviceUserIDs   map[string]bool
+	serviceUserIDsAt time.Time
 }
 
 // Authenticate resolves credentials from CLI/env/clouds.yaml, authenticates,

@@ -49,15 +49,18 @@ func (m *Model) resetWorkspaces() {
 // user switching scope from listeners returns to the listener list, rather than
 // being unexpectedly sent to load balancers.
 func (m *Model) resetWorkspacesAt(active listKind) {
-	for _, kind := range topLevelKinds {
-		m.workspaces[kind] = newWorkspaceState(kind, m.cfg.HistoryCap)
+	m.workspaces = make(map[listKind]*workspaceState, len(allViews()))
+	m.areaLastView = make(map[areaKind]listKind, len(areas))
+	for _, kind := range allViews() {
+		ws := newWorkspaceState(kind, m.cfg.HistoryCap)
+		m.workspaces[kind] = &ws
 	}
 	m.workspaceResume = workspacePosition{}
 	m.restoreWorkspaceState(active)
 }
 
 func (m *Model) saveWorkspaceState() {
-	state := &m.workspaces[m.activeWorkspace]
+	state := m.workspaces[m.activeWorkspace]
 	state.hist = m.hist
 	state.loc = m.loc
 	state.allEntries = m.allEntries
@@ -72,8 +75,9 @@ func (m *Model) saveWorkspaceState() {
 }
 
 func (m *Model) restoreWorkspaceState(kind listKind) {
-	state := &m.workspaces[kind]
+	state := m.workspaces[kind]
 	m.activeWorkspace = kind
+	m.areaLastView[areaOf(kind)] = kind
 	m.hist = state.hist
 	m.loc = state.loc
 	m.allEntries = state.allEntries

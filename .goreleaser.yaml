@@ -83,7 +83,7 @@ homebrew_casks:
     ids:
       - darwin
     homepage: "https://github.com/krisiasty/olb"
-    description: "Interactive terminal UI for inspecting OpenStack Octavia load balancers (Amphora and OVN providers)."
+    description: "OpenStack Live Browser — browse your OpenStack cloud live."
     license: "Apache-2.0"
     repository:
       owner: krisiasty

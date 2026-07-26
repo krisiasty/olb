@@ -22,11 +22,13 @@ type overlayKind int
 const (
 	overlayNone overlayKind = iota
 	overlayHelp
-	overlayRaw     // y / j raw object view
-	overlayProject // p project switcher
-	overlayPicker  // h history picker
-	overlaySort    // o sort-column picker (top-level lists)
+	overlayRaw      // y / j raw object view
+	overlayProject  // p project switcher
+	overlayPicker   // h history picker
+	overlaySort     // o sort-column picker (top-level lists)
+	overlaySwitcher // 0 area/view switcher
 	overlayTelemetry
+	overlayToken // * current-token / whoami
 )
 
 // location is what the main pane currently shows: the LB list, or a node whose
@@ -98,15 +100,105 @@ type Model struct {
 	amphoraeLoaded        bool
 	amphoraeErr           string // e.g. admin RBAC required
 
+	// Identity (auth) area lists.
+	users              []osclient.User
+	usersLoaded        bool
+	usersErr           string // e.g. admin RBAC required
+	usersRestriction   string
+	domains            []osclient.Domain
+	domainsLoaded      bool
+	domainsErr         string // e.g. admin RBAC required
+	domainsRestriction string
+	groups             []osclient.Group
+	groupsLoaded       bool
+	groupsErr          string // e.g. admin RBAC required
+	groupsRestriction  string
+	// Group members (users) load lazily when a group is opened, keyed by group ID.
+	groupMembers        map[string][]osclient.User
+	groupMembersLoaded  map[string]bool
+	groupMembersLoading map[string]bool
+	groupMembersErr     map[string]string
+	// User groups load lazily when a user is opened, keyed by user ID (the inverse
+	// of group membership).
+	userGroups        map[string][]osclient.Group
+	userGroupsLoaded  map[string]bool
+	userGroupsLoading map[string]bool
+	userGroupsErr     map[string]string
+	// userProjects is populated from the self-service accessible-project list
+	// when an unprivileged current user cannot enumerate role assignments.
+	userProjects map[string][]osclient.Project
+	// projectList is the identity area's browsable projects list, distinct from
+	// the global project selector's `projects` (ProjectInfo, re-scoping).
+	projectList       []osclient.Project
+	projectListLoaded bool
+	projectListErr    string
+	roles             []osclient.Role
+	rolesLoaded       bool
+	rolesErr          string
+	rolesRestriction  string
+	// Service catalog: services, endpoints, and regions. The endpoints list is
+	// shared — a service's and a region's related endpoints are derived from it
+	// rather than re-fetched per object.
+	services         []osclient.Service
+	servicesLoaded   bool
+	servicesErr      string
+	endpoints        []osclient.Endpoint
+	endpointsLoaded  bool
+	endpointsLoading bool
+	endpointsErr     string
+	regions          []osclient.Region
+	regionsLoaded    bool
+	regionsErr       string
+	// Role relations (implied roles + assignments) load lazily when a role is
+	// opened, keyed by role ID.
+	roleRelations        map[string]roleRelations
+	roleRelationsLoaded  map[string]bool
+	roleRelationsLoading map[string]bool
+	roleRelationsErr     map[string]string
+	// Role assignments seen from the owning side load lazily when a user, group,
+	// project, or domain is opened — the mirror of the role→assignments view. One
+	// generic cache keyed by (owner kind, owner ID) since the four are identical
+	// in shape.
+	assignments        map[assignmentKey][]osclient.RoleAssignment
+	assignmentsLoaded  map[assignmentKey]bool
+	assignmentsLoading map[assignmentKey]bool
+	assignmentsErr     map[assignmentKey]string
+	// known* accumulate every identity object seen through any list (top-level,
+	// related, or domain contents), keyed by ID, so a related-object row can be
+	// opened into its detail even when its own top-level list was never visited.
+	// knownDomainFull / knownProjectFull mark an object whose full attributes are
+	// known (from a list) versus a bare reference (only ID + resolved name, e.g. a
+	// project reached only through a role assignment).
+	knownUsers       map[string]osclient.User
+	knownGroups      map[string]osclient.Group
+	knownProjects    map[string]osclient.Project
+	knownDomains     map[string]osclient.Domain
+	knownRoles       map[string]osclient.Role
+	knownServices    map[string]osclient.Service
+	knownRegions     map[string]osclient.Region
+	knownDomainFull  map[string]bool
+	knownProjectFull map[string]bool
+	// domainContents holds a domain's related projects, groups, and users, loaded
+	// lazily when the domain is opened, keyed by domain ID.
+	domainContents        map[string]domainContent
+	domainContentsLoaded  map[string]bool
+	domainContentsLoading map[string]bool
+	domainContentsErr     map[string]string
+
 	hist *history
 	loc  location
 
-	// Keys 1-5 select persistent workspaces. The active workspace is projected
-	// into hist/loc/list fields so the existing navigation and rendering code can
-	// stay focused on one browser-like stack at a time.
-	workspaces      [5]workspaceState
+	// Number keys select persistent workspaces within the active area; uppercase
+	// accelerators (and the 0 switcher) select areas. The active workspace is
+	// projected into hist/loc/list fields so the existing navigation and rendering
+	// code can stay focused on one browser-like stack at a time. Keyed by listKind
+	// so adding a view/area needs no fixed-size bookkeeping.
+	workspaces      map[listKind]*workspaceState
 	activeWorkspace listKind
 	workspaceResume workspacePosition
+	// areaLastView remembers the view last active in each area, so returning to an
+	// area (via its accelerator or the switcher) restores where you left off.
+	areaLastView map[areaKind]listKind
 
 	// Current list rows (allEntries unfiltered; entries after filters applied).
 	allEntries []entry
@@ -181,11 +273,21 @@ type Model struct {
 
 	// Overlay search (project switcher / history picker), kept separate from the
 	// list filter so opening an overlay doesn't clobber an active list filter.
-	search     textinput.Model
-	projects   []osclient.ProjectInfo
-	projCursor int
-	pickCursor int
-	sortCursor int // highlighted row in the sort-column overlay
+	search       textinput.Model
+	projects     []osclient.ProjectInfo
+	projCursor   int
+	pickCursor   int
+	sortCursor   int // highlighted row in the sort-column overlay
+	switchCursor int // highlighted row in the 0 area/view switcher overlay
+
+	// tokenInfo snapshots the current auth token for the * whoami overlay; it is
+	// read from the backend (no network) each time the overlay opens.
+	tokenInfo osclient.TokenInfo
+
+	// home is the launch/overview landing: a base-view mode (not an overlay nor a
+	// workspace) shown until the operator enters an area. Any workspace switch
+	// clears it; the ` key returns to it.
+	home bool
 
 	// Async / feedback.
 	loading     bool
@@ -293,6 +395,36 @@ func New(backend Backend, cfg Config) Model {
 		lbPoolsLoading:         map[string]bool{},
 		lbPoolsLoaded:          map[string]bool{},
 		coeClusterDetails:      map[string]coeDetailState{},
+		groupMembers:           map[string][]osclient.User{},
+		groupMembersLoaded:     map[string]bool{},
+		groupMembersLoading:    map[string]bool{},
+		groupMembersErr:        map[string]string{},
+		userGroups:             map[string][]osclient.Group{},
+		userGroupsLoaded:       map[string]bool{},
+		userGroupsLoading:      map[string]bool{},
+		userGroupsErr:          map[string]string{},
+		userProjects:           map[string][]osclient.Project{},
+		knownUsers:             map[string]osclient.User{},
+		knownGroups:            map[string]osclient.Group{},
+		knownProjects:          map[string]osclient.Project{},
+		knownDomains:           map[string]osclient.Domain{},
+		knownRoles:             map[string]osclient.Role{},
+		knownServices:          map[string]osclient.Service{},
+		knownRegions:           map[string]osclient.Region{},
+		knownDomainFull:        map[string]bool{},
+		knownProjectFull:       map[string]bool{},
+		domainContents:         map[string]domainContent{},
+		domainContentsLoaded:   map[string]bool{},
+		domainContentsLoading:  map[string]bool{},
+		domainContentsErr:      map[string]string{},
+		roleRelations:          map[string]roleRelations{},
+		roleRelationsLoaded:    map[string]bool{},
+		roleRelationsLoading:   map[string]bool{},
+		roleRelationsErr:       map[string]string{},
+		assignments:            map[assignmentKey][]osclient.RoleAssignment{},
+		assignmentsLoaded:      map[assignmentKey]bool{},
+		assignmentsLoading:     map[assignmentKey]bool{},
+		assignmentsErr:         map[assignmentKey]string{},
 		autoRefreshEnabled:     true,
 		autoIntervalIndex:      defaultAutoRefreshIntervalIndex,
 		autoGeneration:         1,
@@ -303,6 +435,7 @@ func New(backend Backend, cfg Config) Model {
 		clock:                  time.Now,
 	}
 	m.resetWorkspaces()
+	m.home = true // land on the overview until the operator enters an area
 	return m
 }
 

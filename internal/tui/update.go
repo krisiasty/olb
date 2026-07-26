@@ -70,6 +70,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onPools(msg)
 	case amphoraeListMsg:
 		return m.onAmphoraeList(msg)
+	case usersMsg:
+		return m.onUsers(msg)
+	case domainsMsg:
+		return m.onDomains(msg)
+	case groupsMsg:
+		return m.onGroups(msg)
+	case groupMembersMsg:
+		return m.onGroupMembers(msg)
+	case userGroupsMsg:
+		return m.onUserGroups(msg)
+	case projectListMsg:
+		return m.onProjectList(msg)
+	case rolesMsg:
+		return m.onRoles(msg)
+	case roleRelationsMsg:
+		return m.onRoleRelations(msg)
+	case assignmentsMsg:
+		return m.onAssignments(msg)
+	case servicesMsg:
+		return m.onServices(msg)
+	case endpointsMsg:
+		return m.onEndpoints(msg)
+	case regionsMsg:
+		return m.onRegions(msg)
+	case domainContentsMsg:
+		return m.onDomainContents(msg)
 	case treeMsg:
 		return m.onTree(msg)
 	case detailMsg:
@@ -296,6 +322,387 @@ func (m Model) onAmphoraeList(msg amphoraeListMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.refresh {
 		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onUsers(msg usersMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.usersLoaded = true
+	m.usersErr = ""
+	m.usersRestriction = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			// Graceful degradation, not an error state: show an explanatory list.
+			m.users = nil
+			m.usersErr = "user listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh users: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list users: "+msg.err.Error(), true)
+		}
+	} else {
+		m.users = msg.users
+		m.usersRestriction = msg.restriction
+		m.rememberUsers(msg.users)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindUser {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onDomains(msg domainsMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.domainsLoaded = true
+	m.domainsErr = ""
+	m.domainsRestriction = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.domains = nil
+			m.domainsErr = "domain listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh domains: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list domains: "+msg.err.Error(), true)
+		}
+	} else {
+		m.domains = msg.domains
+		m.domainsRestriction = msg.restriction
+		m.rememberDomains(msg.domains)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindDomain {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onGroups(msg groupsMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.groupsLoaded = true
+	m.groupsErr = ""
+	m.groupsRestriction = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.groups = nil
+			m.groupsErr = "group listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh groups: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list groups: "+msg.err.Error(), true)
+		}
+	} else {
+		m.groups = msg.groups
+		m.groupsRestriction = msg.restriction
+		m.rememberGroups(msg.groups)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindGroup {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onGroupMembers(msg groupMembersMsg) (tea.Model, tea.Cmd) {
+	delete(m.groupMembersLoading, msg.groupID)
+	m.groupMembersLoaded[msg.groupID] = true
+	m.groupMembersErr[msg.groupID] = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.groupMembers[msg.groupID] = nil
+			m.groupMembersErr[msg.groupID] = "member listing requires admin RBAC"
+		} else {
+			return m, m.setFlash("list group members: "+msg.err.Error(), true)
+		}
+	} else {
+		m.groupMembers[msg.groupID] = msg.users
+		m.rememberUsers(msg.users)
+	}
+	// Rebuild the related list if this group is the one on screen.
+	if m.isGroupOverview() && m.loc.node != nil && m.loc.node.ID == msg.groupID {
+		m.allEntries = m.groupRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	}
+	return m, nil
+}
+
+func (m Model) onProjectList(msg projectListMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.projectListLoaded = true
+	m.projectListErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.projectList = nil
+			m.projectListErr = "project listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh projects: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list projects: "+msg.err.Error(), true)
+		}
+	} else {
+		m.projectList = msg.projects
+		m.rememberProjects(msg.projects)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindProject {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onRoles(msg rolesMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.rolesLoaded = true
+	m.rolesErr = ""
+	m.rolesRestriction = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.roles = nil
+			m.rolesErr = "role listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh roles: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list roles: "+msg.err.Error(), true)
+		}
+	} else {
+		m.roles = msg.roles
+		m.rolesRestriction = msg.restriction
+		m.rememberRoles(msg.roles)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindRole {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onServices(msg servicesMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.servicesLoaded = true
+	m.servicesErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.services = nil
+			m.servicesErr = "service listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh services: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list services: "+msg.err.Error(), true)
+		}
+	} else {
+		m.services = msg.services
+		m.rememberServices(msg.services)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindService {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onRegions(msg regionsMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.regionsLoaded = true
+	m.regionsErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.regions = nil
+			m.regionsErr = "region listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh regions: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list regions: "+msg.err.Error(), true)
+		}
+	} else {
+		m.regions = msg.regions
+		m.rememberRegions(msg.regions)
+	}
+	if m.loc.isTopLevelList() && m.loc.listKind() == kindRegion {
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+// onEndpoints stores the shared endpoints list, which both drives the top-level
+// endpoints view and supplies a service's / region's related endpoints.
+func (m Model) onEndpoints(msg endpointsMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.endpointsLoaded = true
+	m.endpointsLoading = false
+	m.endpointsErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.endpoints = nil
+			m.endpointsErr = "endpoint listing requires admin RBAC"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh endpoints: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list endpoints: "+msg.err.Error(), true)
+		}
+	} else {
+		m.endpoints = msg.endpoints
+		m.rememberEndpointRefs(msg.endpoints)
+	}
+	switch {
+	case m.loc.isTopLevelList() && m.loc.listKind() == kindEndpoint:
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	case m.isServiceOverview() && m.loc.node != nil:
+		m.allEntries = m.serviceRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	case m.isRegionOverview() && m.loc.node != nil:
+		m.allEntries = m.regionRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onRoleRelations(msg roleRelationsMsg) (tea.Model, tea.Cmd) {
+	delete(m.roleRelationsLoading, msg.roleID)
+	m.roleRelationsLoaded[msg.roleID] = true
+	m.roleRelationsErr[msg.roleID] = ""
+	if msg.err != nil {
+		return m, m.setFlash("list role relations: "+msg.err.Error(), true)
+	}
+	m.roleRelations[msg.roleID] = roleRelations{implied: msg.implied, assignments: msg.assignments}
+	m.rememberRoles(msg.implied)
+	m.rememberAssignmentActors(msg.assignments)
+	if m.isRoleOverview() && m.loc.node != nil && m.loc.node.ID == msg.roleID {
+		m.allEntries = m.roleRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	}
+	return m, nil
+}
+
+// onAssignments stores the role assignments touching one identity object (user,
+// group, project, or domain) and, if that object is still open, rebuilds its
+// related list. An RBAC denial degrades to an empty section, matching the other
+// identity relations.
+func (m Model) onAssignments(msg assignmentsMsg) (tea.Model, tea.Cmd) {
+	delete(m.assignmentsLoading, msg.key)
+	m.assignmentsLoaded[msg.key] = true
+	m.assignmentsErr[msg.key] = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.assignments[msg.key] = nil
+			m.assignmentsErr[msg.key] = "assignment listing requires admin RBAC"
+		} else {
+			return m, m.setFlash("list role assignments: "+msg.err.Error(), true)
+		}
+	} else {
+		m.assignments[msg.key] = msg.assignments
+		m.rememberAssignmentActors(msg.assignments)
+		m.rememberAssignmentRoles(msg.assignments)
+		m.rememberAssignmentProjects(msg.assignments)
+	}
+	if msg.key.owner == ownerUser && msg.accessibleProjectsRead {
+		if msg.accessibleProjectsErr == nil {
+			m.userProjects[msg.key.id] = msg.accessibleProjects
+			m.rememberProjects(msg.accessibleProjects)
+		} else {
+			m.assignmentsErr[msg.key] += "; accessible project listing: " + msg.accessibleProjectsErr.Error()
+		}
+	}
+	if m.assignmentOwnerOpen(msg.key) {
+		m.allEntries = m.ownerRelatedEntries(msg.key.owner, m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	}
+	return m, nil
+}
+
+func (m Model) onUserGroups(msg userGroupsMsg) (tea.Model, tea.Cmd) {
+	delete(m.userGroupsLoading, msg.userID)
+	m.userGroupsLoaded[msg.userID] = true
+	m.userGroupsErr[msg.userID] = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.userGroups[msg.userID] = nil
+			m.userGroupsErr[msg.userID] = "group listing requires admin RBAC"
+		} else {
+			return m, m.setFlash("list user groups: "+msg.err.Error(), true)
+		}
+	} else {
+		m.userGroups[msg.userID] = msg.groups
+		m.rememberGroups(msg.groups)
+	}
+	if m.isUserOverview() && m.loc.node != nil && m.loc.node.ID == msg.userID {
+		m.allEntries = m.userRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
+	}
+	return m, nil
+}
+
+func (m Model) onDomainContents(msg domainContentsMsg) (tea.Model, tea.Cmd) {
+	delete(m.domainContentsLoading, msg.domainID)
+	m.domainContentsLoaded[msg.domainID] = true
+	m.domainContentsErr[msg.domainID] = ""
+	if msg.err != nil {
+		return m, m.setFlash("list domain contents: "+msg.err.Error(), true)
+	}
+	m.domainContents[msg.domainID] = domainContent{projects: msg.projects, groups: msg.groups, users: msg.users}
+	m.rememberProjects(msg.projects)
+	m.rememberGroups(msg.groups)
+	m.rememberUsers(msg.users)
+	if m.isDomainOverview() && m.loc.node != nil && m.loc.node.ID == msg.domainID {
+		m.allEntries = m.domainRelatedEntries(m.loc.node)
+		m.entries = nil
+		m.applyFilters()
+		m.restoreWorkspacePosition()
 	}
 	return m, nil
 }
@@ -1617,7 +2024,7 @@ func (m Model) onRefResolve(msg refResolveMsg) (tea.Model, tea.Cmd) {
 		m.clearFilter()
 		return m, m.render()
 	}
-	state := &m.workspaces[msg.workspace]
+	state := m.workspaces[msg.workspace]
 	state.hist.navigate(histEntry{id: msg.node.Identity(), viaRef: true})
 	state.filterValue = ""
 	return m, nil
@@ -1882,10 +2289,48 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.listeners, m.listenersLoaded = nil, false
 	m.pools, m.poolsLoaded = nil, false
 	m.amphorae, m.amphoraeLoaded, m.amphoraeErr = nil, false, ""
+	m.users, m.usersLoaded, m.usersErr, m.usersRestriction = nil, false, "", ""
+	m.domains, m.domainsLoaded, m.domainsErr, m.domainsRestriction = nil, false, "", ""
+	m.groups, m.groupsLoaded, m.groupsErr, m.groupsRestriction = nil, false, "", ""
+	m.groupMembers = map[string][]osclient.User{}
+	m.groupMembersLoaded = map[string]bool{}
+	m.groupMembersLoading = map[string]bool{}
+	m.groupMembersErr = map[string]string{}
+	m.userGroups = map[string][]osclient.Group{}
+	m.userGroupsLoaded = map[string]bool{}
+	m.userGroupsLoading = map[string]bool{}
+	m.userGroupsErr = map[string]string{}
+	m.userProjects = map[string][]osclient.Project{}
+	m.projectList, m.projectListLoaded, m.projectListErr = nil, false, ""
+	m.roles, m.rolesLoaded, m.rolesErr, m.rolesRestriction = nil, false, "", ""
+	m.services, m.servicesLoaded, m.servicesErr = nil, false, ""
+	m.endpoints, m.endpointsLoaded, m.endpointsLoading, m.endpointsErr = nil, false, false, ""
+	m.regions, m.regionsLoaded, m.regionsErr = nil, false, ""
+	m.roleRelations = map[string]roleRelations{}
+	m.roleRelationsLoaded = map[string]bool{}
+	m.roleRelationsLoading = map[string]bool{}
+	m.roleRelationsErr = map[string]string{}
+	m.assignments = map[assignmentKey][]osclient.RoleAssignment{}
+	m.assignmentsLoaded = map[assignmentKey]bool{}
+	m.assignmentsLoading = map[assignmentKey]bool{}
+	m.assignmentsErr = map[assignmentKey]string{}
+	m.knownRoles = map[string]osclient.Role{}
+	m.knownServices = map[string]osclient.Service{}
+	m.knownRegions = map[string]osclient.Region{}
+	m.knownUsers = map[string]osclient.User{}
+	m.knownGroups = map[string]osclient.Group{}
+	m.knownProjects = map[string]osclient.Project{}
+	m.knownDomains = map[string]osclient.Domain{}
+	m.knownDomainFull = map[string]bool{}
+	m.knownProjectFull = map[string]bool{}
+	m.domainContents = map[string]domainContent{}
+	m.domainContentsLoaded = map[string]bool{}
+	m.domainContentsLoading = map[string]bool{}
+	m.domainContentsErr = map[string]string{}
 	m.resetWorkspacesAt(activeWorkspace)
 	m.overlay = overlayNone
 	loadCmd := m.showTopLevelList(activeWorkspace.identity())
-	if activeWorkspace != kindLB && activeWorkspace != kindVIP {
+	if areaOf(activeWorkspace) == areaLB && activeWorkspace != kindLB && activeWorkspace != kindVIP {
 		// Listener, pool, and amphora rows label their owning load balancer by
 		// name, which comes from the LB list rather than their own API response.
 		loadCmd = tea.Batch(loadCmd, m.loadLBsCmd())
@@ -1936,9 +2381,185 @@ func attachAmphora(tree *model.Tree, amphora *model.Node) {
 	tree.Attach(amphora)
 }
 
+// setStandalone renders a detail view for an identity-area object built from an
+// already-loaded list. These objects have no owning load-balancer tree, so the
+// node is synthesized rather than resolved against a status-show cache. related
+// is the (possibly nil) related-object list and load an optional command to
+// fetch it lazily. A nil node (e.g. a stale history entry after the list was
+// dropped) degrades to a dead location rather than erroring.
+func (m *Model) setStandalone(id model.Identity, n *model.Node, related []entry, load tea.Cmd) tea.Cmd {
+	if n == nil {
+		m.loc = location{id: id, dead: true}
+		m.allEntries = nil
+		m.entries = nil
+		m.hist.markDead()
+		m.applyFilters()
+		return nil
+	}
+	m.loc = location{id: id, node: n}
+	m.allEntries = related
+	m.entries = nil
+	m.rawContent, m.rawFormat = "", ""
+	m.cursor, m.top = 0, 0
+	m.loading, m.loadingWhat = false, ""
+	m.applyFilters()
+	m.restoreWorkspacePosition()
+	return load
+}
+
+// ensureAssignmentsCmd triggers a lazy load of an identity object's role
+// assignments (the mirror of the role→assignments view) the first time its
+// detail is opened, returning nil when they are already present or in flight.
+func (m *Model) ensureAssignmentsCmd(owner ownerKind, id string) tea.Cmd {
+	key := assignmentKey{owner: owner, id: id}
+	if m.assignmentsLoaded[key] || m.assignmentsLoading[key] {
+		return nil
+	}
+	m.assignmentsLoading[key] = true
+	return m.loadAssignmentsCmd(key)
+}
+
+// showUser renders a user detail with its domain (top), the groups it belongs to,
+// and its role assignments (effective — including roles inherited via groups) as
+// related objects; the groups and assignments load lazily, keyed by user ID.
+func (m *Model) showUser(id model.Identity) tea.Cmd {
+	n := m.userNode(id.ID)
+	var cmds []tea.Cmd
+	if n != nil {
+		if !m.userGroupsLoaded[id.ID] && !m.userGroupsLoading[id.ID] {
+			m.userGroupsLoading[id.ID] = true
+			cmds = append(cmds, m.loadUserGroupsCmd(id.ID))
+		}
+		cmds = append(cmds, m.ensureAssignmentsCmd(ownerUser, id.ID))
+	}
+	return m.setStandalone(id, n, m.userRelatedEntries(n), tea.Batch(cmds...))
+}
+
+// showDomain renders a domain detail with its projects, groups, users, and the
+// role assignments scoped to the domain as related objects; all load lazily,
+// keyed by domain ID.
+func (m *Model) showDomain(id model.Identity) tea.Cmd {
+	n := m.domainNode(id.ID)
+	var cmds []tea.Cmd
+	if n != nil {
+		if !m.domainContentsLoaded[id.ID] && !m.domainContentsLoading[id.ID] {
+			m.domainContentsLoading[id.ID] = true
+			cmds = append(cmds, m.loadDomainContentsCmd(id.ID))
+		}
+		cmds = append(cmds, m.ensureAssignmentsCmd(ownerDomain, id.ID))
+	}
+	return m.setStandalone(id, n, m.domainRelatedEntries(n), tea.Batch(cmds...))
+}
+
+// showGroup renders a group detail with its domain (top), its member users, and
+// its role assignments (the roles every member inherits) as related objects; the
+// members and assignments load lazily, keyed by group ID.
+func (m *Model) showGroup(id model.Identity) tea.Cmd {
+	n := m.groupNode(id.ID)
+	var cmds []tea.Cmd
+	if n != nil {
+		if !m.groupMembersLoaded[id.ID] && !m.groupMembersLoading[id.ID] {
+			m.groupMembersLoading[id.ID] = true
+			cmds = append(cmds, m.loadGroupMembersCmd(id.ID))
+		}
+		cmds = append(cmds, m.ensureAssignmentsCmd(ownerGroup, id.ID))
+	}
+	return m.setStandalone(id, n, m.groupRelatedEntries(n), tea.Batch(cmds...))
+}
+
+// showProject renders a project detail with its domain (resolved immediately) and
+// the role assignments scoped to it — who holds a role there — as related
+// objects; the assignments load lazily, keyed by project ID.
+func (m *Model) showProject(id model.Identity) tea.Cmd {
+	n := m.projectNode(id.ID)
+	var load tea.Cmd
+	if n != nil {
+		load = m.ensureAssignmentsCmd(ownerProject, id.ID)
+	}
+	return m.setStandalone(id, n, m.projectRelatedEntries(n), load)
+}
+
+// showRole renders a catalog role with its implied roles and assignments,
+// loaded lazily by role ID. A role sourced from the active token carries only
+// effective scope data, so it deliberately skips those privileged relation
+// calls and renders a summary-only detail.
+func (m *Model) showRole(id model.Identity) tea.Cmd {
+	n := m.roleNode(id.ID)
+	var load tea.Cmd
+	if n != nil && n.Attrs["token_scoped"] != "true" && !m.roleRelationsLoaded[id.ID] && !m.roleRelationsLoading[id.ID] {
+		m.roleRelationsLoading[id.ID] = true
+		load = m.loadRoleRelationsCmd(id.ID)
+	}
+	return m.setStandalone(id, n, m.roleRelatedEntries(n), load)
+}
+
+// ensureEndpointsCmd triggers a one-time load of the shared endpoints list the
+// first time a service or region detail (which derives its related endpoints
+// from it) is opened, returning nil when it is already present or in flight.
+func (m *Model) ensureEndpointsCmd() tea.Cmd {
+	if m.endpointsLoaded || m.endpointsLoading {
+		return nil
+	}
+	m.endpointsLoading = true
+	return m.loadEndpointsCmd(false)
+}
+
+// showService renders a service detail with its endpoints as related objects,
+// derived from the shared endpoints list (loaded lazily on first landing).
+func (m *Model) showService(id model.Identity) tea.Cmd {
+	n := m.serviceNode(id.ID)
+	var load tea.Cmd
+	if n != nil {
+		load = m.ensureEndpointsCmd()
+	}
+	return m.setStandalone(id, n, m.serviceRelatedEntries(n), load)
+}
+
+// showEndpoint renders an endpoint detail with its service and region as related
+// objects (both resolved from the known-object caches, no fetch).
+func (m *Model) showEndpoint(id model.Identity) tea.Cmd {
+	n := m.endpointNode(id.ID)
+	return m.setStandalone(id, n, m.endpointRelatedEntries(n), nil)
+}
+
+// showRegion renders a region detail with its parent region and the endpoints
+// located in it as related objects; the endpoints load lazily.
+func (m *Model) showRegion(id model.Identity) tea.Cmd {
+	n := m.regionNode(id.ID)
+	var load tea.Cmd
+	if n != nil {
+		load = m.ensureEndpointsCmd()
+	}
+	return m.setStandalone(id, n, m.regionRelatedEntries(n), load)
+}
+
 func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	if id.IsTopLevelList() {
 		return m.showTopLevelList(id)
+	}
+	if id.Type == model.TypeUser {
+		return m.showUser(id)
+	}
+	if id.Type == model.TypeService {
+		return m.showService(id)
+	}
+	if id.Type == model.TypeEndpoint {
+		return m.showEndpoint(id)
+	}
+	if id.Type == model.TypeRegion {
+		return m.showRegion(id)
+	}
+	if id.Type == model.TypeDomain {
+		return m.showDomain(id)
+	}
+	if id.Type == model.TypeGroup {
+		return m.showGroup(id)
+	}
+	if id.Type == model.TypeProject {
+		return m.showProject(id)
+	}
+	if id.Type == model.TypeRole {
+		return m.showRole(id)
 	}
 	if id.Type == model.TypeAmphora {
 		n := model.NewNode(model.TypeAmphora, id.ID, id.ID)
@@ -2080,6 +2701,71 @@ func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 		m.loading, m.loadingWhat = true, "amphorae"
 		m.showLoadingList()
 		return m.loadAmphoraeListCmd(false)
+	case kindUser:
+		if m.usersLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "users"
+		m.showLoadingList()
+		return m.loadUsersCmd(false)
+	case kindDomain:
+		if m.domainsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "domains"
+		m.showLoadingList()
+		return m.loadDomainsCmd(false)
+	case kindGroup:
+		if m.groupsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "groups"
+		m.showLoadingList()
+		return m.loadGroupsCmd(false)
+	case kindProject:
+		if m.projectListLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "projects"
+		m.showLoadingList()
+		return m.loadProjectListCmd(false)
+	case kindRole:
+		if m.rolesLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "roles"
+		m.showLoadingList()
+		return m.loadRolesCmd(false)
+	case kindService:
+		if m.servicesLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "services"
+		m.showLoadingList()
+		return m.loadServicesCmd(false)
+	case kindEndpoint:
+		if m.endpointsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "endpoints"
+		m.showLoadingList()
+		m.endpointsLoading = true
+		return m.loadEndpointsCmd(false)
+	case kindRegion:
+		if m.regionsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "regions"
+		m.showLoadingList()
+		return m.loadRegionsCmd(false)
 	}
 	return nil
 }
@@ -2105,6 +2791,22 @@ func (m *Model) setTopLevelEntries() {
 		m.allEntries = poolEntries(m.pools, m.lbNameByID())
 	case kindAmphora:
 		m.allEntries = amphoraEntries(m.amphorae, m.lbNameByID(), !m.allProjects)
+	case kindUser:
+		m.allEntries = userEntries(m.users)
+	case kindDomain:
+		m.allEntries = domainEntries(m.domains)
+	case kindGroup:
+		m.allEntries = groupEntries(m.groups)
+	case kindProject:
+		m.allEntries = projectEntries(m.projectList)
+	case kindRole:
+		m.allEntries = roleEntries(m.roles)
+	case kindService:
+		m.allEntries = serviceEntries(m.services)
+	case kindEndpoint:
+		m.allEntries = endpointEntries(m.endpoints)
+	case kindRegion:
+		m.allEntries = regionEntries(m.regions)
 	default:
 		m.allEntries = lbEntries(m.lbs, m.allProjects)
 	}
@@ -2157,7 +2859,15 @@ func (m *Model) applyFilters() {
 		}
 		res = append(res, e)
 	}
-	if m.isLBOverview() || m.isListenerOverview() || m.isPoolOverview() {
+	if m.isIdentityOverview() {
+		// Identity details show a fixed set of sections (empty ones included) once
+		// loaded; before that, fall back to labelling only the present sections.
+		if sections := m.expectedRelatedSections(); sections != nil {
+			res = withExpectedGroupHeadings(res, sections)
+		} else {
+			res = withRelatedGroupHeadings(res)
+		}
+	} else if m.isLBOverview() || m.isListenerOverview() || m.isPoolOverview() {
 		res = withRelatedGroupHeadings(res)
 	}
 	m.sortEntries(res) // no-op unless a top-level list has an active sort column
@@ -2180,7 +2890,7 @@ func (m *Model) applyFilters() {
 }
 
 func (m *Model) ensureVisible() {
-	h := m.visibleRows()
+	h := m.listContentRows()
 	if h < 1 {
 		h = 1
 	}

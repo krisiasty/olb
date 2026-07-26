@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -90,6 +91,97 @@ type amphoraeListMsg struct {
 	nodes   []*model.Node
 	refresh bool
 	err     error
+}
+
+// usersMsg carries the identity-area users list and any self-service restriction
+// reported by the backend. It may still return ErrAdminRequired when neither the
+// full collection nor the current token identity is available.
+type usersMsg struct {
+	users       []osclient.User
+	restriction string
+	refresh     bool
+	err         error
+}
+
+type domainsMsg struct {
+	domains     []osclient.Domain
+	restriction string
+	refresh     bool
+	err         error
+}
+
+type groupsMsg struct {
+	groups      []osclient.Group
+	restriction string
+	refresh     bool
+	err         error
+}
+
+type groupMembersMsg struct {
+	groupID string
+	users   []osclient.User
+	err     error
+}
+
+type userGroupsMsg struct {
+	userID string
+	groups []osclient.Group
+	err    error
+}
+
+type projectListMsg struct {
+	projects []osclient.Project
+	refresh  bool
+	err      error
+}
+
+type rolesMsg struct {
+	roles       []osclient.Role
+	restriction string
+	refresh     bool
+	err         error
+}
+
+type roleRelationsMsg struct {
+	roleID      string
+	implied     []osclient.Role
+	assignments []osclient.RoleAssignment
+	err         error
+}
+
+type assignmentsMsg struct {
+	key                    assignmentKey
+	assignments            []osclient.RoleAssignment
+	err                    error
+	accessibleProjects     []osclient.Project
+	accessibleProjectsRead bool
+	accessibleProjectsErr  error
+}
+
+type servicesMsg struct {
+	services []osclient.Service
+	refresh  bool
+	err      error
+}
+
+type endpointsMsg struct {
+	endpoints []osclient.Endpoint
+	refresh   bool
+	err       error
+}
+
+type regionsMsg struct {
+	regions []osclient.Region
+	refresh bool
+	err     error
+}
+
+type domainContentsMsg struct {
+	domainID string
+	projects []osclient.Project
+	groups   []osclient.Group
+	users    []osclient.User
+	err      error
 }
 
 type projectsMsg struct {
@@ -213,6 +305,248 @@ func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
 		defer cancel()
 		nodes, err := b.ListAllAmphorae(ctx)
 		return amphoraeListMsg{nodes: nodes, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadUsersCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		result, err := b.ListUsers(ctx)
+		return usersMsg{users: result.Items, restriction: result.Restriction, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadDomainsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		result, err := b.ListDomains(ctx)
+		return domainsMsg{domains: result.Items, restriction: result.Restriction, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadGroupsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		result, err := b.ListGroups(ctx)
+		return groupsMsg{groups: result.Items, restriction: result.Restriction, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadGroupMembersCmd(groupID string) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		us, err := b.ListGroupMembers(ctx, groupID)
+		return groupMembersMsg{groupID: groupID, users: us, err: err}
+	}
+}
+
+func (m Model) loadUserGroupsCmd(userID string) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		gs, err := b.ListUserGroups(ctx, userID)
+		return userGroupsMsg{userID: userID, groups: gs, err: err}
+	}
+}
+
+func (m Model) loadProjectListCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		ps, err := b.ListProjectsDetailed(ctx)
+		return projectListMsg{projects: ps, refresh: refresh, err: err}
+	}
+}
+
+// loadDomainContentsCmd fetches a domain's projects, groups, and users. A per-
+// category RBAC denial (ErrAdminRequired) leaves that category empty rather than
+// failing the whole load; any other error is surfaced.
+func (m Model) loadDomainContentsCmd(domainID string) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		ps, perr := b.ListProjectsInDomain(ctx, domainID)
+		gs, gerr := b.ListGroupsInDomain(ctx, domainID)
+		us, uerr := b.ListUsersInDomain(ctx, domainID)
+		return domainContentsMsg{
+			domainID: domainID, projects: ps, groups: gs, users: us,
+			err: firstNonRBACErr(perr, gerr, uerr),
+		}
+	}
+}
+
+// firstNonRBACErr returns the first error that is neither nil nor an admin-RBAC
+// denial (those are handled by degrading to an empty category).
+func firstNonRBACErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil && !errors.Is(err, osclient.ErrAdminRequired) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m Model) loadRolesCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		result, err := b.ListRoles(ctx)
+		return rolesMsg{roles: result.Items, restriction: result.Restriction, refresh: refresh, err: err}
+	}
+}
+
+// loadRoleRelationsCmd fetches a role's implied roles and assignments together.
+// A per-category RBAC denial leaves that category empty; any other error is
+// surfaced.
+func (m Model) loadRoleRelationsCmd(roleID string) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		implied, ierr := b.ListImpliedRoles(ctx, roleID)
+		assignments, aerr := b.ListRoleAssignments(ctx, roleID)
+		return roleRelationsMsg{
+			roleID: roleID, implied: implied, assignments: assignments,
+			err: firstNonRBACErr(ierr, aerr),
+		}
+	}
+}
+
+// loadAssignmentsCmd fetches the role assignments touching one identity object
+// (user, group, project, or domain) — the mirror of a role's assignment list.
+// Which backend call it makes depends on the owner side.
+func (m Model) loadAssignmentsCmd(key assignmentKey) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		var as []osclient.RoleAssignment
+		var err error
+		switch key.owner {
+		case ownerUser:
+			as, err = b.ListUserAssignments(ctx, key.id)
+		case ownerGroup:
+			as, err = b.ListGroupAssignments(ctx, key.id)
+		case ownerProject:
+			as, err = b.ListProjectAssignments(ctx, key.id)
+		case ownerDomain:
+			as, err = b.ListDomainAssignments(ctx, key.id)
+		}
+		// Some Keystone policies return 403 for a forbidden assignment list;
+		// others return a successful but empty collection. In either case, an
+		// empty result must not hide effective roles proven by the active token.
+		if errors.Is(err, osclient.ErrAdminRequired) || (err == nil && len(as) == 0) {
+			token := b.CurrentToken()
+			tokenAssignments, applicable := activeTokenAssignments(token, key)
+			if applicable {
+				msg := assignmentsMsg{
+					key: key, assignments: tokenAssignments,
+				}
+				// Keystone commonly denies role-assignment enumeration to project
+				// members. For the authenticated user, the self-service projects
+				// endpoint still provides every project they can access, not only
+				// the active token scope.
+				if key.owner != ownerUser {
+					return msg
+				}
+				ps, projectsErr := b.ListProjectsDetailed(ctx)
+				msg.accessibleProjects = ps
+				msg.accessibleProjectsRead = true
+				msg.accessibleProjectsErr = projectsErr
+				return msg
+			}
+		}
+		return assignmentsMsg{key: key, assignments: as, err: err}
+	}
+}
+
+// activeTokenAssignments returns the effective roles the token can prove for
+// the selected owner. A token identifies the current user and its active scope,
+// but does not expose whether a role was direct, inherited, or supplied by a
+// group, so group fallbacks are deliberately unsupported.
+func activeTokenAssignments(token osclient.TokenInfo, key assignmentKey) ([]osclient.RoleAssignment, bool) {
+	if !token.Available || token.UserID == "" {
+		return nil, false
+	}
+	switch key.owner {
+	case ownerUser:
+		if key.id != token.UserID {
+			return nil, false
+		}
+	case ownerProject:
+		if token.ScopeType != "project" || key.id != token.ScopeID {
+			return nil, false
+		}
+	case ownerDomain:
+		if token.ScopeType != "domain" || key.id != token.ScopeID {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+
+	targetType, targetID, targetName := token.ScopeType, token.ScopeID, token.ScopeName
+	if targetType != "project" && targetType != "domain" && targetType != "system" {
+		return nil, true
+	}
+	roles := token.RoleDetails
+	if len(roles) == 0 {
+		roles = make([]osclient.TokenRole, 0, len(token.Roles))
+		for _, name := range token.Roles {
+			roles = append(roles, osclient.TokenRole{Name: name})
+		}
+	}
+	out := make([]osclient.RoleAssignment, 0, len(roles))
+	for _, role := range roles {
+		out = append(out, osclient.RoleAssignment{
+			RoleID: role.ID, RoleName: role.Name,
+			ActorType: "user", ActorID: token.UserID, ActorName: token.UserName,
+			TargetType: targetType, TargetID: targetID, TargetName: targetName,
+			TokenScoped: true,
+		})
+	}
+	return out, true
+}
+
+func (m Model) loadServicesCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		ss, err := b.ListServices(ctx)
+		return servicesMsg{services: ss, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadEndpointsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		es, err := b.ListEndpoints(ctx)
+		return endpointsMsg{endpoints: es, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadRegionsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		rs, err := b.ListRegions(ctx)
+		return regionsMsg{regions: rs, refresh: refresh, err: err}
 	}
 }
 

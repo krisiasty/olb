@@ -40,29 +40,63 @@ func (m Model) View() string {
 		return m.rawView()
 	case overlayProject:
 		return m.projectView()
+	case overlaySwitcher:
+		return m.switcherView()
 	case overlayPicker:
 		return m.pickerView()
 	case overlaySort:
 		return m.sortView()
 	case overlayTelemetry:
 		return m.telemetryView()
+	case overlayToken:
+		return m.tokenView()
+	}
+	if m.home {
+		return m.homeView()
 	}
 	return m.listView()
 }
 
 func (m Model) listView() string {
+	// Scroll hints bracket the scrolling region. For a top-level list the whole
+	// body scrolls, so "▲ more" sits on the subtitle line above it. For a detail
+	// overview the scrolling happens in the related sub-panel (the trailing region
+	// of the body), so "▲ more" belongs on the line just above that panel — the
+	// line at index len(body)-visibleRows()-1 — keeping the hint next to the list
+	// it describes rather than at the top of the screen. "▼ more" always sits on
+	// the flash line just below the body. On wide screens both hints mirror onto
+	// the left edge too.
+	above, below := m.listScrollMarkers()
+	body := m.bodyLines()
 	lines := make([]string, 0, m.height)
 	lines = append(lines, m.breadcrumbLine())
-	lines = append(lines, m.subtitleLine())
-	lines = append(lines, m.bodyLines()...)
-	lines = append(lines, m.flashLine())
+
+	topOnSubtitle := true
+	if !m.loc.isTopLevelList() {
+		if i := len(body) - m.visibleRows() - 1; i >= 0 && i < len(body) {
+			if above != "" {
+				body[i] = m.edgeMarkerLine(body[i], above)
+			}
+			topOnSubtitle = false
+		}
+	}
+	if topOnSubtitle {
+		lines = append(lines, m.edgeMarkerLine(m.subtitleLine(), above))
+	} else {
+		lines = append(lines, m.clip(m.subtitleLine()))
+	}
+	lines = append(lines, body...)
+	lines = append(lines, m.edgeMarkerLine(m.flashLine(), below))
 	lines = append(lines, m.hintLine())
 	return strings.Join(lines, "\n")
 }
 
 func (m Model) breadcrumbLine() string {
 	trail := m.hist.trail()
-	parts := []string{m.st.breadcrumb.Render(listKindOf(m.hist.rootIdentity()).rootLabel())}
+	area := areaByKind(areaOf(m.activeWorkspace))
+	chip := m.st.panelTitle.Render(fmt.Sprintf(" %s-%d ", string(area.key), viewNumber(m.activeWorkspace)))
+	root := chip + " " + m.st.breadcrumb.Render(listKindOf(m.hist.rootIdentity()).rootLabel())
+	parts := []string{root}
 	for _, e := range trail {
 		marker := " › "
 		if e.viaRef {
@@ -155,6 +189,9 @@ func (m Model) subtitleLine() string {
 		scope = m.st.statusBar.Render("scope: ") + m.st.title.Render(label)
 	}
 	parts := []string{scope, m.styledAutoRefreshLabel()}
+	if restriction := m.identityListRestriction(); restriction != "" {
+		parts = append(parts, m.st.statusBar.Render("showing "+restriction))
+	}
 	if !m.isOverview() {
 		if len(m.entries) != len(m.allEntries) {
 			parts = append(parts, m.st.statusBar.Render(fmt.Sprintf("%d/%d items", len(m.entries), len(m.allEntries))))
@@ -175,6 +212,24 @@ func (m Model) subtitleLine() string {
 		parts = append(parts, m.st.statusBar.Render(m.spinner.View()+" "+m.loadingLabel()))
 	}
 	return m.clip(strings.Join(parts, m.st.statusBar.Render("  ·  ")))
+}
+
+func (m Model) identityListRestriction() string {
+	if !m.loc.isTopLevelList() {
+		return ""
+	}
+	switch m.loc.listKind() {
+	case kindUser:
+		return m.usersRestriction
+	case kindDomain:
+		return m.domainsRestriction
+	case kindGroup:
+		return m.groupsRestriction
+	case kindRole:
+		return m.rolesRestriction
+	default:
+		return ""
+	}
 }
 
 // visibleRows is the number of resource-list lines the body can show. The
@@ -198,6 +253,22 @@ func (m Model) visibleRows() int {
 		_, h = m.healthMonitorOverviewParts(h)
 	} else if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
 		h--
+	} else if m.isGroupOverview() {
+		_, h = m.identityOverviewParts(h, m.groupOverviewSummary)
+	} else if m.isUserOverview() {
+		_, h = m.identityOverviewParts(h, m.userOverviewSummary)
+	} else if m.isDomainOverview() {
+		_, h = m.identityOverviewParts(h, m.domainOverviewSummary)
+	} else if m.isProjectOverview() {
+		_, h = m.identityOverviewParts(h, m.projectOverviewSummary)
+	} else if m.isRoleOverview() {
+		_, h = m.identityOverviewParts(h, m.roleOverviewSummary)
+	} else if m.isServiceOverview() {
+		_, h = m.identityOverviewParts(h, m.serviceOverviewSummary)
+	} else if m.isEndpointOverview() {
+		_, h = m.identityOverviewParts(h, m.endpointOverviewSummary)
+	} else if m.isRegionOverview() {
+		_, h = m.identityOverviewParts(h, m.regionOverviewSummary)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -234,6 +305,30 @@ func (m Model) bodyLines() []string {
 	if m.isCOEClusterOverview() || m.isKubernetesServiceOverview() {
 		return m.simpleKubernetesOverviewLines(h)
 	}
+	if m.isUserOverview() {
+		return m.userOverviewLines(h)
+	}
+	if m.isDomainOverview() {
+		return m.domainOverviewLines(h)
+	}
+	if m.isGroupOverview() {
+		return m.groupOverviewLines(h)
+	}
+	if m.isProjectOverview() {
+		return m.projectOverviewLines(h)
+	}
+	if m.isRoleOverview() {
+		return m.roleOverviewLines(h)
+	}
+	if m.isServiceOverview() {
+		return m.serviceOverviewLines(h)
+	}
+	if m.isEndpointOverview() {
+		return m.endpointOverviewLines(h)
+	}
+	if m.isRegionOverview() {
+		return m.regionOverviewLines(h)
+	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
@@ -245,6 +340,16 @@ func (m Model) bodyLines() []string {
 			msg = "this object was deleted since you last viewed it (press ← back or ctrl+home)"
 		case m.loc.listKind() == kindAmphora && m.amphoraeErr != "":
 			msg = m.amphoraeErr
+		case m.loc.listKind() == kindUser && m.usersErr != "":
+			msg = m.usersErr
+		case m.loc.listKind() == kindDomain && m.domainsErr != "":
+			msg = m.domainsErr
+		case m.loc.listKind() == kindGroup && m.groupsErr != "":
+			msg = m.groupsErr
+		case m.loc.listKind() == kindProject && m.projectListErr != "":
+			msg = m.projectListErr
+		case m.loc.listKind() == kindRole && m.rolesErr != "":
+			msg = m.rolesErr
 		case m.filter.Value() != "" || m.status != statusAll:
 			msg = "— no matches —"
 		}
@@ -283,7 +388,18 @@ func (m Model) resourceLines(h int, empty string) []string {
 		return lines
 	}
 	lines := make([]string, 0, h)
-	end := m.top + h
+	// Sticky group heading: in a grouped related list that overflows, keep one row
+	// for the current group's heading so a scrolled-away section (e.g. PROJECTS)
+	// stays labelled. The reserved row is the pinned heading while scrolled, or a
+	// trailing blank at the top of the list.
+	content := h
+	if m.stickyHeadingsActive(h) {
+		content = h - 1
+		if sticky := m.stickyGroupHeading(m.top); sticky != "" {
+			lines = append(lines, sticky)
+		}
+	}
+	end := m.top + content
 	if end > len(m.entries) {
 		end = len(m.entries)
 	}
@@ -297,6 +413,55 @@ func (m Model) resourceLines(h int, empty string) []string {
 		lines = lines[:h]
 	}
 	return lines
+}
+
+// stickyHeadingsActive reports whether the current related list reserves a row
+// to pin the scrolled group's heading: an identity overview whose grouped related
+// list overflows the region height h. Scoped to the identity overviews (whose
+// related objects are always grouped) so the load-balancer overviews keep their
+// existing row budget.
+func (m Model) stickyHeadingsActive(h int) bool {
+	if h <= 1 || len(m.entries) <= h || !m.isIdentityOverview() {
+		return false
+	}
+	for _, e := range m.entries {
+		if e.kind == entGroup {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) isIdentityOverview() bool {
+	return m.isUserOverview() || m.isDomainOverview() || m.isGroupOverview() || m.isProjectOverview() || m.isRoleOverview() ||
+		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview()
+}
+
+// stickyGroupHeading renders the heading of the group containing the row at
+// index i (the first visible row), or "" if i is itself a heading, is at the top,
+// or has no preceding heading.
+func (m Model) stickyGroupHeading(i int) string {
+	if i <= 0 || i >= len(m.entries) || m.entries[i].kind == entGroup {
+		return ""
+	}
+	for j := i - 1; j >= 0; j-- {
+		if m.entries[j].kind == entGroup {
+			return m.renderRow(m.entries[j], false)
+		}
+	}
+	return ""
+}
+
+// listContentRows is the number of selectable-list rows actually available for
+// content — the visible region minus the row reserved for a sticky heading.
+// Cursor visibility (ensureVisible) and scroll hints use this rather than the raw
+// region height so the pinned heading never hides the selected row.
+func (m Model) listContentRows() int {
+	h := m.visibleRows()
+	if m.stickyHeadingsActive(h) {
+		h--
+	}
+	return h
 }
 
 func (m Model) isLBOverview() bool {
@@ -341,7 +506,9 @@ func (m Model) isStatsOverview() bool {
 
 func (m Model) isOverview() bool {
 	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() ||
-		m.isHealthMonitorOverview() || m.isCOEClusterOverview() || m.isKubernetesServiceOverview()
+		m.isHealthMonitorOverview() || m.isCOEClusterOverview() || m.isKubernetesServiceOverview() ||
+		m.isUserOverview() || m.isDomainOverview() || m.isGroupOverview() || m.isProjectOverview() || m.isRoleOverview() ||
+		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -1648,6 +1815,12 @@ func (m Model) lbTableLines(h int) []string {
 			out = append(out, selStyle.Render(tableRowText(cells, widths)))
 			continue
 		}
+		if e := window[i]; e.kind == entUser && e.user.Service {
+			// Service/system accounts recede: the whole row is dimmed (the leading
+			// marker from userRowCells flags it).
+			out = append(out, m.st.attrs.Render(tableRowText(cells, widths)))
+			continue
+		}
 		out = append(out, m.tableDataRow(cells, widths, statusCols))
 	}
 	for len(out) < h {
@@ -1782,6 +1955,10 @@ func (m Model) renderRow(e entry, sel bool) string {
 		heading := " " + m.st.relatedGroup.Render(e.label)
 		return m.clip(m.renderIssueCounts(heading, e.issueErrors, e.issueDegraded))
 	}
+	if e.kind == entUser || e.kind == entDomain || e.kind == entUserGroup || e.kind == entProject ||
+		e.kind == entRole || e.kind == entAssignment || e.kind == entService || e.kind == entEndpoint || e.kind == entRegion {
+		return m.renderIdentityRow(e, sel)
+	}
 	eff := e.oper
 	if eff == "" {
 		eff = e.prov
@@ -1808,20 +1985,20 @@ func (m Model) renderRow(e entry, sel bool) string {
 	if showLBStatuses {
 		target = m.fitRelatedLoadBalancerTarget(e, relationCell, extra)
 	}
+	attrSeparator := "  "
+	if m.isOverview() {
+		attrSeparator = " · "
+	}
 	body := relationCell + "  " + target
 	if extra != "" {
-		body += "  " + extra
+		body += attrSeparator + extra
 	}
 	if showLBStatuses {
 		if statuses := relatedLoadBalancerStatusPlain(e); statuses != "" {
-			if extra != "" {
-				body += " · " + statuses
-			} else {
-				body += "  " + statuses
-			}
+			body += attrSeparator + statuses
 		}
 	} else if notable {
-		body += "  [" + eff + "]"
+		body += attrSeparator + "[" + eff + "]"
 	}
 
 	if sel {
@@ -1843,34 +2020,69 @@ func (m Model) renderRow(e entry, sel bool) string {
 	marker := m.styledNavigationMarker(e, eff)
 	seg := indent + marker + m.st.panelLabel.Render(relationCell) + "  " + target
 	if extra != "" {
-		seg += "  " + m.st.attrs.Render(extra)
+		seg += m.st.attrs.Render(attrSeparator + extra)
 	}
 	if showLBStatuses {
-		if extra != "" {
-			seg += m.st.attrs.Render(" · ") + m.relatedLoadBalancerStatus(e)
-		} else {
-			seg += "  " + m.relatedLoadBalancerStatus(e)
+		if relatedLoadBalancerStatusPlain(e) != "" {
+			seg += m.st.attrs.Render(attrSeparator) + m.relatedLoadBalancerStatus(e)
 		}
 	} else if notable {
-		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
+		seg += m.st.attrs.Render(attrSeparator) + lipgloss.NewStyle().Foreground(statusColor(eff)).Render("["+eff+"]")
 	}
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+// renderIdentityRow renders an identity-area object (user / domain / group /
+// project) as a clean related-object row: a neutral bullet, the object's name,
+// and dimmed secondary facts, with a navigability chevron. The row drops the
+// "type:" prefix carried by the label — the group heading (DOMAIN, USERS, …)
+// already names the type — and omits the edge/relation chrome used by graph
+// rows. These rows only appear as related objects, always in an overview, so
+// selection uses the overview's ▶ + bold style.
+func (m Model) renderIdentityRow(e entry, sel bool) string {
+	// Assignment rows keep the actor's type prefix (user:/group:) since a section
+	// mixes both; the other identity rows drop it (their heading names the type).
+	name := e.label
+	if e.kind != entAssignment {
+		name = identityRowName(e.label)
+	}
+	extra := strings.TrimSpace(e.extra)
+	if sel {
+		seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, "") + lipgloss.NewStyle().Bold(true).Render(name)
+		if extra != "" {
+			seg += m.st.attrs.Render(" · " + extra)
+		}
+		return navigationStyledChevron(seg, m.width, m.st.refMarker)
+	}
+	seg := "  " + m.styledNavigationMarker(e, "") + name
+	if extra != "" {
+		seg += m.st.attrs.Render(" · " + extra)
+	}
+	return navigationStyledChevron(seg, m.width, m.st.refMarker)
+}
+
+// identityRowName strips the leading "type:" from an identity label (e.g.
+// "domain:Default" → "Default"). Only the first colon is removed, so names that
+// themselves contain a colon survive.
+func identityRowName(label string) string {
+	if i := strings.IndexByte(label, ':'); i >= 0 {
+		return label[i+1:]
+	}
+	return label
 }
 
 func (m Model) renderSelectedOverviewRow(e entry, status, relationCell, target, extra string, notable, showLBStatuses bool) string {
 	seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, status) +
 		m.st.panelLabel.Bold(true).Render(relationCell) + "  " + lipgloss.NewStyle().Bold(true).Render(target)
 	if extra != "" {
-		seg += "  " + m.st.attrs.Render(extra)
+		seg += m.st.attrs.Render(" · " + extra)
 	}
 	if showLBStatuses {
-		if extra != "" {
+		if relatedLoadBalancerStatusPlain(e) != "" {
 			seg += m.st.attrs.Render(" · ") + m.relatedLoadBalancerStatus(e)
-		} else {
-			seg += "  " + m.relatedLoadBalancerStatus(e)
 		}
 	} else if notable {
-		seg += "  " + lipgloss.NewStyle().Foreground(statusColor(status)).Render("["+status+"]")
+		seg += m.st.attrs.Render(" · ") + lipgloss.NewStyle().Foreground(statusColor(status)).Render("["+status+"]")
 	}
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
 }
@@ -1881,6 +2093,17 @@ func (m Model) styledNavigationMarker(e entry, status string) string {
 		return m.st.refMarker.Render("→ ")
 	case entBackRef:
 		return m.st.backRefMarker.Render("← ")
+	case entAssignment:
+		// A role assignment marks whether the grant is held directly (solid ●) or
+		// inherited via a group or a parent/domain scope (hollow ○). Token-derived
+		// effective roles use ◆ because their origin is not present in the token.
+		glyph := "●"
+		if e.assignment.TokenScoped {
+			glyph = "◆"
+		} else if e.assignment.Inherited {
+			glyph = "○"
+		}
+		return lipgloss.NewStyle().Foreground(statusColor(status)).Render(glyph) + " "
 	default:
 		return lipgloss.NewStyle().Foreground(statusColor(status)).Render("●") + " "
 	}
@@ -1923,14 +2146,10 @@ func (m Model) fitRelatedLoadBalancerTarget(e entry, relationCell, extra string)
 	// chevron (3), then the summary and status separators.
 	fixed := 4 + lipgloss.Width(relationCell) + 2 + 3
 	if extra != "" {
-		fixed += 2 + lipgloss.Width(extra)
+		fixed += 3 + lipgloss.Width(extra)
 	}
 	if statuses := relatedLoadBalancerStatusPlain(e); statuses != "" {
-		if extra != "" {
-			fixed += 3 // " · "
-		} else {
-			fixed += 2
-		}
+		fixed += 3 // " · "
 		fixed += lipgloss.Width(statuses)
 	}
 	available := m.width - fixed
@@ -1941,8 +2160,17 @@ func (m Model) fitRelatedLoadBalancerTarget(e entry, relationCell, extra string)
 		return ""
 	}
 	suffixWidth := lipgloss.Width(idSuffix)
-	if idSuffix == "" || available <= suffixWidth {
+	if idSuffix == "" {
 		return clipRunes(full, available)
+	}
+	if available <= suffixWidth {
+		// When separators consume the final cell that would otherwise hold part
+		// of the name, compact the separating space before sacrificing the ID.
+		compactSuffix := strings.TrimSpace(idSuffix)
+		if available > lipgloss.Width(compactSuffix) {
+			return clipRunes("…"+compactSuffix, available)
+		}
+		return clipRunes(compactSuffix, available)
 	}
 	nameWidth := available - suffixWidth
 	if nameWidth == 1 && lipgloss.Width(name) > 1 {
@@ -2175,7 +2403,7 @@ func (m Model) hintLine() string {
 		return m.clip(m.st.help.Render("type to filter · enter apply · esc clear"))
 	}
 	parts := []string{
-		"enter open", "←/esc back", "→ fwd", "1-5 views", "y/j raw", "i/n copy",
+		"enter open", "←/esc/→ hist", "0 area", "1-9 views", "y/j raw", "i/n copy",
 	}
 	if m.loc.isTopLevelList() {
 		parts = append(parts, "d names/ids", "o sort")
@@ -2186,7 +2414,7 @@ func (m Model) hintLine() string {
 	if hasStatusEntries(m.allEntries) {
 		parts = append(parts, "s status")
 	}
-	parts = append(parts, "p/0 project", "r refresh", "a auto")
+	parts = append(parts, "p project", "r refresh", "a auto")
 	if m.isStatsOverview() {
 		parts = append(parts, "+/- interval")
 	}
@@ -2234,6 +2462,91 @@ func (m Model) scrollMarkers() (above, below string) {
 	return above, m.st.panelTitle.Render(label)
 }
 
+// listScrollMarkers returns the edge hints for the main list — the m.entries
+// scroll region shared by top-level tables, node lists, and overview related
+// lists. "▲ more" shows when rows are scrolled off the top, "▼ more" when rows
+// remain below. Both are empty when the list fits (or has no rows).
+func (m Model) listScrollMarkers() (above, below string) {
+	total := len(m.entries)
+	if total == 0 {
+		return "", ""
+	}
+	visible := m.listContentRows()
+	if total <= visible {
+		return "", ""
+	}
+	// "above" reflects genuinely hidden content, not the raw scroll offset: in a
+	// grouped list the first content row sits at index 1 (after its heading) and
+	// that heading is pinned (sticky), so m.top settles at 1 at the visual top.
+	// Keying off a hidden *selectable* row instead clears the hint at the top.
+	if m.hasSelectableBefore(m.top) {
+		above = m.st.panelTitle.Render("▲ more")
+	}
+	if m.top+visible < total {
+		below = m.st.panelTitle.Render("▼ more")
+	}
+	return above, below
+}
+
+// hasSelectableBefore reports whether any selectable (non-heading) row is hidden
+// above the given scroll offset — i.e. there is real content to scroll up to.
+func (m Model) hasSelectableBefore(top int) bool {
+	if top > len(m.entries) {
+		top = len(m.entries)
+	}
+	for i := 0; i < top; i++ {
+		if m.entries[i].selectable() {
+			return true
+		}
+	}
+	return false
+}
+
+// wideScreenWidth is the terminal width at/above which scroll markers are
+// mirrored on both edges of their line — on a wide row a single right-aligned
+// marker sits far from the left-aligned content and is easy to miss.
+const wideScreenWidth = 100
+
+// edgeMarkerLine places a scroll marker on a line: mirrored on both the left and
+// right edges when the terminal is wide, otherwise just right-aligned (via
+// rightMarkerLine). An empty marker leaves the line as-is.
+func (m Model) edgeMarkerLine(left, marker string) string {
+	if marker == "" {
+		return m.clip(left)
+	}
+	mw := lipgloss.Width(marker)
+	if m.width < wideScreenWidth || m.width <= 2*mw+3 {
+		return m.rightMarkerLine(left, marker)
+	}
+	prefix := marker + " "
+	inner := lipgloss.NewStyle().MaxWidth(m.width - 2*mw - 3).Render(left)
+	pad := m.width - lipgloss.Width(prefix) - lipgloss.Width(inner) - mw
+	if pad < 1 {
+		pad = 1
+	}
+	return prefix + inner + strings.Repeat(" ", pad) + marker
+}
+
+// rightMarkerLine right-aligns marker on a line, clipping the left content as
+// needed so the marker always fits. Unlike scrollLine (which drops the marker on
+// a narrow line), this keeps the marker — the scroll hint is the point — at the
+// cost of trimming the line's own content. An empty marker leaves the line as-is.
+func (m Model) rightMarkerLine(left, marker string) string {
+	if marker == "" {
+		return m.clip(left)
+	}
+	mw := lipgloss.Width(marker)
+	if m.width <= mw {
+		return m.clip(marker)
+	}
+	left = lipgloss.NewStyle().MaxWidth(m.width - mw - 1).Render(left)
+	pad := m.width - lipgloss.Width(left) - mw
+	if pad < 1 {
+		pad = 1
+	}
+	return left + strings.Repeat(" ", pad) + marker
+}
+
 // scrollLine right-aligns a scroll marker on an overlay title/footer line,
 // dropping the marker (never the content) when the line is too narrow.
 func (m Model) scrollLine(left, marker string) string {
@@ -2248,7 +2561,7 @@ func (m Model) scrollLine(left, marker string) string {
 }
 
 func (m Model) helpView() string {
-	title := m.st.overlayTitle.Render("olb — help")
+	title := m.st.overlayTitle.Render("OLB — OpenStack Live Browser — help")
 	footer := m.st.help.Render("esc / ? / q  close   ·   ↑/↓ scroll")
 	above, below := m.scrollMarkers()
 	return m.scrollLine(title, above) + "\n" + m.vp.View() + "\n" + m.scrollLine(footer, below)
@@ -2381,6 +2694,137 @@ func (m Model) projectView() string {
 	b.WriteString("\n")
 	b.WriteString(m.st.help.Render(footer))
 	return b.String()
+}
+
+// filteredSwitcherRows returns the switcher rows matching the active filter (a
+// substring of the "<area> › <view>" label), or all rows when the filter is
+// empty.
+func (m Model) filteredSwitcherRows() []switcherRow {
+	all := switcherRows()
+	q := strings.ToLower(strings.TrimSpace(m.search.Value()))
+	if q == "" {
+		return all
+	}
+	out := make([]switcherRow, 0, len(all))
+	for _, r := range all {
+		if strings.Contains(strings.ToLower(r.label), q) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// switcherItem is one rendered line of the switcher: either a non-selectable
+// area heading or a selectable view row. viewIdx indexes the filtered view rows
+// (the space m.switchCursor moves through); it is -1 for a heading. key is the
+// area's uppercase accelerator, shown as a chip on the heading.
+type switcherItem struct {
+	header  bool
+	key     rune
+	label   string
+	viewIdx int
+}
+
+// switcherItems interleaves area headings with their view rows, so the overlay
+// reads like the related-objects list: an uppercase group heading with a count,
+// then the views beneath it. Headings appear only for areas that still have a
+// matching row, so filtering drops empty groups.
+func (m Model) switcherItems(rows []switcherRow) []switcherItem {
+	counts := map[areaKind]int{}
+	for _, r := range rows {
+		counts[r.area]++
+	}
+	items := make([]switcherItem, 0, len(rows)+len(areas))
+	first := true
+	var lastArea areaKind
+	for i, r := range rows {
+		if first || r.area != lastArea {
+			area := areaByKind(r.area)
+			title := strings.ToUpper(area.label)
+			items = append(items, switcherItem{header: true, key: area.key, label: fmt.Sprintf("%s %d", title, counts[r.area]), viewIdx: -1})
+			lastArea, first = r.area, false
+		}
+		items = append(items, switcherItem{label: r.view.rootLabel(), viewIdx: i})
+	}
+	return items
+}
+
+func (m Model) switcherView() string {
+	title := m.switcherTitleLine()
+	rows := m.filteredSwitcherRows()
+	items := m.switcherItems(rows)
+
+	// Window on the selected view's display line so its heading stays in view.
+	selDisp := 0
+	for i, it := range items {
+		if !it.header && it.viewIdx == m.switchCursor {
+			selDisp = i
+			break
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(title)
+	b.WriteString("\n\n")
+	maxRows := m.projectPageSize()
+	start := 0
+	if selDisp >= maxRows {
+		start = selDisp - maxRows + 1
+	}
+	end := start + maxRows
+	if end > len(items) {
+		end = len(items)
+	}
+	for i := start; i < end; i++ {
+		it := items[i]
+		if it.header {
+			chip := m.st.panelTitle.Render(" " + string(it.key) + " ")
+			b.WriteString(m.clip(chip + " " + m.st.relatedGroup.Render(it.label)))
+			b.WriteString("\n")
+			continue
+		}
+		label := it.label
+		if rows[it.viewIdx].view == m.activeWorkspace {
+			label += m.st.relationship.Render(" (current)")
+		}
+		if it.viewIdx == m.switchCursor {
+			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("    ▸ "+label, m.width)))
+		} else {
+			b.WriteString("      ")
+			b.WriteString(m.clip(label))
+		}
+		b.WriteString("\n")
+	}
+	if len(rows) == 0 && m.search.Value() != "" {
+		b.WriteString("  ")
+		b.WriteString(m.st.disabled.Render("— no matching views —"))
+		b.WriteString("\n")
+	}
+	footer := "enter select · " + strings.Join(areaKeyStrings(), "/") + " jump to area · arrows/page move · / filter · esc/q cancel"
+	if m.search.Focused() {
+		footer = "type to filter · enter apply · esc clear"
+	}
+	b.WriteString("\n")
+	b.WriteString(m.st.help.Render(footer))
+	return b.String()
+}
+
+func (m Model) switcherTitleLine() string {
+	title := m.st.overlayTitle.Render("Switch area / view")
+	query := m.search.Value()
+	if !m.search.Focused() && query == "" {
+		return m.clip(title)
+	}
+	separator := m.st.crumbSep.Render("  ")
+	if m.search.Focused() {
+		inputWidth := m.width - lipgloss.Width(title) - lipgloss.Width(separator) - lipgloss.Width(m.search.Prompt)
+		if inputWidth < 1 {
+			inputWidth = 1
+		}
+		m.search.Width = inputWidth
+		return m.clip(title + separator + m.search.View())
+	}
+	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
 }
 
 func (m Model) projectTitleLine() string {
@@ -2681,6 +3125,8 @@ func marshalRaw(v any, format string) string {
 
 func helpContent(showNameIDToggle, showFilter, showStatusFilter, showStatsIntervalControls bool) string {
 	content := strings.TrimLeft(`
+OLB — Browse your OpenStack cloud live.
+
 Move
   ↑ / ↓            selection up / down
   PgUp / PgDn      page up / down
@@ -2692,12 +3138,15 @@ Navigate
   ctrl+home        jump to the active view's pinned root history entry
   h                history picker overlay
 
-Top-level views (drill into an item to open its detail)
-  1                load balancers
-  2                virtual IPs (VIP address, port, subnet, network, owner)
-  3                listeners
-  4                pools
-  5                amphorae (admin only)
+Areas & views (drill into an item to open its detail)
+  `+"`"+`                overview / home landing — scope, identity, areas (opens here)
+  0                switch area / view — searchable overlay
+  S / A / L        jump to the catalog / identity / load-balancer area
+  1-9              switch view within the active area
+  catalog area:        1 regions · 2 services · 3 endpoints
+  identity area:       1 domains · 2 projects · 3 groups · 4 users · 5 roles
+  load-balancer area:  1 load balancers · 2 virtual IPs · 3 listeners ·
+                       4 pools · 5 amphorae (admin only)
 
 Inspect
   y                show raw API object as YAML
@@ -2707,7 +3156,8 @@ Inspect
   c                copy the displayed raw object (inside the YAML/JSON view)
 
 {{list_controls}}Global
-  p / 0            project switcher
+  p                project switcher
+  *                current token (whoami) — user, scope, roles, expiry
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
 {{stats_interval_controls}}  t                application and API telemetry
@@ -2723,12 +3173,18 @@ Telemetry overlay
 Status colors
 {{status_legend}}
 
+Row markers
+  ●  role assignment held directly    ○  inherited (via a group or parent scope)
+  ⚙  service / system account (in the users list)
+
 Notes
 	• load-balancer/listener details show stats/full refresh cadences (for
 	  example, 5s/30s); COE cluster and Kubernetes service details show their
 	  Magnum cadence (60s), while other views show the fixed full cadence (30s).
 	• enter is the only descent key; arrows are reserved for history.
-	• 1-5 switch persistent views; each keeps its own history, cursor, and filters.
+	• number keys switch views within the active area; 0 (or A/L) switch areas.
+	  Each view keeps its own history, cursor, and filters. Cross-area reference
+	  edges open in place and never change the active area.
   • esc clears an active filter first, otherwise it is back.
   • → reference edges are shared/cross-cutting; ← back-references answer
     "who points at me?".  ↦ in the breadcrumb marks a reference jump.

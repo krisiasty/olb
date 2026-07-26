@@ -1,5 +1,5 @@
-olb — third-party notices
-=========================
+OLB — OpenStack Live Browser — third-party notices
+================================================
 
 This binary links the following third-party modules. Their full license
 texts and any NOTICE contents are reproduced below, as required for binary
@@ -1017,4 +1017,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

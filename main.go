@@ -1,5 +1,5 @@
-// Command olb is an interactive TUI for inspecting OpenStack Octavia load
-// balancers (Amphora and OVN providers).
+// Command olb is the OpenStack Live Browser, an interactive TUI for exploring
+// live OpenStack resources and the relationships between them.
 //
 // v1 is interactive-only; a non-interactive/scriptable mode is deferred, so the
 // flag surface is small and flat and the standard-library flag package covers

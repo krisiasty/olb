@@ -40,6 +40,45 @@ func TestSortOverlaySortsByNameAscending(t *testing.T) {
 	}
 }
 
+// The catalog lists (services, endpoints, regions) are sortable like the other
+// top-level views: o opens the picker and a chosen column reorders the rows.
+func TestCatalogListsAreSortable(t *testing.T) {
+	m := start(t, osclient.SwitchCapability{CanSwitch: true})
+	m = updExec(t, m, press("S"))
+	m = updExec(t, m, press("2")) // services (arrive in Type order: compute, identity, image)
+	if got := firstLabels(m); got[0] != "service:compute" {
+		t.Fatalf("services should start in default (type) order; got %v", got)
+	}
+	// o opens the picker rather than flashing "not sortable".
+	m = upd(t, m, press("o"))
+	if m.overlay != overlaySort {
+		t.Fatalf("o on the services list should open the sort overlay; overlay=%d", m.overlay)
+	}
+	m = upd(t, m, press("esc"))
+	// Sort by Name: nova/keystone/glance → ascending glance(image), keystone(identity), nova(compute).
+	m.sortKey = "name"
+	m.applyFilters()
+	if got := firstLabels(m); got[0] != "service:image" {
+		t.Fatalf("sorting services by name should put glance (image) first; got %v", got)
+	}
+
+	m = updExec(t, m, press("3")) // endpoints
+	if len(m.sortColumns()) == 0 {
+		t.Fatal("endpoints list should be sortable")
+	}
+
+	m = updExec(t, m, press("1")) // regions
+	if len(m.sortColumns()) == 0 {
+		t.Fatal("regions list should be sortable")
+	}
+	m.sortKey = "description"
+	m.applyFilters()
+	// "primary region" < "secondary region" ascending.
+	if got := firstLabels(m); got[0] != "region:RegionOne" {
+		t.Fatalf("sorting regions by description should put RegionOne first; got %v", got)
+	}
+}
+
 func TestSortOverlayEscCancels(t *testing.T) {
 	m := lbListModel(t, true)
 	before := firstLabels(m)

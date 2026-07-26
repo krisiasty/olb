@@ -59,4 +59,12 @@ var (
 	ListenerListIdentity = Identity{Type: TypeListener}
 	PoolListIdentity     = Identity{Type: TypePool}
 	AmphoraListIdentity  = Identity{Type: TypeAmphora}
+	UserListIdentity     = Identity{Type: TypeUser}
+	DomainListIdentity   = Identity{Type: TypeDomain}
+	GroupListIdentity    = Identity{Type: TypeGroup}
+	ProjectListIdentity  = Identity{Type: TypeProject}
+	RoleListIdentity     = Identity{Type: TypeRole}
+	ServiceListIdentity  = Identity{Type: TypeService}
+	EndpointListIdentity = Identity{Type: TypeEndpoint}
+	RegionListIdentity   = Identity{Type: TypeRegion}
 )

@@ -1,10 +1,13 @@
-# olb — OpenStack Load Balancer TUI
+# OLB — OpenStack Live Browser
 
-`olb` is an interactive terminal UI for inspecting OpenStack **Octavia** load
-balancers (both the **Amphora** and **OVN** provider drivers). It fetches a load
-balancer's structure in a single `status show` call, then lets you drill down
-containment edges and jump along reference edges — including the backward query a
-tree view can never answer: *"who points at this pool?"*
+**OLB — Browse your OpenStack cloud live.**
+
+`olb` is an interactive terminal UI for exploring live OpenStack resources and
+the relationships between them. Its load-balancer area supports OpenStack
+**Octavia** load balancers (both the **Amphora** and **OVN** provider drivers).
+It fetches a load balancer's structure in a single `status show` call, then lets
+you drill down containment edges and jump along reference edges — including the
+backward query a tree view can never answer: *"who points at this pool?"*
 
 This is the v1 deliverable: **read / inspect, interactive-only**. A
 non-interactive scriptable mode (`--output json|yaml`, exit codes) is deferred.
@@ -153,25 +156,107 @@ the load-balancer list because previous objects may not exist in the new view.
 | | `→` | Forward (history) |
 | | `ctrl+home` | Jump to the active view's pinned root history entry |
 | | `h` | History picker overlay |
+| Areas | `0` | Area/view switcher — a searchable overlay of every area and view |
+| | `A` / `L` | Jump to the auth / load-balancer area (uppercase accelerators) |
+| | `1`–`9` | Switch view within the active area |
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` | Copy id / name |
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
 | | `o` | Sort a top-level list by a name/id/IP column, ascending (esc cancels, enter selects) |
-| Global | `p`/`0` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit |
+| Global | `p` `r` `a` `t` `?` `q` | Project · refresh · auto-refresh · telemetry · help · quit |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
 `enter` is the only descent key; the arrows are reserved for history. `esc`
 clears an active filter first, otherwise it is *back*. Reference edges render as
 `→` rows and back-references as `←` rows; `↦` in the breadcrumb marks a
-reference jump. Keys `1`–`5` switch persistent load-balancer, VIP, listener,
-pool, and Amphora workspaces without adding history entries. Each workspace
-retains its own back/forward history, selection, scroll position, and filters;
-cross-resource links remain in the workspace where navigation began. The `?`
-overlay includes a status-color legend matching dots, status fields, and issue
-counts throughout the TUI.
+reference jump.
+
+olb opens on a **home overview** that orients you before you dive in: your
+current scope, the authenticated identity and roles (read from the token, no API
+call), and the browsable areas with their accelerators. Press an area key
+(`S`/`A`/`L`), `0` for the switcher, or `` ` `` to return to the overview at any
+time.
+
+Views are grouped into **areas**. The load-balancer area (`L`) holds the load
+balancer, VIP, listener, pool, and amphora views; the identity & access area
+(`A`) holds the Keystone identity views (users, domains, groups, a browsable
+projects list, roles); and the service catalog area (`S`) holds the services,
+endpoints, and regions. That projects view is for exploring/inspecting projects
+and is distinct
+from the global project selector (`p`), which re-scopes the load-balancer and
+other resource views. Uppercase accelerators jump straight to an area, `0` opens a searchable
+switcher over every area and view, and number keys `1`–`9` select a view *within
+the active area* (so the same digit means a different view per area). Returning
+to an area restores the view you last used there. The area is shown as a chip at
+the start of the breadcrumb, and the project selector stays global across every
+area. Each view is a persistent workspace with its own back/forward history,
+selection, scroll position, and filters, switched without adding history
+entries; cross-area reference edges (an LB member → its Nova instance, an LB →
+its COE cluster) open in place and never change the active area. The `?` overlay
+includes a status-color legend matching dots, status fields, and issue counts
+throughout the TUI.
+
+The identity views cross-link through **related objects**, so you can walk the
+permission graph by drilling in from any side. A **domain** lists its projects,
+groups, and users; a **user** shows its domain and the groups it belongs to; a
+**group** shows its domain and its member users; a **project** shows its domain;
+and a **role** shows the roles it implies and its **assignments** (which user or
+group holds it on which project/domain).
+
+When Keystone policy denies full identity collections, olb falls back to
+self-service data instead of leaving the domains, users, groups, and roles views
+empty: the domains view shows the authenticated user's domain, the users view
+shows the authenticated user, the groups view shows that user's memberships,
+and the roles view shows the roles effective in the active token scope. Each
+restricted view labels its source explicitly. Group members, role assignments,
+and the complete role catalog can still require elevated RBAC. Token-backed role
+rows therefore use **source** and **scope** columns, and their detail view omits
+the unavailable implied-role and assignment sections.
+
+**Role assignments** are surfaced from every side, so both "what can this user
+do" and "who has access here" are one drill-in away:
+
+- a **user** and **group** list their **role assignments** as `role:X on
+  <target>`, opening the role. A user's list is *effective* (headed **effective
+  role assignments**), so roles inherited through group membership appear
+  alongside direct grants; a group's list is direct. Each row's marker shows how
+  the grant is held: a solid `●` for a role held **directly**, a hollow `○` for
+  one **inherited** (via a group or a parent/domain scope). The distinct projects
+  they hold a role on are also listed as a **projects** section, so you can jump
+  straight to a project you have access to — even one outside the current scope;
+- a **project** and **domain** list their assignments as `<actor> as role:X`,
+  opening the actor;
+- a role from the full **role catalog** lists its assignments as `<actor> on
+  <target>`, opening the actor.
+
+Related objects load lazily on landing and degrade gracefully when RBAC or scope
+is missing (an empty section still shows its header, e.g. `ROLE ASSIGNMENTS 0`).
+Token-backed role details are the exception: the token contains effective role
+and scope information but no implication or assignment graph, so those sections
+are omitted rather than shown as empty.
+
+The **service catalog** views cross-link the same way: a **service** lists its
+**endpoints**, an **endpoint** opens its service and region, and a **region**
+lists the endpoints located in it (and its parent region). The endpoints list is
+shared, so a service's and a region's related endpoints are derived from it
+rather than re-fetched.
+
+Press `*` at any time for the **current token** pop-up (whoami): the
+authenticated user, the token's scope (project / domain / system), the roles it
+carries, and its expiry. It is a local read of the cached auth result — no API
+call — and reflects the token actually in use.
+
+**Service accounts** (the per-service Keystone users like `glance`, `cinder`, or
+`barbican`) are flagged so they stand apart from human users: in the users list
+they are dimmed and carry a `⚙` marker, the detail labels them a *service
+account*, and they can be filtered by the word `service`. Keystone has no native
+flag for this, so olb infers it — a user is treated as a service account if it
+holds a role on the **service project** (which catches deployment-specific names
+like `cepg_rgw_crypt`) or matches a well-known OpenStack service name (the
+fallback when the service project can't be enumerated). Both are best-effort.
 
 ## How it works
 

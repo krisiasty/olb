@@ -12,7 +12,8 @@ import (
 func newFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("olb", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "olb — interactive TUI for OpenStack Octavia load balancers")
+		fmt.Fprintln(os.Stderr, "OLB — OpenStack Live Browser")
+		fmt.Fprintln(os.Stderr, "OLB — Browse your OpenStack cloud live.")
 		fmt.Fprintln(os.Stderr, "\nUsage: olb [flags]\n\nWith no arguments, lists the load balancers in the current project.")
 		fmt.Fprintln(os.Stderr, "\nFlags:")
 		fs.PrintDefaults()

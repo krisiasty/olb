@@ -31,8 +31,8 @@ echo "gen-notices: collecting license and NOTICE files…" >&2
 go-licenses save . --save_path="$tmp/licenses" --force
 
 {
-  echo "olb — third-party notices"
-  echo "========================="
+  echo "OLB — OpenStack Live Browser — third-party notices"
+  echo "================================================"
   echo
   echo "This binary links the following third-party modules. Their full license"
   echo "texts and any NOTICE contents are reproduced below, as required for binary"

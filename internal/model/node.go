@@ -27,6 +27,14 @@ const (
 	TypeInstance      NodeType = "instance" // Nova server backing a member
 	TypeCOECluster    NodeType = "coecluster"
 	TypeKubeService   NodeType = "kubernetesservice"
+	TypeUser          NodeType = "user"     // Keystone user (identity area)
+	TypeDomain        NodeType = "domain"   // Keystone domain (identity area)
+	TypeGroup         NodeType = "group"    // Keystone group (identity area)
+	TypeProject       NodeType = "project"  // Keystone project (identity area)
+	TypeRole          NodeType = "role"     // Keystone role (identity area)
+	TypeService       NodeType = "service"  // Keystone catalog service (identity area)
+	TypeEndpoint      NodeType = "endpoint" // Keystone catalog endpoint (identity area)
+	TypeRegion        NodeType = "region"   // Keystone catalog region (identity area)
 )
 
 // Short returns a compact type label used in breadcrumbs and list entries.

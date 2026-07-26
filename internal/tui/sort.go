@@ -72,8 +72,96 @@ func (m Model) sortColumns() []sortColumn {
 			{key: "lb", label: "Load balancer", value: func(e entry) string { return e.lbName }},
 			{key: "compute_id", label: "Compute ID", value: func(e entry) string { return e.node.Attrs["compute_id"] }},
 		}
+	case kindUser:
+		return []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.user.Name }},
+			{key: "id", label: "User ID", value: func(e entry) string { return e.user.ID }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.user.Description }},
+			{key: "email", label: "Email", value: func(e entry) string { return e.user.Email }},
+			{key: "domain_name", label: "Domain name", value: func(e entry) string { return e.user.DomainName }},
+			{key: "domain_id", label: "Domain ID", value: func(e entry) string { return e.user.DomainID }},
+			{key: "project_name", label: "Default project", value: func(e entry) string { return e.user.DefaultProjectName }},
+			{key: "enabled", label: "Enabled", value: func(e entry) string { return enabledSortValue(e.user.Enabled) }},
+		}
+	case kindDomain:
+		return []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.domain.Name }},
+			{key: "id", label: "Domain ID", value: func(e entry) string { return e.domain.ID }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.domain.Description }},
+			{key: "enabled", label: "Enabled", value: func(e entry) string { return enabledSortValue(e.domain.Enabled) }},
+		}
+	case kindGroup:
+		return []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.group.Name }},
+			{key: "id", label: "Group ID", value: func(e entry) string { return e.group.ID }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.group.Description }},
+			{key: "domain_name", label: "Domain name", value: func(e entry) string { return e.group.DomainName }},
+			{key: "domain_id", label: "Domain ID", value: func(e entry) string { return e.group.DomainID }},
+		}
+	case kindProject:
+		return []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.project.Name }},
+			{key: "id", label: "Project ID", value: func(e entry) string { return e.project.ID }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.project.Description }},
+			{key: "domain_name", label: "Domain name", value: func(e entry) string { return e.project.DomainName }},
+			{key: "domain_id", label: "Domain ID", value: func(e entry) string { return e.project.DomainID }},
+			{key: "enabled", label: "Enabled", value: func(e entry) string { return enabledSortValue(e.project.Enabled) }},
+		}
+	case kindRole:
+		cols := []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.role.Name }},
+			{key: "id", label: "Role ID", value: func(e entry) string { return e.role.ID }},
+		}
+		if m.rolesRestriction != "" {
+			return append(cols, sortColumn{key: "scope", label: "Scope", value: func(e entry) string {
+				return tokenRoleScope(e.role)
+			}})
+		}
+		return append(cols,
+			sortColumn{key: "description", label: "Description", value: func(e entry) string { return e.role.Description }},
+			sortColumn{key: "domain_name", label: "Domain name", value: func(e entry) string { return e.role.DomainName }},
+		)
+	case kindService:
+		return []sortColumn{
+			def,
+			{key: "type", label: "Type", value: func(e entry) string { return e.service.Type }},
+			{key: "id", label: "Service ID", value: func(e entry) string { return e.service.ID }},
+			{key: "name", label: "Name", value: func(e entry) string { return e.service.Name }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.service.Description }},
+			{key: "enabled", label: "Enabled", value: func(e entry) string { return enabledSortValue(e.service.Enabled) }},
+		}
+	case kindEndpoint:
+		return []sortColumn{
+			def,
+			{key: "service", label: "Service", value: func(e entry) string { return endpointServiceLabel(e.endpoint) }},
+			{key: "interface", label: "Interface", value: func(e entry) string { return e.endpoint.Interface }},
+			{key: "region", label: "Region", value: func(e entry) string { return e.endpoint.RegionID }},
+			{key: "url", label: "URL", value: func(e entry) string { return e.endpoint.URL }},
+			{key: "enabled", label: "Enabled", value: func(e entry) string { return enabledSortValue(e.endpoint.Enabled) }},
+		}
+	case kindRegion:
+		return []sortColumn{
+			def,
+			{key: "id", label: "Region", value: func(e entry) string { return e.region.ID }},
+			{key: "parent", label: "Parent region", value: func(e entry) string { return e.region.ParentRegionID }},
+			{key: "description", label: "Description", value: func(e entry) string { return e.region.Description }},
+		}
 	}
 	return nil
+}
+
+// enabledSortValue maps the boolean enabled flag to a stable sort key. Ascending
+// order groups disabled users ("no") before enabled ones ("yes").
+func enabledSortValue(enabled bool) string {
+	if enabled {
+		return "yes"
+	}
+	return "no"
 }
 
 // activeSortColumn resolves the workspace's stored sort key to a live column for

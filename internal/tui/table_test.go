@@ -24,6 +24,7 @@ func lbListModel(t *testing.T, all bool) Model {
 		{ID: "f6a7b8c9d0", Name: "db-lb", Provider: "amphora", VipAddress: "10.30.176.48", ProjectID: "p2", ProjectName: "platform", ProvisioningStatus: "PENDING_UPDATE", OperatingStatus: "DEGRADED"},
 	}
 	m.lbsLoaded = true
+	m.home = false // this helper models the load-balancer list, not the landing
 	(&m).setTopLevelEntries()
 	return m
 }

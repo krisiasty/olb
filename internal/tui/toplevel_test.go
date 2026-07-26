@@ -41,8 +41,8 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 		m = updExec(t, m, press(tt.key))
 		view := ansiRE.ReplaceAllString(m.View(), "")
 
-		if root := ansiRE.ReplaceAllString(m.breadcrumbLine(), ""); !strings.HasPrefix(strings.TrimSpace(root), tt.root) {
-			t.Errorf("key %s breadcrumb root = %q, want prefix %q", tt.key, root, tt.root)
+		if root := ansiRE.ReplaceAllString(m.breadcrumbLine(), ""); !strings.Contains(root, tt.root) {
+			t.Errorf("key %s breadcrumb root = %q, want to contain %q", tt.key, root, tt.root)
 		}
 		header := headerLine(view, tt.marker)
 		if header == "" {
@@ -368,7 +368,7 @@ func TestProjectScopeChangeResetsEveryWorkspaceHistoryAndKeepsActiveView(t *test
 	if !m.loading || m.loadingWhat != "listeners" {
 		t.Fatalf("scope change started %q loading=%v, want listeners", m.loadingWhat, m.loading)
 	}
-	for _, kind := range topLevelKinds {
+	for _, kind := range allViews() {
 		state := m.workspaces[kind]
 		if len(state.hist.entries) != 1 || state.hist.cursor != 0 {
 			t.Errorf("%s workspace history was not reset: %+v", kind.rootLabel(), state.hist)
@@ -522,6 +522,9 @@ func TestVIPDetailOverviewShowsNetworkFactsAndOwningLoadBalancer(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("owning load balancer row missing %q: %q", want, line)
 		}
+	}
+	if !strings.Contains(line, "lb1 (lb-1) · amphora · 1 listener · 1 pool · DEGRADED, ACTIVE") {
+		t.Errorf("related-object attributes should use middle-dot separators: %q", line)
 	}
 	if strings.Contains(line, "203.0.113.9") || strings.Contains(line, "198.51.100.7") {
 		t.Errorf("owning load balancer row repeats VIP details: %q", line)

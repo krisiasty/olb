@@ -16,7 +16,9 @@ type keyMap struct {
 	Back     key.Binding // left / esc / backspace
 	Forward  key.Binding // right
 	LBList   key.Binding // ctrl+home: active workspace root
-	TopLevel key.Binding // 1-5: switch top-level list view
+	TopLevel key.Binding // 1-9: switch view within the active area
+	Area     key.Binding // A/L/…: switch area (uppercase accelerators)
+	Switcher key.Binding // 0: open the area/view switcher overlay
 	Picker   key.Binding // h
 
 	YAML    key.Binding // y
@@ -38,6 +40,8 @@ type keyMap struct {
 	IntervalDown key.Binding // -
 	Telemetry    key.Binding // t
 	Reset        key.Binding // z (telemetry overlay)
+	Token        key.Binding // * current-token / whoami overlay
+	HomeView     key.Binding // ` return to the overview landing
 	Help         key.Binding // ?
 	Quit         key.Binding // q
 	Force        key.Binding // ctrl+c
@@ -59,7 +63,9 @@ func defaultKeys() keyMap {
 		Back:     key.NewBinding(key.WithKeys("left", "esc", "backspace"), key.WithHelp("←/esc", "back")),
 		Forward:  key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "forward")),
 		LBList:   key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "view root")),
-		TopLevel: key.NewBinding(key.WithKeys("1", "2", "3", "4", "5"), key.WithHelp("1-5", "lbs/vips/listeners/pools/amphorae")),
+		TopLevel: key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9"), key.WithHelp("1-9", "views")),
+		Area:     key.NewBinding(key.WithKeys(areaKeyStrings()...), key.WithHelp("S/A/L", "area")),
+		Switcher: key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "switch area")),
 		Picker:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 
 		YAML:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "YAML")),
@@ -73,7 +79,7 @@ func defaultKeys() keyMap {
 		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
 		Sort:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
 
-		Project:      key.NewBinding(key.WithKeys("p", "0"), key.WithHelp("p/0", "project")),
+		Project:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "project")),
 		ProjectAll:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "all projects")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
@@ -81,6 +87,8 @@ func defaultKeys() keyMap {
 		IntervalDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "shorter interval")),
 		Telemetry:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "telemetry")),
 		Reset:        key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "reset")),
+		Token:        key.NewBinding(key.WithKeys("*"), key.WithHelp("*", "token")),
+		HomeView:     key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "home")),
 		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:         key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		Force:        key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "force quit")),

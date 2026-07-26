@@ -365,6 +365,19 @@ func (m Model) rowCells(e entry) []string {
 	}
 }
 
+// topLevelFilterText follows the active display mode: name-oriented columns
+// contribute names, while ID-oriented columns contribute IDs. Other visible
+// columns remain searchable in either mode.
+func (m Model) topLevelFilterText(e entry) string {
+	cells := m.rowCells(e)
+	if e.kind == entUser && e.user.Service {
+		// The gear marker denotes a service account; retain its documented
+		// textual alias even though the word itself is not printed in the row.
+		cells = append(cells, "service")
+	}
+	return strings.ToLower(strings.Join(cells, " "))
+}
+
 // statusColumnSet returns the column indices to color by status for the active
 // list: the trailing PROVISIONING/OPERATING pair for LB/listener/pool, the single
 // STATUS column for amphorae, and none for VIPs.

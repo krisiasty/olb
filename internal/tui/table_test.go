@@ -165,6 +165,72 @@ func TestLBTableToggleShowsIDs(t *testing.T) {
 	}
 }
 
+func TestTopLevelFilterFollowsNameIDDisplayMode(t *testing.T) {
+	t.Run("load balancers", func(t *testing.T) {
+		m := lbListModel(t, true)
+
+		// The ID is hidden in name mode, so it must not produce a match.
+		m.filter.SetValue("f6a7b8c9d0")
+		m.applyFilters()
+		if len(m.entries) != 0 {
+			t.Fatalf("name mode matched a hidden load-balancer ID: %v", labels(m))
+		}
+
+		// Toggling display mode reapplies the existing filter immediately.
+		m = upd(t, m, press("d"))
+		if len(m.entries) != 1 || m.entries[0].lb.ID != "f6a7b8c9d0" {
+			t.Fatalf("ID mode did not match the displayed ID: %v", labels(m))
+		}
+
+		m.filter.SetValue("db-lb")
+		m.applyFilters()
+		if len(m.entries) != 0 {
+			t.Fatalf("ID mode matched a hidden load-balancer name: %v", labels(m))
+		}
+		m = upd(t, m, press("d"))
+		if len(m.entries) != 1 || m.entries[0].lb.Name != "db-lb" {
+			t.Fatalf("name mode did not match the displayed name: %v", labels(m))
+		}
+	})
+
+	t.Run("identity groups", func(t *testing.T) {
+		m := start(t, switchCapability{CanSwitch: true})
+		m = updExec(t, m, press("A"))
+		m = updExec(t, m, press("3"))
+
+		m.filter.SetValue("g-2")
+		m.applyFilters()
+		if len(m.entries) != 0 {
+			t.Fatalf("name mode matched a hidden group ID: %v", labels(m))
+		}
+		m = upd(t, m, press("d"))
+		if len(m.entries) != 1 || m.entries[0].group.ID != "g-2" {
+			t.Fatalf("ID mode did not match the displayed group ID: %v", labels(m))
+		}
+
+		m.filter.SetValue("operators")
+		m.applyFilters()
+		if len(m.entries) != 0 {
+			t.Fatalf("ID mode matched a hidden group name: %v", labels(m))
+		}
+		m = upd(t, m, press("d"))
+		if len(m.entries) != 1 || m.entries[0].group.Name != "operators" {
+			t.Fatalf("name mode did not match the displayed group name: %v", labels(m))
+		}
+
+		// A non-toggle column remains searchable in both display modes.
+		m.filter.SetValue("cloud administrators")
+		m.applyFilters()
+		if len(m.entries) != 1 || m.entries[0].group.ID != "g-1" {
+			t.Fatalf("name mode did not match the visible description: %v", labels(m))
+		}
+		m = upd(t, m, press("d"))
+		if len(m.entries) != 1 || m.entries[0].group.ID != "g-1" {
+			t.Fatalf("ID mode did not retain the visible-description match: %v", labels(m))
+		}
+	})
+}
+
 func TestLayoutColumnWidthsKeepsNarrowColumnsReadable(t *testing.T) {
 	titles := []string{"NAME", "PROTOCOL", "PORT", "LOAD BALANCER", "PROVISIONING", "OPERATING"}
 	rows := [][]string{

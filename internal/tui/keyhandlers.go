@@ -163,11 +163,12 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleIDs flips top-level tables between name and ID columns. It is a
-// pure presentation switch — the underlying entries, cursor, and filters are
-// untouched — so it takes effect the moment the list is shown.
+// toggleIDs flips top-level tables between name and ID columns. An active
+// filter is immediately reapplied because its searchable values follow the
+// columns currently displayed.
 func (m Model) toggleIDs() (tea.Model, tea.Cmd) {
 	m.showIDs = !m.showIDs
+	m.applyFilters()
 	mode := "names"
 	if m.showIDs {
 		mode = "IDs"

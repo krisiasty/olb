@@ -2889,7 +2889,11 @@ func (m *Model) applyFilters() {
 		if !m.status.match(e.oper, e.prov) {
 			continue
 		}
-		if f != "" && !strings.Contains(e.filterText(), f) {
+		filterText := e.filterText()
+		if m.loc.isTopLevelList() {
+			filterText = m.topLevelFilterText(e)
+		}
+		if f != "" && !strings.Contains(filterText, f) {
 			continue
 		}
 		res = append(res, e)

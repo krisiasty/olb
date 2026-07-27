@@ -43,7 +43,7 @@ jobs:
         # it so the released binaries ship the real license texts.
         run: bash scripts/gen-notices.sh
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           # --skip=validate: the notices step above intentionally regenerates the

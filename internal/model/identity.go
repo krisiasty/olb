@@ -67,4 +67,5 @@ var (
 	ServiceListIdentity  = Identity{Type: TypeService}
 	EndpointListIdentity = Identity{Type: TypeEndpoint}
 	RegionListIdentity   = Identity{Type: TypeRegion}
+	InstanceListIdentity = Identity{Type: TypeInstance}
 )

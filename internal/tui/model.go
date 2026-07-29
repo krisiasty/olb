@@ -147,6 +147,10 @@ type Model struct {
 	regions          []osclient.Region
 	regionsLoaded    bool
 	regionsErr       string
+	// Compute area.
+	instances       []osclient.Instance
+	instancesLoaded bool
+	instancesErr    string
 	// Role relations (implied roles + assignments) load lazily when a role is
 	// opened, keyed by role ID.
 	roleRelations        map[string]roleRelations
@@ -182,6 +186,7 @@ type Model struct {
 	knownRoles       map[string]osclient.Role
 	knownServices    map[string]osclient.Service
 	knownRegions     map[string]osclient.Region
+	knownInstances   map[string]osclient.Instance
 	knownDomainFull  map[string]bool
 	knownProjectFull map[string]bool
 	// domainContents holds a domain's related projects, groups, and users, loaded
@@ -424,6 +429,7 @@ func New(backend Backend, cfg Config) Model {
 		knownRoles:               map[string]osclient.Role{},
 		knownServices:            map[string]osclient.Service{},
 		knownRegions:             map[string]osclient.Region{},
+		knownInstances:           map[string]osclient.Instance{},
 		knownDomainFull:          map[string]bool{},
 		knownProjectFull:         map[string]bool{},
 		domainContents:           map[string]domainContent{},

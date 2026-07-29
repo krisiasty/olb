@@ -27,6 +27,7 @@ const (
 	entService                     // a Keystone catalog service
 	entEndpoint                    // a Keystone catalog endpoint
 	entRegion                      // a Keystone catalog region
+	entInstance                    // a Nova server in the top-level instances list
 	entAssignment                  // a role assignment (actor holds a role on a target)
 	entChild                       // a containment child of the current node
 	entRelated                     // a directly related object rendered as a normal link
@@ -52,6 +53,7 @@ type entry struct {
 	service         osclient.Service        // set for entService
 	endpoint        osclient.Endpoint       // set for entEndpoint
 	region          osclient.Region         // set for entRegion
+	instance        osclient.Instance       // set for entInstance
 	assignment      osclient.RoleAssignment // set for entAssignment
 	assignmentPivot assignmentPivot         // set for entAssignment: which side it is viewed from
 	lbName          string                  // owning load balancer name for resource rows
@@ -168,6 +170,12 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 		return model.Identity{Type: model.TypeEndpoint, ID: e.endpoint.ID, Label: "endpoint:" + endpointLabelName(e.endpoint)}, false, false
 	case entRegion:
 		return model.Identity{Type: model.TypeRegion, ID: e.region.ID, Label: "region:" + e.region.ID}, false, false
+	case entInstance:
+		name := e.instance.Name
+		if name == "" {
+			name = shortID(e.instance.ID)
+		}
+		return model.Identity{Type: model.TypeInstance, ID: e.instance.ID, Label: "instance:" + name}, false, false
 	case entAssignment:
 		a := e.assignment
 		if e.assignmentPivot == pivotActor {

@@ -98,6 +98,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onEndpoints(msg)
 	case regionsMsg:
 		return m.onRegions(msg)
+	case instancesMsg:
+		return m.onInstances(msg)
 	case domainContentsMsg:
 		return m.onDomainContents(msg)
 	case treeMsg:
@@ -562,6 +564,42 @@ func (m Model) onRegions(msg regionsMsg) (tea.Model, tea.Cmd) {
 	if m.loc.isTopLevelList() && m.loc.listKind() == kindRegion {
 		m.setTopLevelEntries()
 		m.restoreRefreshSelection()
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, nil
+}
+
+func (m Model) onInstances(msg instancesMsg) (tea.Model, tea.Cmd) {
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.instancesLoaded = true
+	m.instancesErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.instances = nil
+			m.instancesErr = "Nova does not authorize instance listing for this token scope"
+		} else if errors.Is(msg.err, osclient.ErrUnavailable) {
+			m.instances = nil
+			m.instancesErr = "compute service is unavailable in this cloud or scope"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh instances: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list instances: "+msg.err.Error(), true)
+		}
+	} else {
+		m.instances = msg.instances
+		m.rememberInstances(msg.instances)
+	}
+	switch {
+	case m.loc.isTopLevelList() && m.loc.listKind() == kindInstance:
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	case msg.refresh && m.isInstanceOverview():
+		id := m.loc.id
+		m.setStandalone(id, m.instanceNode(id.ID), nil, nil)
 	}
 	if msg.refresh {
 		return m, m.finishRefresh("")
@@ -2387,6 +2425,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.services, m.servicesLoaded, m.servicesErr = nil, false, ""
 	m.endpoints, m.endpointsLoaded, m.endpointsLoading, m.endpointsErr = nil, false, false, ""
 	m.regions, m.regionsLoaded, m.regionsErr = nil, false, ""
+	m.instances, m.instancesLoaded, m.instancesErr = nil, false, ""
 	m.roleRelations = map[string]roleRelations{}
 	m.roleRelationsLoaded = map[string]bool{}
 	m.roleRelationsLoading = map[string]bool{}
@@ -2399,6 +2438,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.knownRoles = map[string]osclient.Role{}
 	m.knownServices = map[string]osclient.Service{}
 	m.knownRegions = map[string]osclient.Region{}
+	m.knownInstances = map[string]osclient.Instance{}
 	m.knownUsers = map[string]osclient.User{}
 	m.knownGroups = map[string]osclient.Group{}
 	m.knownProjects = map[string]osclient.Project{}
@@ -2625,6 +2665,10 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	if id.Type == model.TypeRegion {
 		return m.showRegion(id)
 	}
+	if id.Type == model.TypeInstance && id.OwningLBID == "" {
+		n := m.instanceNode(id.ID)
+		return m.setStandalone(id, n, nil, nil)
+	}
 	if id.Type == model.TypeDomain {
 		return m.showDomain(id)
 	}
@@ -2842,6 +2886,14 @@ func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 		m.loading, m.loadingWhat = true, "regions"
 		m.showLoadingList()
 		return m.loadRegionsCmd(false)
+	case kindInstance:
+		if m.instancesLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.loading, m.loadingWhat = true, "instances"
+		m.showLoadingList()
+		return m.loadInstancesCmd(false)
 	}
 	return nil
 }
@@ -2883,6 +2935,8 @@ func (m *Model) setTopLevelEntries() {
 		m.allEntries = endpointEntries(m.endpoints)
 	case kindRegion:
 		m.allEntries = regionEntries(m.regions)
+	case kindInstance:
+		m.allEntries = instanceEntries(m.instances)
 	default:
 		m.allEntries = lbEntries(m.lbs, m.multiProjectScope)
 	}

@@ -25,7 +25,7 @@ func TestHomeLanding(t *testing.T) {
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
 		"OLB — OpenStack Live Browser", "project Default / alpha", "admin, member",
-		"service catalog", "identity & access", "load balancers",
+		"service catalog", "identity & access", "compute", "load balancers",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("home view should show %q:\n%s", want, view)

@@ -139,6 +139,9 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Sort):
 		return m.openSort()
 	case key.Matches(msg, m.keys.RoleTree):
+		if !m.roleTreeContext() {
+			return m, nil
+		}
 		return m.openRoleTree()
 
 	case key.Matches(msg, m.keys.Scope):
@@ -352,6 +355,17 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 		m.endpoints, m.endpointsLoaded, m.endpointsLoading = nil, false, true
 		return m, m.loadEndpointsCmd(false)
 	}
+	if m.isInstanceOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		m.hist.pruneDead()
+		m.refreshing = true
+		m.refreshAutomatic = false
+		m.loading, m.loadingWhat = true, "refreshing…"
+		m.captureRefreshSelection()
+		return m, m.loadInstancesCmd(true)
+	}
 	m.hist.pruneDead()
 	m.refreshing = true
 	m.refreshAutomatic = automatic
@@ -389,6 +403,8 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 			return m, m.loadEndpointsCmd(true)
 		case kindRegion:
 			return m, m.loadRegionsCmd(true)
+		case kindInstance:
+			return m, m.loadInstancesCmd(true)
 		default:
 			return m, m.loadLBsCmd()
 		}

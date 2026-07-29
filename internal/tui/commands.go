@@ -182,6 +182,12 @@ type regionsMsg struct {
 	err     error
 }
 
+type instancesMsg struct {
+	instances []osclient.Instance
+	refresh   bool
+	err       error
+}
+
 type domainContentsMsg struct {
 	domainID string
 	projects []osclient.Project
@@ -316,6 +322,16 @@ func (m Model) loadAmphoraeListCmd(refresh bool) tea.Cmd {
 		defer cancel()
 		nodes, err := b.ListAllAmphorae(ctx)
 		return amphoraeListMsg{nodes: nodes, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadInstancesCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		instances, err := b.ListInstances(ctx)
+		return instancesMsg{instances: instances, refresh: refresh, err: err}
 	}
 }
 

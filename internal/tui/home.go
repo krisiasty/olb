@@ -14,8 +14,8 @@ import (
 // homeView renders the launch / overview landing. Now that olb browses more than
 // load balancers, it opens here to orient the operator: the current scope and
 // identity (from the auth token — a local read, no network), then the browsable
-// areas. It is a base view (not an overlay, not a workspace); S/A/L enter an
-// area, space opens the switcher, and ` returns here.
+// areas. It is a base view (not an overlay, not a workspace); an area accelerator
+// enters a workspace, space opens the switcher, and ` returns here.
 func (m Model) homeView() string {
 	tok := m.backend.CurrentToken()
 	lines := make([]string, 0, m.height)
@@ -63,7 +63,7 @@ func (m Model) homeView() string {
 	for len(lines) < m.height-1 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, m.clip(m.st.help.Render("S / A / L enter area · space switch · tab scope · * token · ? help · q quit")))
+	lines = append(lines, m.clip(m.st.help.Render(strings.Join(areaKeyStrings(), " / ")+" enter area · space switch · tab scope · * token · ? help · q quit")))
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}

@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"time"
 )
 
 // sortColumn is one selectable sort key for a top-level list. Per the design,
@@ -151,6 +152,31 @@ func (m Model) sortColumns() []sortColumn {
 			{key: "parent", label: "Parent region", value: func(e entry) string { return e.region.ParentRegionID }},
 			{key: "description", label: "Description", value: func(e entry) string { return e.region.Description }},
 		}
+	case kindInstance:
+		cols := []sortColumn{
+			def,
+			{key: "name", label: "Name", value: func(e entry) string { return e.instance.Name }},
+			{key: "id", label: "Instance ID", value: func(e entry) string { return e.instance.ID }},
+			{key: "status", label: "Status", value: func(e entry) string { return e.instance.Status }},
+		}
+		if m.multiProjectScope {
+			cols = append(cols, sortColumn{key: "project", label: "Project", value: func(e entry) string {
+				if e.instance.ProjectName != "" {
+					return e.instance.ProjectName
+				}
+				return e.instance.ProjectID
+			}})
+		}
+		return append(cols,
+			sortColumn{key: "flavor", label: "Flavor", value: func(e entry) string {
+				if e.instance.FlavorName != "" {
+					return e.instance.FlavorName
+				}
+				return e.instance.FlavorID
+			}},
+			sortColumn{key: "address", label: "Address", ip: true, value: func(e entry) string { return e.instance.PrimaryAddress }},
+			sortColumn{key: "created", label: "Created", value: func(e entry) string { return e.instance.Created.Format(time.RFC3339Nano) }},
+		)
 	}
 	return nil
 }

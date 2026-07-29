@@ -48,6 +48,7 @@ type Backend interface {
 	ListServices(ctx context.Context) ([]osclient.Service, error)
 	ListEndpoints(ctx context.Context) ([]osclient.Endpoint, error)
 	ListRegions(ctx context.Context) ([]osclient.Region, error)
+	ListInstances(ctx context.Context) ([]osclient.Instance, error)
 	CurrentToken() osclient.TokenInfo
 	ListScopes(ctx context.Context) ([]osclient.ScopeInfo, error)
 	SwitchScope(ctx context.Context, target osclient.ScopeInfo) error

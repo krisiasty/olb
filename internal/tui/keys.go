@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/bubbles/key"
+import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/key"
+)
 
 // keyMap is the full keybinding set. Grouped to mirror the spec's keymap and to
 // drive the help overlay.
@@ -64,7 +68,7 @@ func defaultKeys() keyMap {
 		Forward:  key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "forward")),
 		LBList:   key.NewBinding(key.WithKeys("ctrl+home"), key.WithHelp("ctrl+home", "view root")),
 		TopLevel: key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9"), key.WithHelp("1-9", "views")),
-		Area:     key.NewBinding(key.WithKeys(areaKeyStrings()...), key.WithHelp("S/A/L", "area")),
+		Area:     key.NewBinding(key.WithKeys(areaKeyStrings()...), key.WithHelp(strings.Join(areaKeyStrings(), "/"), "area")),
 		Switcher: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "switch area")),
 		Picker:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "history")),
 

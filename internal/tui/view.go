@@ -253,6 +253,8 @@ func (m Model) visibleRows() int {
 		_, h = m.identityOverviewParts(h, m.endpointOverviewSummary)
 	} else if m.isRegionOverview() {
 		_, h = m.identityOverviewParts(h, m.regionOverviewSummary)
+	} else if m.isInstanceOverview() {
+		_, h = m.identityOverviewParts(h, m.instanceOverviewSummary)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -313,6 +315,9 @@ func (m Model) bodyLines() []string {
 	if m.isRegionOverview() {
 		return m.regionOverviewLines(h)
 	}
+	if m.isInstanceOverview() {
+		return m.instanceOverviewLines(h)
+	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
@@ -328,6 +333,8 @@ func (m Model) bodyLines() []string {
 			msg = m.usersErr
 		case m.loc.listKind() == kindDomain && m.domainsErr != "":
 			msg = m.domainsErr
+		case m.loc.listKind() == kindInstance && m.instancesErr != "":
+			msg = m.instancesErr
 		case m.loc.listKind() == kindGroup && m.groupsErr != "":
 			msg = m.groupsErr
 		case m.loc.listKind() == kindProject && m.projectListErr != "":
@@ -492,7 +499,7 @@ func (m Model) isOverview() bool {
 	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() ||
 		m.isHealthMonitorOverview() || m.isCOEClusterOverview() || m.isKubernetesServiceOverview() ||
 		m.isUserOverview() || m.isDomainOverview() || m.isGroupOverview() || m.isProjectOverview() || m.isRoleOverview() ||
-		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview()
+		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview() || m.isInstanceOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -3268,10 +3275,11 @@ Navigate
 Areas & views (drill into an item to open its detail)
   `+"`"+`                overview / home landing — scope, identity, areas (opens here)
   space            switch area / view — searchable overlay
-  S / A / L        jump to the catalog / identity / load-balancer area
+  S / A / C / L    jump to the catalog / identity / compute / load-balancer area
   1-9              switch view within the active area
   catalog area:        1 regions · 2 services · 3 endpoints
   identity area:       1 domains · 2 projects · 3 groups · 4 users · 5 roles
+  compute area:        1 instances
   load-balancer area:  1 load balancers · 2 virtual IPs · 3 listeners ·
                        4 pools · 5 amphorae (admin only)
 
@@ -3311,7 +3319,7 @@ Notes
 	  example, 5s/30s); COE cluster and Kubernetes service details show their
 	  Magnum cadence (60s), while other views show the fixed full cadence (30s).
 	• enter is the only descent key; arrows are reserved for history.
-	• number keys switch views within the active area; space (or S/A/L) switches areas.
+	• number keys switch views within the active area; space (or S/A/C/L) switches areas.
 	  Each view keeps its own history, cursor, and filters. Cross-area reference
 	  edges open in place and never change the active area.
   • esc clears an active filter first, otherwise it is back.

@@ -27,6 +27,7 @@ const (
 	kindService
 	kindEndpoint
 	kindRegion
+	kindInstance
 )
 
 // listIdentity is the synthetic history identity for a top-level list kind.
@@ -56,6 +57,8 @@ func (k listKind) identity() model.Identity {
 		return model.EndpointListIdentity
 	case kindRegion:
 		return model.RegionListIdentity
+	case kindInstance:
+		return model.InstanceListIdentity
 	default:
 		return model.LBListIdentity
 	}
@@ -88,6 +91,8 @@ func (k listKind) rootLabel() string {
 		return "endpoints"
 	case kindRegion:
 		return "regions"
+	case kindInstance:
+		return "instances"
 	default:
 		return "load balancers"
 	}
@@ -121,6 +126,8 @@ func listKindOf(id model.Identity) listKind {
 		return kindEndpoint
 	case model.TypeRegion:
 		return kindRegion
+	case model.TypeInstance:
+		return kindInstance
 	default:
 		return kindLB
 	}
@@ -273,6 +280,26 @@ func amphoraEntries(nodes []*model.Node, lbNames map[string]string, filterToLBs 
 	return es
 }
 
+func instanceEntries(rows []osclient.Instance) []entry {
+	es := make([]entry, 0, len(rows))
+	for _, instance := range rows {
+		name := instance.Name
+		if name == "" {
+			name = shortID(instance.ID)
+		}
+		es = append(es, entry{
+			kind: entInstance, instance: instance,
+			label: "instance:" + name, oper: instance.Status,
+			extra: strings.Join([]string{
+				instance.ProjectName, instance.ProjectID,
+				instance.FlavorName, instance.FlavorID,
+				strings.Join(instance.Addresses, " "),
+			}, " "),
+		})
+	}
+	return es
+}
+
 // --- table columns & cells ------------------------------------------------
 
 // columnTitles returns the table headers for the active top-level list. The d
@@ -311,6 +338,20 @@ func (m Model) columnTitles() []string {
 		return endpointColumnTitles(m.showIDs)
 	case kindRegion:
 		return regionColumnTitles(m.showIDs)
+	case kindInstance:
+		obj, flavor := "NAME", "FLAVOR"
+		if m.showIDs {
+			obj, flavor = "INSTANCE ID", "FLAVOR ID"
+		}
+		cols := []string{obj, "STATUS"}
+		if m.multiProjectScope {
+			project := "PROJECT"
+			if m.showIDs {
+				project = "PROJECT ID"
+			}
+			cols = append(cols, project)
+		}
+		return append(cols, flavor, "ADDRESSES", "CREATED")
 	default:
 		return m.lbColumnTitles()
 	}
@@ -360,6 +401,15 @@ func (m Model) rowCells(e entry) []string {
 		return endpointRowCells(e, m.showIDs)
 	case entRegion:
 		return regionRowCells(e, m.showIDs)
+	case entInstance:
+		instance := e.instance
+		first := lbNameCell(instance.Name, instance.ID, m.showIDs)
+		flavor := lbNameCell(instance.FlavorName, instance.FlavorID, m.showIDs)
+		cells := []string{first, instance.Status}
+		if m.multiProjectScope {
+			cells = append(cells, lbNameCell(instance.ProjectName, instance.ProjectID, m.showIDs))
+		}
+		return append(cells, flavor, displayValue(strings.Join(instance.Addresses, ", ")), formatTableTime(instance.Created))
 	default:
 		return m.lbRowCells(e)
 	}
@@ -387,6 +437,8 @@ func (m Model) statusColumnSet(ncols int) map[int]bool {
 		return map[int]bool{}
 	case kindAmphora:
 		return map[int]bool{2: true} // STATUS
+	case kindInstance:
+		return map[int]bool{1: true} // STATUS
 	default:
 		return map[int]bool{ncols - 1: true, ncols - 2: true}
 	}

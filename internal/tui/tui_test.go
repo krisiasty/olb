@@ -76,6 +76,8 @@ type fakeBackend struct {
 	endpointsErr error
 	regions      []osclient.Region
 	regionsErr   error
+	instances    []osclient.Instance
+	instancesErr error
 	token        *osclient.TokenInfo // when set, overrides the default whoami
 	// Owner-side role assignments (the mirror of roleAssignments): keyed by the
 	// user/group/project/domain ID. Nil maps fall back to built-in defaults.
@@ -662,6 +664,28 @@ func (f *fakeBackend) ListRegions(context.Context) ([]osclient.Region, error) {
 	return []osclient.Region{
 		{ID: "RegionOne", Description: "primary region"},
 		{ID: "RegionTwo", Description: "secondary region", ParentRegionID: "RegionOne"},
+	}, nil
+}
+
+func (f *fakeBackend) ListInstances(context.Context) ([]osclient.Instance, error) {
+	if f.instancesErr != nil {
+		return nil, f.instancesErr
+	}
+	if f.instances != nil {
+		return f.instances, nil
+	}
+	return []osclient.Instance{
+		{
+			ID: "instance-1", Name: "api-1", Status: "ACTIVE",
+			ProjectID: "p1", ProjectName: "alpha", UserID: "u-1",
+			FlavorID: "flavor-1", FlavorName: "m1.small",
+			ImageID: "image-1", ImageName: "Ubuntu 24.04",
+			Addresses: []string{"private=10.0.0.12"}, PrimaryAddress: "10.0.0.12",
+			AvailabilityZone: "nova", KeyName: "operator",
+			InstanceName: "instance-0000012a",
+			Created:      time.Date(2026, 7, 30, 8, 15, 0, 0, time.UTC),
+			Updated:      time.Date(2026, 7, 30, 8, 20, 0, 0, time.UTC),
+		},
 	}, nil
 }
 

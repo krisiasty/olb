@@ -67,6 +67,17 @@ func (m Model) canOpenRoleTree() bool {
 	return ok
 }
 
+// roleTreeContext reports whether t belongs to the current view at all. A role
+// without implied roles may still explain why no tree opens; outside the roles
+// list/detail, t is inactive and must be a silent no-op.
+func (m Model) roleTreeContext() bool {
+	if m.isRoleOverview() {
+		return true
+	}
+	return m.loc.isTopLevelList() && m.loc.listKind() == kindRole &&
+		m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].kind == entRole
+}
+
 func (m Model) openRoleTree() (tea.Model, tea.Cmd) {
 	root, ok := m.roleTreeCandidate()
 	if !ok {

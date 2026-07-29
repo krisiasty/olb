@@ -3,7 +3,7 @@ package tui
 import "github.com/krisiasty/olb/internal/model"
 
 // workspaceState is the independently remembered navigation surface behind one
-// of the 1-5 top-level views. API data and graph caches remain shared globally;
+// registered top-level view. API data and graph caches remain shared globally;
 // only browser-like navigation and presentation state belong to the workspace.
 type workspaceState struct {
 	hist *history

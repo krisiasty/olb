@@ -122,9 +122,12 @@ func TestAreaSwitcherGroupsByArea(t *testing.T) {
 	if !strings.Contains(view, "SERVICE CATALOG 3") {
 		t.Fatalf("switcher should show the catalog area heading with its view count:\n%s", view)
 	}
+	if !strings.Contains(view, "COMPUTE 1") {
+		t.Fatalf("switcher should show the compute area heading with its view count:\n%s", view)
+	}
 	// Headers are not selectable: the cursor space is the view rows only.
-	if got := len(m.filteredSwitcherRows()); got != 13 {
-		t.Fatalf("switcher selectable rows = %d, want 13 views across three areas", got)
+	if got := len(m.filteredSwitcherRows()); got != 14 {
+		t.Fatalf("switcher selectable rows = %d, want 14 views across four areas", got)
 	}
 }
 

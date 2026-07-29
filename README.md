@@ -3,7 +3,8 @@
 **OLB — Browse your OpenStack cloud live.**
 
 `olb` is an interactive terminal UI for exploring live OpenStack resources and
-the relationships between them. Its load-balancer area supports OpenStack
+the relationships between them. Its compute area lists Nova instances, while
+its load-balancer area supports OpenStack
 **Octavia** load balancers (both the **Amphora** and **OVN** provider drivers).
 It fetches a load balancer's structure in a single `status show` call, then lets
 you drill down containment edges and jump along reference edges — including the
@@ -159,7 +160,7 @@ returning its active view to the root.
 | | `ctrl+home` | Jump to the active view's pinned root history entry |
 | | `h` | History picker overlay |
 | Areas | `Space` | Area/view switcher — a searchable overlay of every area and view |
-| | `A` / `L` | Jump to the auth / load-balancer area (uppercase accelerators) |
+| | `S` / `A` / `C` / `L` | Jump to the catalog / auth / compute / load-balancer area (uppercase accelerators) |
 | | `1`–`9` | Switch view within the active area |
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` | Copy id / name |
@@ -180,14 +181,15 @@ reference jump.
 olb opens on a **home overview** that orients you before you dive in: your
 current scope, the authenticated identity and roles (read from the token, no API
 call), and the browsable areas with their accelerators. Press an area key
-(`S`/`A`/`L`), `Space` for the switcher, or `` ` `` to return to the overview at any
+(`S`/`A`/`C`/`L`), `Space` for the switcher, or `` ` `` to return to the overview at any
 time.
 
 Views are grouped into **areas**. The load-balancer area (`L`) holds the load
 balancer, VIP, listener, pool, and amphora views; the identity & access area
 (`A`) holds the Keystone identity views (users, domains, groups, a browsable
-projects list, roles); and the service catalog area (`S`) holds the services,
-endpoints, and regions. That projects view is for exploring/inspecting projects
+projects list, roles); the compute area (`C`) starts with a Nova instances list;
+and the service catalog area (`S`) holds the services, endpoints, and regions.
+That projects view is for exploring/inspecting projects
 and is distinct from the global authentication-scope selector (`Tab`), which
 re-authenticates the service clients. Uppercase accelerators jump straight to an area, `Space` opens a searchable
 switcher over every area and view, and number keys `1`–`9` select a view *within
@@ -259,6 +261,15 @@ The **service catalog** views cross-link the same way: a **service** lists its
 lists the endpoints located in it (and its parent region). The endpoints list is
 shared, so a service's and a region's related endpoints are derived from it
 rather than re-fetched.
+
+The **compute** area currently starts with an **instances** view. It lists the
+Nova servers visible to the active token with status, flavor, addresses, and
+creation time. The request uses Nova's ordinary scope-aware server list without
+an `all_tenants` override, so the result is exactly the collection authorized
+for the active token. A denied request shows a concise RBAC explanation instead
+of the raw HTTP response. Outside project scope, rows also show their owning
+project. Press `d` to switch the instance, project, and flavor columns between
+names and IDs, and `enter` to inspect an instance.
 
 Press `*` at any time for the **current token** pop-up (whoami): the
 authenticated user, the token's scope (project / domain / system), the roles it

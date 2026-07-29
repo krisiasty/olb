@@ -445,7 +445,7 @@ func (m Model) tokenView() string {
 
 func (m Model) tokenModalBox() string {
 	t := m.tokenInfo
-	title := "Current token"
+	title := "CURRENT TOKEN"
 	footer := "esc / * close"
 	type kv struct{ k, v string }
 	var rows []kv

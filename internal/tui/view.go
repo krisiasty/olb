@@ -50,6 +50,8 @@ func (m Model) View() string {
 		return m.telemetryView()
 	case overlayToken:
 		return m.tokenView()
+	case overlayRoleTree:
+		return m.roleTreeView()
 	}
 	if m.home {
 		return m.homeView()
@@ -1793,17 +1795,24 @@ func (m Model) lbTableLines(h int) []string {
 	out := make([]string, 0, h)
 	out = append(out, headerStyle.Render(tableRowText(titles, widths)))
 	for i, cells := range rows {
+		e := window[i]
 		if i == m.cursor-start {
-			out = append(out, selStyle.Render(tableRowText(cells, widths)))
+			out = append(out, m.styleRoleImplicationMarker(e, tableRowText(cells, widths), selStyle))
 			continue
 		}
-		if e := window[i]; e.kind == entUser && e.user.Service {
+		if e.kind == entUser && e.user.Service {
 			// Service/system accounts recede: the whole row is dimmed (the leading
 			// marker from userRowCells flags it).
 			out = append(out, m.st.attrs.Render(tableRowText(cells, widths)))
 			continue
 		}
-		out = append(out, m.tableDataRow(cells, widths, statusCols))
+		if e.kind == entRole && e.role.ImpliesRoles {
+			// Composite roles use the same subdued foreground as service/system
+			// users; only their ⧉ marker is bold.
+			out = append(out, m.styleRoleImplicationMarker(e, tableRowText(cells, widths), m.st.attrs))
+			continue
+		}
+		out = append(out, m.tableDataRow(e, cells, widths, statusCols))
 	}
 	for len(out) < h {
 		out = append(out, "")
@@ -1830,7 +1839,7 @@ func tableRowText(cells []string, widths []int) string {
 }
 
 // tableDataRow renders a non-selected row, coloring only the status columns.
-func (m Model) tableDataRow(cells []string, widths []int, statusCols map[int]bool) string {
+func (m Model) tableDataRow(e entry, cells []string, widths []int, statusCols map[int]bool) string {
 	var b strings.Builder
 	for j, w := range widths {
 		cell := ""
@@ -1844,7 +1853,16 @@ func (m Model) tableDataRow(cells []string, widths []int, statusCols map[int]boo
 		b.WriteString(text)
 		b.WriteString(strings.Repeat(" ", tableColumnGap))
 	}
-	return b.String()
+	return m.styleRoleImplicationMarker(e, b.String(), lipgloss.NewStyle())
+}
+
+func (m Model) styleRoleImplicationMarker(e entry, row string, base lipgloss.Style) string {
+	const marker = "⧉"
+	if e.kind != entRole || !e.role.ImpliesRoles || !strings.HasPrefix(row, marker) {
+		return base.Render(row)
+	}
+	markerStyle := base.Bold(true)
+	return markerStyle.Render(marker) + base.Render(strings.TrimPrefix(row, marker))
 }
 
 // layoutColumnWidths sizes columns to their natural content width, then expands
@@ -2043,8 +2061,8 @@ func (m Model) renderIdentityRow(e entry, sel bool) string {
 	return navigationStyledChevron(seg, m.width, m.st.refMarker)
 }
 
-// styledIdentityExtra highlights broad role-assignment targets without
-// recoloring the assignment's actor/role or the row's selection chrome.
+// styledIdentityExtra highlights broad direct and effective role-assignment
+// targets without recoloring the actor/role or the row's selection chrome.
 func (m Model) styledIdentityExtra(e entry, extra string) string {
 	style := m.st.attrs
 	if e.kind == entAssignment && e.assignmentPivot != pivotTarget {
@@ -2402,6 +2420,9 @@ func (m Model) hintLine() string {
 	if m.loc.isTopLevelList() {
 		parts = append(parts, "d names/ids", "o sort")
 	}
+	if m.canOpenRoleTree() {
+		parts = append(parts, "t inheritance tree")
+	}
 	if hasFilterableEntries(m.allEntries) {
 		parts = append(parts, "/ filter")
 	}
@@ -2412,7 +2433,7 @@ func (m Model) hintLine() string {
 	if m.isStatsOverview() {
 		parts = append(parts, "+/- interval")
 	}
-	parts = append(parts, "h history", "t telemetry", "? help", "q quit")
+	parts = append(parts, "h history", "# telemetry", "? help", "q quit")
 	return m.clip(m.st.help.Render(strings.Join(parts, " · ")))
 }
 
@@ -2595,24 +2616,43 @@ func (m Model) rawView() string {
 }
 
 func (m Model) scopeView() string {
-	title := m.scopeTitleLine()
-	if m.loading && len(m.scopes) == 0 {
-		return title + "\n\n" + m.spinner.View() + " loading available scopes…\n\n" + m.st.help.Render("esc cancel")
+	return overlayCenter(m.selectorBaseView(), m.scopeModalBox(), m.width, m.height)
+}
+
+func (m Model) scopeModalBox() string {
+	const title = "SWITCH AUTHENTICATION SCOPE"
+	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
+	if m.search.Focused() {
+		footer = "type to filter · enter apply · esc clear"
+	} else if m.loading && m.loadingWhat == "switching authentication scope" {
+		footer = m.spinner.View() + " switching authentication scope…"
 	}
+
 	scopes := m.filteredScopes()
 	items := scopeSelectorItems(scopes)
-	errorLines := m.scopeErrorLines()
+	labels := make([]string, 0, len(items)+2)
+	for _, item := range items {
+		label := item.label
+		if !item.header && scopes[item.scopeIndex].Equal(m.scope) {
+			label += " (current)"
+		}
+		labels = append(labels, "      "+label)
+	}
+	if m.loading && len(m.scopes) == 0 {
+		labels = append(labels, "  loading available scopes…")
+	}
+	if m.scopeError != "" {
+		labels = append(labels, m.scopeError)
+	}
+	width := m.selectorModalWidth(title, footer, labels)
+	errorLines := m.scopeErrorLines(width)
+	errorRows := len(errorLines)
+	if errorRows > 0 {
+		errorRows++ // blank separator before the in-view error
+	}
+	maxRows := m.selectorModalRowCapacity(errorRows)
 
-	var b strings.Builder
-	b.WriteString(title)
-	b.WriteString("\n\n")
-	maxRows := m.overlayPageSize() - len(errorLines)
-	if len(errorLines) > 0 {
-		maxRows-- // blank separator before the in-view error
-	}
-	if maxRows < 1 {
-		maxRows = 1
-	}
+	var lines []string
 	selectedDisplay := 0
 	for i, item := range items {
 		if !item.header && item.scopeIndex == m.scopeCursor {
@@ -2620,67 +2660,55 @@ func (m Model) scopeView() string {
 			break
 		}
 	}
-	start := 0
-	if selectedDisplay >= maxRows {
-		start = selectedDisplay - maxRows + 1
-	}
-	end := start + maxRows
-	if end > len(items) {
-		end = len(items)
-	}
-	for i := start; i < end; i++ {
-		item := items[i]
-		if item.header {
-			b.WriteString(m.st.relatedGroup.Render(item.label))
-			b.WriteString("\n")
-			continue
-		}
-		scope := scopes[item.scopeIndex]
-		label := item.label
-		if scope.Equal(m.scope) {
-			label += m.st.relationship.Render(" (current)")
-		}
-		if item.scopeIndex == m.scopeCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("    ▸ "+label, m.width)))
-			b.WriteString("\n")
-		} else {
-			b.WriteString("      ")
-			b.WriteString(m.clip(label))
-			b.WriteString("\n")
+	start, end := selectorWindow(len(items), selectedDisplay, maxRows)
+	above, below := m.selectorScrollMarkers(start, end, len(items))
+	lines = append(lines, modalMarkerLine(m.selectorTitleLine(title, width), above, width))
+	lines = append(lines, m.modalContentLine("", width))
+
+	if m.loading && len(m.scopes) == 0 {
+		lines = append(lines, m.modalContentLine(m.spinner.View()+" loading available scopes…", width))
+	} else {
+		for i := start; i < end; i++ {
+			item := items[i]
+			if item.header {
+				lines = append(lines, m.modalContentLine(m.st.relatedGroup.Render(item.label), width))
+				continue
+			}
+			scope := scopes[item.scopeIndex]
+			label := item.label
+			if scope.Equal(m.scope) {
+				label += m.st.relationship.Render(" (current)")
+			}
+			if item.scopeIndex == m.scopeCursor {
+				lines = append(lines, m.st.selected.Width(width).MaxWidth(width).Render("    ▸ "+label))
+			} else {
+				lines = append(lines, m.modalContentLine("      "+label, width))
+			}
 		}
 	}
-	if len(scopes) == 0 {
-		b.WriteString("  ")
+	if len(scopes) == 0 && !(m.loading && len(m.scopes) == 0) {
+		empty := "— no available scopes —"
 		if m.search.Value() != "" {
-			b.WriteString(m.st.disabled.Render("— no matching scopes —"))
-		} else {
-			b.WriteString(m.st.disabled.Render("— no available scopes —"))
+			empty = "— no matching scopes —"
 		}
-		b.WriteString("\n")
+		lines = append(lines, m.modalContentLine("  "+m.st.disabled.Render(empty), width))
 	}
 	if len(errorLines) > 0 {
-		b.WriteString("\n")
+		lines = append(lines, m.modalContentLine("", width))
 		for _, line := range errorLines {
-			b.WriteString(m.st.flashErr.Render("  " + line))
-			b.WriteString("\n")
+			lines = append(lines, m.modalContentLine(m.st.flashErr.Render("  "+line), width))
 		}
 	}
-	footer := "enter select · arrows/page/home/end move · / filter · esc/q cancel"
-	if m.search.Focused() {
-		footer = "type to filter · enter apply · esc clear"
-	} else if m.loading && m.loadingWhat == "switching authentication scope" {
-		footer = m.spinner.View() + " switching authentication scope…"
-	}
-	b.WriteString("\n")
-	b.WriteString(m.st.help.Render(footer))
-	return b.String()
+	lines = append(lines, m.modalContentLine("", width))
+	lines = append(lines, modalMarkerLine(m.st.modalHelp.Render(footer), below, width))
+	return m.st.modalFrame.Render(strings.Join(lines, "\n"))
 }
 
-func (m Model) scopeErrorLines() []string {
+func (m Model) scopeErrorLines(width int) []string {
 	if m.scopeError == "" {
 		return nil
 	}
-	width := m.width - 4
+	width -= 4
 	if width < 1 {
 		width = 1
 	}
@@ -2741,9 +2769,31 @@ func (m Model) switcherItems(rows []switcherRow) []switcherItem {
 }
 
 func (m Model) switcherView() string {
-	title := m.switcherTitleLine()
+	return overlayCenter(m.selectorBaseView(), m.switcherModalBox(), m.width, m.height)
+}
+
+func (m Model) switcherModalBox() string {
+	const title = areaSwitcherTitle
 	rows := m.filteredSwitcherRows()
 	items := m.switcherItems(rows)
+	footer := areaSwitcherFooter()
+	if m.search.Focused() {
+		footer = "type to filter · enter apply · esc clear"
+	}
+
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.header {
+			labels = append(labels, " "+string(item.key)+"  "+item.label)
+			continue
+		}
+		label := item.label
+		if rows[item.viewIdx].view == m.activeWorkspace {
+			label += " (current)"
+		}
+		labels = append(labels, "      "+label)
+	}
+	width := m.selectorModalWidth(title, footer, labels)
 
 	// Window on the selected view's display line so its heading stays in view.
 	selDisp := 0
@@ -2754,24 +2804,18 @@ func (m Model) switcherView() string {
 		}
 	}
 
-	var b strings.Builder
-	b.WriteString(title)
-	b.WriteString("\n\n")
-	maxRows := m.overlayPageSize()
-	start := 0
-	if selDisp >= maxRows {
-		start = selDisp - maxRows + 1
-	}
-	end := start + maxRows
-	if end > len(items) {
-		end = len(items)
+	maxRows := m.selectorModalRowCapacity(0)
+	start, end := selectorWindow(len(items), selDisp, maxRows)
+	above, below := m.selectorScrollMarkers(start, end, len(items))
+	lines := []string{
+		modalMarkerLine(m.selectorTitleLine(title, width), above, width),
+		m.modalContentLine("", width),
 	}
 	for i := start; i < end; i++ {
 		it := items[i]
 		if it.header {
 			chip := m.st.panelTitle.Render(" " + string(it.key) + " ")
-			b.WriteString(m.clip(chip + " " + m.st.relatedGroup.Render(it.label)))
-			b.WriteString("\n")
+			lines = append(lines, m.modalContentLine(chip+" "+m.st.relatedGroup.Render(it.label), width))
 			continue
 		}
 		label := it.label
@@ -2779,70 +2823,131 @@ func (m Model) switcherView() string {
 			label += m.st.relationship.Render(" (current)")
 		}
 		if it.viewIdx == m.switchCursor {
-			b.WriteString(m.st.selected.Width(m.width).Render(clipRunes("    ▸ "+label, m.width)))
+			lines = append(lines, m.st.selected.Width(width).MaxWidth(width).Render("    ▸ "+label))
 		} else {
-			b.WriteString("      ")
-			b.WriteString(m.clip(label))
+			lines = append(lines, m.modalContentLine("      "+label, width))
 		}
-		b.WriteString("\n")
 	}
 	if len(rows) == 0 && m.search.Value() != "" {
-		b.WriteString("  ")
-		b.WriteString(m.st.disabled.Render("— no matching views —"))
-		b.WriteString("\n")
+		lines = append(lines, m.modalContentLine("  "+m.st.disabled.Render("— no matching views —"), width))
 	}
-	footer := "enter select · " + strings.Join(areaKeyStrings(), "/") + " jump to area · arrows/page move · / filter · esc/q cancel"
-	if m.search.Focused() {
-		footer = "type to filter · enter apply · esc clear"
-	}
-	b.WriteString("\n")
-	b.WriteString(m.st.help.Render(footer))
-	return b.String()
+	lines = append(lines, m.modalContentLine("", width))
+	lines = append(lines, modalMarkerLine(m.st.modalHelp.Render(footer), below, width))
+	return m.st.modalFrame.Render(strings.Join(lines, "\n"))
 }
 
-func (m Model) switcherTitleLine() string {
-	title := m.st.overlayTitle.Render("Switch area / view")
+func (m Model) selectorTitleLine(title string, width int) string {
+	renderedTitle := m.st.modalTitle.Render(title)
 	query := m.search.Value()
 	if !m.search.Focused() && query == "" {
-		return m.clip(title)
+		return modalMarkerLine(renderedTitle, "", width)
 	}
 	separator := m.st.crumbSep.Render("  ")
 	if m.search.Focused() {
-		inputWidth := m.width - lipgloss.Width(title) - lipgloss.Width(separator) - lipgloss.Width(m.search.Prompt)
+		inputWidth := width - lipgloss.Width(renderedTitle) - lipgloss.Width(separator) - lipgloss.Width(m.search.Prompt)
 		if inputWidth < 1 {
 			inputWidth = 1
 		}
-		m.search.Width = inputWidth
-		return m.clip(title + separator + m.search.View())
+		search := m.search
+		search.Width = inputWidth
+		return modalMarkerLine(renderedTitle+separator+search.View(), "", width)
 	}
-	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
+	return modalMarkerLine(renderedTitle+separator+m.st.statusBar.Render("filter: "+query), "", width)
 }
 
-func (m Model) scopeTitleLine() string {
-	title := m.st.overlayTitle.Render("Switch authentication scope")
-	query := m.search.Value()
-	if !m.search.Focused() && query == "" {
-		return m.clip(title)
+func (m Model) selectorBaseView() string {
+	if m.home {
+		return m.homeView()
 	}
+	return m.listView()
+}
 
-	separator := m.st.crumbSep.Render("  ")
-	if m.search.Focused() {
-		inputWidth := m.width - lipgloss.Width(title) - lipgloss.Width(separator) - lipgloss.Width(m.search.Prompt)
-		if inputWidth < 1 {
-			inputWidth = 1
+const areaSwitcherTitle = "SWITCH AREA / VIEW"
+
+func areaSwitcherFooter() string {
+	return "enter select · " + strings.Join(areaKeyStrings(), "/") + " jump to area · arrows/page move · / filter · esc/q cancel"
+}
+
+func (m Model) areaSwitcherBaselineWidth() int {
+	return m.constrainModalWidth(max(
+		lipgloss.Width(areaSwitcherTitle),
+		lipgloss.Width(areaSwitcherFooter()),
+	))
+}
+
+func (m Model) selectorModalWidth(title, footer string, labels []string) int {
+	width := max(lipgloss.Width(title), lipgloss.Width(footer))
+	if query := m.search.Value(); query != "" || m.search.Focused() {
+		if w := lipgloss.Width(title + "  " + m.search.Prompt + query); w > width {
+			width = w
 		}
-		m.search.Width = inputWidth
-		return m.clip(title + separator + m.search.View())
 	}
-	return m.clip(title + separator + m.st.statusBar.Render("filter: "+query))
+	for _, label := range labels {
+		if w := lipgloss.Width(label); w > width {
+			width = w
+		}
+	}
+	return m.constrainModalWidth(width)
 }
 
-func (m Model) overlayPageSize() int {
-	rows := m.height - 6
+func (m Model) constrainModalWidth(width int) int {
+	if available := m.width - m.st.modalFrame.GetHorizontalFrameSize() - 2; available > 0 && width > available {
+		width = available
+	}
+	if width < 1 {
+		width = 1
+	}
+	return width
+}
+
+func (m Model) selectorModalRowCapacity(extraRows int) int {
+	frameHeight := m.st.modalFrame.GetVerticalFrameSize()
+	maxOuterHeight := m.height * 3 / 4
+	minOuterHeight := frameHeight + 5 + extraRows // title + blank + one row + blank + footer
+	if maxOuterHeight < minOuterHeight {
+		maxOuterHeight = minOuterHeight
+	}
+	if available := m.height - 2; available > 0 && maxOuterHeight > available {
+		maxOuterHeight = available
+	}
+	rows := maxOuterHeight - frameHeight - 4 - extraRows
 	if rows < 1 {
 		return 1
 	}
 	return rows
+}
+
+func (m Model) overlayPageSize() int {
+	return m.selectorModalRowCapacity(0)
+}
+
+func selectorWindow(total, selected, capacity int) (start, end int) {
+	if capacity < 1 {
+		capacity = 1
+	}
+	if selected >= capacity {
+		start = selected - capacity + 1
+	}
+	end = start + capacity
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+func (m Model) selectorScrollMarkers(start, end, total int) (above, below string) {
+	if start > 0 {
+		above = m.st.panelTitle.Render("▲ more")
+	}
+	if end < total {
+		below = m.st.panelTitle.Render("▼ more")
+	}
+	return above, below
+}
+
+func (m Model) modalContentLine(content string, width int) string {
+	content = lipgloss.NewStyle().MaxWidth(width).Render(content)
+	return m.st.modalRow.Width(width).MaxWidth(width).Render(content)
 }
 
 type scopeSelectorItem struct {
@@ -3176,13 +3281,14 @@ Inspect
   i                copy object id to clipboard (OSC 52)
   n                copy object name to clipboard
   c                copy the displayed raw object (inside the YAML/JSON view)
+  t                full inheritance tree (roles marked ⧉)
 
 {{list_controls}}Global
   tab              authentication scope switcher
   *                current token (whoami) — user, scope, roles, expiry
   r                refresh — re-fetch current tree, prune dead history
   a                toggle automatic refresh (enabled by default)
-{{stats_interval_controls}}  t                application and API telemetry
+{{stats_interval_controls}}  #                application and API telemetry
   ?                this help
   q                quit (back out, then exit)      ctrl+c  force quit
 
@@ -3198,6 +3304,7 @@ Status colors
 Row markers
   ●  role assignment held directly    ○  inherited (via a group or parent scope)
   ⚙  service / system account (in the users list)
+  ⧉  role includes one or more implied roles
 
 Notes
 	• load-balancer/listener details show stats/full refresh cadences (for

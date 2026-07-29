@@ -167,7 +167,8 @@ returning its active view to the root.
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
 | | `o` | Sort a top-level list by a name/id/IP column, ascending (esc cancels, enter selects) |
-| Global | `Tab` `r` `a` `t` `?` `q` | Scope · refresh · auto-refresh · telemetry · help · quit |
+| Roles | `t` | Fully expanded implied-role inheritance tree |
+| Global | `Tab` `r` `a` `#` `?` `q` | Scope · refresh · auto-refresh · telemetry · help · quit |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
 | | `ctrl+c` | Force quit |
 
@@ -206,6 +207,16 @@ groups, and users; a **user** shows its domain and the groups it belongs to; a
 **group** shows its domain and its member users; a **project** shows its domain;
 and a **role** shows the roles it implies and its **assignments** (which user or
 group holds it on which project/domain).
+
+Roles that imply one or more other roles carry a bold `⧉` marker in the roles
+list, and the row uses the same subdued color as a service/system user. The
+marker remains present when the list is switched to ID mode. Inference discovery
+is best-effort: if Keystone denies that endpoint, the role catalog remains
+usable without markers. Press `t` on a marked role in the list or its detail
+view to open the complete implied-role tree. Shared roles are expanded along
+every path. Trees stop at 10 displayed levels, marking expandable truncated
+nodes with `(...)`; cycles and exceptionally broad trees are stopped separately
+so malformed inference rules cannot lock the terminal.
 
 Identity collections follow the active token scope. A system token requests
 global collections; a domain token restricts users, groups, projects, and
@@ -306,7 +317,7 @@ fallback when the service project can't be enumerated). Both are best-effort.
   the exact increase since the previous successful sample. Large counters use
   digit grouping. Counter resets become a new baseline instead of producing a
   negative rate or delta.
-- **Application and API telemetry.** Press `t` for Go runtime health including
+- **Application and API telemetry.** Press `#` for Go runtime health including
   uptime, CPU concurrency, and current/max-observed goroutines, OS threads, and
   memory usage, alongside OpenStack request totals and per-endpoint
   min/average/median/p95/p99/max latency. Requests are classified as successful,

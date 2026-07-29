@@ -27,6 +27,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlayTelemetry {
 			m.vp.Height = msg.Height - 2
 			m.rebuildTelemetryContent(false)
+		} else if m.overlay == overlayRoleTree {
+			m.setupRoleTreeViewport(false)
 		}
 		m.ensureVisible()
 		return m, nil
@@ -86,6 +88,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onRoles(msg)
 	case roleRelationsMsg:
 		return m.onRoleRelations(msg)
+	case roleInferencesMsg:
+		return m.onRoleInferences(msg)
 	case assignmentsMsg:
 		return m.onAssignments(msg)
 	case servicesMsg:
@@ -623,6 +627,28 @@ func (m Model) onRoleRelations(msg roleRelationsMsg) (tea.Model, tea.Cmd) {
 		m.entries = nil
 		m.applyFilters()
 		m.restoreWorkspacePosition()
+	}
+	return m, nil
+}
+
+func (m Model) onRoleInferences(msg roleInferencesMsg) (tea.Model, tea.Cmd) {
+	if msg.generation != m.roleInferencesGeneration {
+		return m, nil
+	}
+	m.roleInferencesLoading = false
+	m.roleTreeErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.roleTreeErr = "Role inheritance requires admin RBAC for this scope."
+		} else {
+			m.roleTreeErr = "Unable to load role inheritance."
+		}
+	} else {
+		m.roleInferences = msg.inferences
+		m.roleInferencesLoaded = true
+	}
+	if m.overlay == overlayRoleTree {
+		m.setupRoleTreeViewport(true)
 	}
 	return m, nil
 }
@@ -1894,6 +1920,7 @@ func (m *Model) endRefresh() {
 	m.refreshSelection = entrySelection{}
 	m.refreshSelectionOK = false
 	m.refreshCursor = 0
+	m.refreshRowOffset = 0
 	m.refreshAutomatic = false
 }
 
@@ -1933,6 +1960,10 @@ func (m *Model) applyLBFloatingIP(msg lbFloatingIPMsg) {
 func (m *Model) captureRefreshSelection() {
 	m.refreshAt = m.loc.id
 	m.refreshCursor = m.cursor
+	m.refreshRowOffset = m.cursor - m.top
+	if m.refreshRowOffset < 0 {
+		m.refreshRowOffset = 0
+	}
 	m.refreshSelectionOK = m.cursor >= 0 && m.cursor < len(m.entries) && m.entries[m.cursor].selectable()
 	if m.refreshSelectionOK {
 		m.refreshSelection = m.entries[m.cursor].selection()
@@ -1957,6 +1988,15 @@ func (m *Model) restoreRefreshSelection() {
 	}
 	if selected >= 0 {
 		m.cursor = selected
+		offset := m.refreshRowOffset
+		visible := m.listContentRows()
+		if visible < 1 {
+			visible = 1
+		}
+		if offset >= visible {
+			offset = visible - 1
+		}
+		m.top = selected - offset
 		m.ensureVisible()
 	}
 }
@@ -2351,6 +2391,7 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.roleRelationsLoaded = map[string]bool{}
 	m.roleRelationsLoading = map[string]bool{}
 	m.roleRelationsErr = map[string]string{}
+	m.resetRoleInferenceCache()
 	m.assignments = map[assignmentKey][]osclient.RoleAssignment{}
 	m.assignmentsLoaded = map[assignmentKey]bool{}
 	m.assignmentsLoading = map[assignmentKey]bool{}

@@ -44,6 +44,7 @@ type Backend interface {
 	ListProjectAssignments(ctx context.Context, projectID string) ([]osclient.RoleAssignment, error)
 	ListDomainAssignments(ctx context.Context, domainID string) ([]osclient.RoleAssignment, error)
 	ListImpliedRoles(ctx context.Context, roleID string) ([]osclient.Role, error)
+	ListRoleInferences(ctx context.Context) (map[string][]osclient.Role, error)
 	ListServices(ctx context.Context) ([]osclient.Service, error)
 	ListEndpoints(ctx context.Context) ([]osclient.Endpoint, error)
 	ListRegions(ctx context.Context) ([]osclient.Region, error)

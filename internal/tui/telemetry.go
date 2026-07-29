@@ -144,7 +144,7 @@ func (m Model) telemetryView() string {
 	if threshold := m.telemetrySnapshot.SlowThreshold; threshold > 0 {
 		title += " · " + m.st.disabled.Render("slow ≥"+formatTelemetryDuration(threshold))
 	}
-	footer := m.st.help.Render("r refresh · a auto/manual · +/- interval · z reset API · ↑/↓ scroll · esc/t/q close")
+	footer := m.st.help.Render("r refresh · a auto/manual · +/- interval · z reset API · ↑/↓ scroll · esc/#/q close")
 	above, below := m.scrollMarkers()
 	return m.scrollLine(title, above) + "\n" + m.vp.View() + "\n" + m.scrollLine(footer, below)
 }

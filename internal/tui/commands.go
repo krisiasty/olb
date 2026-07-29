@@ -149,6 +149,12 @@ type roleRelationsMsg struct {
 	err         error
 }
 
+type roleInferencesMsg struct {
+	inferences map[string][]osclient.Role
+	generation uint64
+	err        error
+}
+
 type assignmentsMsg struct {
 	key                    assignmentKey
 	assignments            []osclient.RoleAssignment
@@ -426,6 +432,17 @@ func (m Model) loadRoleRelationsCmd(roleID string) tea.Cmd {
 			roleID: roleID, implied: implied, assignments: assignments,
 			err: firstNonRBACErr(ierr, aerr),
 		}
+	}
+}
+
+func (m Model) loadRoleInferencesCmd() tea.Cmd {
+	b := m.backend
+	generation := m.roleInferencesGeneration
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		inferences, err := b.ListRoleInferences(ctx)
+		return roleInferencesMsg{inferences: inferences, generation: generation, err: err}
 	}
 }
 

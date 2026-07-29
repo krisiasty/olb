@@ -27,17 +27,18 @@ type keyMap struct {
 	CopyNm  key.Binding // n
 	CopyRaw key.Binding // c (raw YAML/JSON overlay only)
 
-	Filter  key.Binding // /
-	Status  key.Binding // s
-	ShowIDs key.Binding // d
-	Sort    key.Binding // o
+	Filter   key.Binding // /
+	Status   key.Binding // s
+	ShowIDs  key.Binding // d
+	Sort     key.Binding // o
+	RoleTree key.Binding // t (roles with implied roles)
 
 	Scope        key.Binding // tab: authentication scope selector
 	Refresh      key.Binding // r
 	AutoRefresh  key.Binding // a
 	IntervalUp   key.Binding // + / =
 	IntervalDown key.Binding // -
-	Telemetry    key.Binding // t
+	Telemetry    key.Binding // #
 	Reset        key.Binding // z (telemetry overlay)
 	Token        key.Binding // * current-token / whoami overlay
 	HomeView     key.Binding // ` return to the overview landing
@@ -73,17 +74,18 @@ func defaultKeys() keyMap {
 		CopyNm:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "copy name")),
 		CopyRaw: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy raw")),
 
-		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Status:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
-		ShowIDs: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
-		Sort:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
+		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Status:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status filter")),
+		ShowIDs:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
+		Sort:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
+		RoleTree: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "inheritance tree")),
 
 		Scope:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "scope")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		AutoRefresh:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "auto-refresh")),
 		IntervalUp:   key.NewBinding(key.WithKeys("+", "="), key.WithHelp("+", "longer interval")),
 		IntervalDown: key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "shorter interval")),
-		Telemetry:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "telemetry")),
+		Telemetry:    key.NewBinding(key.WithKeys("#"), key.WithHelp("#", "telemetry")),
 		Reset:        key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "reset")),
 		Token:        key.NewBinding(key.WithKeys("*"), key.WithHelp("*", "token")),
 		HomeView:     key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "home")),

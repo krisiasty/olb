@@ -504,7 +504,7 @@ func (f *fakeBackend) ListRoles(context.Context) (osclient.IdentityList[osclient
 		return osclient.IdentityList[osclient.Role]{Items: f.roles, Restriction: f.rolesRestriction}, nil
 	}
 	return osclient.IdentityList[osclient.Role]{Items: []osclient.Role{
-		{ID: "r-1", Name: "admin", Description: "cloud administrator"},
+		{ID: "r-1", Name: "admin", Description: "cloud administrator", ImpliesRoles: true},
 		{ID: "r-2", Name: "member"},
 		{ID: "r-3", Name: "reader", DomainID: "default", DomainName: "Default"},
 	}, Restriction: f.rolesRestriction}, nil
@@ -539,6 +539,18 @@ func (f *fakeBackend) ListImpliedRoles(_ context.Context, roleID string) ([]oscl
 		return []osclient.Role{{ID: "r-2", Name: "member"}}, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeBackend) ListRoleInferences(_ context.Context) (map[string][]osclient.Role, error) {
+	if f.roleRelErr != nil {
+		return nil, f.roleRelErr
+	}
+	if f.impliedRoles != nil {
+		return f.impliedRoles, nil
+	}
+	return map[string][]osclient.Role{
+		"r-1": {{ID: "r-2", Name: "member"}},
+	}, nil
 }
 
 func (f *fakeBackend) ListUserAssignments(_ context.Context, userID string) ([]osclient.RoleAssignment, error) {
@@ -2293,10 +2305,10 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	m = upd(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
 
-	next, cmd := m.Update(press("t"))
+	next, cmd := m.Update(press("#"))
 	m = next.(Model)
 	if m.overlay != overlayTelemetry || cmd == nil {
-		t.Fatalf("t should open auto-refreshing telemetry overlay; overlay=%v cmd=%v", m.overlay, cmd)
+		t.Fatalf("# should open auto-refreshing telemetry overlay; overlay=%v cmd=%v", m.overlay, cmd)
 	}
 	plain := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
@@ -2397,9 +2409,9 @@ func TestTelemetryOverlayRefreshControlsAndReset(t *testing.T) {
 	if m.telemetrySnapshot.Calls != 1 || cmd == nil {
 		t.Fatal("telemetry timer did not refresh and reschedule")
 	}
-	m = upd(t, m, press("t"))
+	m = upd(t, m, press("#"))
 	if m.overlay != overlayNone {
-		t.Fatal("t should close the telemetry overlay")
+		t.Fatal("# should close the telemetry overlay")
 	}
 	next, cmd = m.Update(telemetryTickMsg{generation: generation})
 	if cmd != nil || next.(Model).overlay != overlayNone {
@@ -2926,9 +2938,16 @@ func TestScopeSwitcherFiltering(t *testing.T) {
 	if m.search.Focused() {
 		t.Fatal("scope filtering should be inactive until / is pressed")
 	}
-	plain := ansiRE.ReplaceAllString(m.View(), "")
-	if first := strings.Split(plain, "\n")[0]; first != "Switch authentication scope" {
-		t.Fatalf("inactive scope title = %q, want no filter prompt", first)
+	plain := ansiRE.ReplaceAllString(m.scopeModalBox(), "")
+	if !strings.Contains(plain, "╭") || !strings.Contains(plain, "╯") {
+		t.Fatalf("scope selector should use a framed modal:\n%s", plain)
+	}
+	if rendered := ansiRE.ReplaceAllString(m.View(), ""); strings.Index(lineContaining(rendered, "╭"), "╭") < 1 {
+		t.Fatalf("scope selector frame should be centered over the current view:\n%s", rendered)
+	}
+	header := lineContaining(plain, "SWITCH AUTHENTICATION SCOPE")
+	if !strings.Contains(header, "SWITCH AUTHENTICATION SCOPE") || strings.Contains(header, "filter:") {
+		t.Fatalf("inactive scope title = %q, want uppercase header without filter prompt", header)
 	}
 	if strings.Contains(plain, "search:") {
 		t.Fatalf("scope selector should not render a search prompt:\n%s", plain)
@@ -2942,13 +2961,13 @@ func TestScopeSwitcherFiltering(t *testing.T) {
 	if !m.search.Focused() {
 		t.Fatal("/ should activate scope filtering")
 	}
-	view := m.View()
-	first := strings.Split(view, "\n")[0]
-	if plainFirst := ansiRE.ReplaceAllString(first, ""); !strings.Contains(plainFirst, "Switch authentication scope  filter: ") {
-		t.Fatalf("focused scope filter missing from title: %q", plainFirst)
+	view := m.scopeModalBox()
+	header = lineContaining(ansiRE.ReplaceAllString(view, ""), "SWITCH AUTHENTICATION SCOPE")
+	if !strings.Contains(header, "SWITCH AUTHENTICATION SCOPE  filter: ") {
+		t.Fatalf("focused scope filter missing from title: %q", header)
 	}
-	if !strings.Contains(first, m.st.filterPrompt.Render("filter: ")) {
-		t.Fatalf("scope filter prompt is not yellow: %q", first)
+	if !strings.Contains(lineContaining(view, "SWITCH AUTHENTICATION SCOPE"), m.st.filterPrompt.Render("filter: ")) {
+		t.Fatalf("scope filter prompt is not yellow: %q", lineContaining(view, "SWITCH AUTHENTICATION SCOPE"))
 	}
 	m = upd(t, m, press("beta"))
 	if got := len(m.filteredScopes()); got != 1 {
@@ -2989,18 +3008,20 @@ func TestScopeSwitcherPageAndBoundaryNavigation(t *testing.T) {
 	}
 	m.scopeCursor = 0
 	last := len(m.scopes) - 1
+	page := m.overlayPageSize()
 
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.scopeCursor != 6 {
-		t.Fatalf("page down cursor = %d, want 6", m.scopeCursor)
+	if want := min(page, last); m.scopeCursor != want {
+		t.Fatalf("page down cursor = %d, want %d", m.scopeCursor, want)
 	}
-	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
-	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	for i := 0; i < len(m.scopes)+1; i++ {
+		m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	}
 	if m.scopeCursor != last {
 		t.Fatalf("page down past end cursor = %d, want %d", m.scopeCursor, last)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
-	if want := last - 6; m.scopeCursor != want {
+	if want := max(0, last-page); m.scopeCursor != want {
 		t.Fatalf("page up cursor = %d, want %d", m.scopeCursor, want)
 	}
 	m = upd(t, m, tea.KeyMsg{Type: tea.KeyHome})

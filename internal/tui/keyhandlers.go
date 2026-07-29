@@ -138,6 +138,8 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleIDs()
 	case key.Matches(msg, m.keys.Sort):
 		return m.openSort()
+	case key.Matches(msg, m.keys.RoleTree):
+		return m.openRoleTree()
 
 	case key.Matches(msg, m.keys.Scope):
 		return m.openScope()
@@ -337,6 +339,7 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 			return m, nil
 		}
 		rid := m.loc.node.ID
+		m.resetRoleInferenceCache()
 		delete(m.roleRelations, rid)
 		m.roleRelationsLoaded[rid] = false
 		m.roleRelationsLoading[rid] = true
@@ -377,6 +380,7 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 		case kindProject:
 			return m, m.loadProjectListCmd(true)
 		case kindRole:
+			m.resetRoleInferenceCache()
 			return m, m.loadRolesCmd(true)
 		case kindService:
 			return m, m.loadServicesCmd(true)
@@ -633,6 +637,8 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onSortKey(msg)
 	case overlayTelemetry:
 		return m.onTelemetryKey(msg)
+	case overlayRoleTree:
+		return m.onRoleTreeKey(msg)
 
 	case overlayToken:
 		switch {
@@ -780,12 +786,12 @@ func (m Model) onSwitcherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.PageUp):
-		if m.switchCursor -= m.pickerPageSize(); m.switchCursor < 0 {
+		if m.switchCursor -= m.overlayPageSize(); m.switchCursor < 0 {
 			m.switchCursor = 0
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.PageDown):
-		if m.switchCursor += m.pickerPageSize(); m.switchCursor > last {
+		if m.switchCursor += m.overlayPageSize(); m.switchCursor > last {
 			m.switchCursor = last
 		}
 		if m.switchCursor < 0 {

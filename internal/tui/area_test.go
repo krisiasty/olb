@@ -106,6 +106,13 @@ func TestAreaSwitcherGroupsByArea(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press(" "))
 	view := ansiRE.ReplaceAllString(m.View(), "")
+	box := ansiRE.ReplaceAllString(m.switcherModalBox(), "")
+	if !strings.Contains(box, "SWITCH AREA / VIEW") || !strings.Contains(box, "╭") || !strings.Contains(box, "╯") {
+		t.Fatalf("area switcher should use an uppercase, framed modal:\n%s", box)
+	}
+	if border := lineContaining(view, "╭"); strings.Index(border, "╭") < 1 {
+		t.Fatalf("area switcher frame should be centered over the current view:\n%s", view)
+	}
 	if !strings.Contains(view, "LOAD BALANCERS 5") {
 		t.Fatalf("switcher should show the load-balancer area heading with its view count:\n%s", view)
 	}
@@ -504,6 +511,49 @@ func TestRoleRelations(t *testing.T) {
 	}
 }
 
+func TestRolesListMarksRolesWithImplications(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("A"))
+	m = updExec(t, m, press("5"))
+
+	plain := ansiRE.ReplaceAllString(m.View(), "")
+	if strings.Count(plain, "⧉") != 1 {
+		t.Fatalf("roles list should mark exactly one implying role:\n%s", plain)
+	}
+	if row := lineContaining(plain, "admin"); !strings.Contains(row, "⧉") {
+		t.Fatalf("admin role should carry the implication marker: %q", row)
+	}
+	if row := lineContaining(plain, "member"); strings.Contains(row, "⧉") {
+		t.Fatalf("non-implying member role should have an empty marker gutter: %q", row)
+	}
+
+	// Move selection away from admin so the marker uses its ordinary foreground.
+	if idx, ok := m.selectLabel("role:member"); ok {
+		m.cursor = idx
+	}
+	marker := m.st.attrs.Bold(true).Render("⧉")
+	if !strings.Contains(m.View(), marker) {
+		t.Fatalf("implication marker does not use the service/system-user color:\n%s", m.View())
+	}
+	sample := "⧉ admin"
+	entry := entry{kind: entRole, role: osclient.Role{ImpliesRoles: true}}
+	wantStyled := m.st.attrs.Bold(true).Render("⧉") + m.st.attrs.Render(" admin")
+	if got := m.styleRoleImplicationMarker(entry, sample, m.st.attrs); got != wantStyled {
+		t.Fatalf("implying role row does not use the service/system-user style:\ngot  %q\nwant %q", got, wantStyled)
+	}
+
+	m = upd(t, m, press("d"))
+	plain = ansiRE.ReplaceAllString(m.View(), "")
+	if row := lineContaining(plain, "r-1"); !strings.Contains(row, "⧉ r-1") {
+		t.Fatalf("ID mode should retain the marker beside the role ID: %q", row)
+	}
+
+	help := helpContent(true, true, false, false)
+	if !strings.Contains(help, "⧉  role includes one or more implied roles") {
+		t.Fatalf("help does not explain the implication marker:\n%s", help)
+	}
+}
+
 func TestRoleAssignmentScopeColors(t *testing.T) {
 	m := Model{st: newStyles(), width: 120}
 	tests := []struct {
@@ -516,20 +566,35 @@ func TestRoleAssignmentScopeColors(t *testing.T) {
 		{"domain", "domain", "on domain:Default", lipgloss.NewStyle().Foreground(lipgloss.Color("226"))},
 		{"project", "project", "on project:alpha", m.st.attrs},
 	}
+	origins := []struct {
+		name      string
+		inherited bool
+		token     bool
+	}{
+		{name: "direct"},
+		{name: "inherited effective", inherited: true},
+		{name: "active-token effective", token: true},
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			e := entry{
-				kind:            entAssignment,
-				label:           "user:alice",
-				extra:           test.extra,
-				assignment:      osclient.RoleAssignment{TargetType: test.target},
-				assignmentPivot: pivotRole,
-			}
 			want := m.st.attrs.Render(" · ") + test.style.Render(test.extra)
-			for _, selected := range []bool{false, true} {
-				got := m.renderIdentityRow(e, selected)
-				if !strings.Contains(got, want) {
-					t.Fatalf("selected=%v assignment target is not styled correctly:\nwant segment %q\nrow          %q", selected, want, got)
+			for _, origin := range origins {
+				e := entry{
+					kind:  entAssignment,
+					label: "user:alice",
+					extra: test.extra,
+					assignment: osclient.RoleAssignment{
+						TargetType:  test.target,
+						Inherited:   origin.inherited,
+						TokenScoped: origin.token,
+					},
+					assignmentPivot: pivotRole,
+				}
+				for _, selected := range []bool{false, true} {
+					got := m.renderIdentityRow(e, selected)
+					if !strings.Contains(got, want) {
+						t.Fatalf("origin=%s selected=%v assignment target is not styled correctly:\nwant segment %q\nrow          %q", origin.name, selected, want, got)
+					}
 				}
 			}
 		})

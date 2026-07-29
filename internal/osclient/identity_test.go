@@ -247,6 +247,73 @@ func TestDomainScopeRestrictsIdentityCollections(t *testing.T) {
 	}
 }
 
+func TestListRolesMarksRolesWithImplications(t *testing.T) {
+	t.Run("marks prior roles", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/v3/roles":
+				_, _ = w.Write([]byte(`{"roles":[
+					{"id":"r1","name":"admin"},
+					{"id":"r2","name":"member"}
+				],"links":{"next":null}}`))
+			case "/v3/role_inferences":
+				_, _ = w.Write([]byte(`{"role_inferences":[
+					{"prior_role":{"id":"r1","name":"admin"},"implies":[
+						{"id":"r2","name":"member"}
+					]}
+				],"links":{"self":"/v3/role_inferences"}}`))
+			default:
+				t.Fatalf("unexpected request path %q", r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		identity := &gophercloud.ServiceClient{
+			ProviderClient: &gophercloud.ProviderClient{},
+			Endpoint:       server.URL + "/v3/",
+		}
+		c := &Clients{services: &serviceClients{identity: identity}}
+
+		got, err := c.ListRoles(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Items) != 2 || !got.Items[0].ImpliesRoles || got.Items[1].ImpliesRoles {
+			t.Fatalf("role implication markers = %+v, want only admin marked", got.Items)
+		}
+	})
+
+	t.Run("inference denial leaves role list usable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/v3/roles":
+				_, _ = w.Write([]byte(`{"roles":[{"id":"r1","name":"admin"}],"links":{"next":null}}`))
+			case "/v3/role_inferences":
+				http.Error(w, `{"error":{"message":"Forbidden"}}`, http.StatusForbidden)
+			default:
+				t.Fatalf("unexpected request path %q", r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		identity := &gophercloud.ServiceClient{
+			ProviderClient: &gophercloud.ProviderClient{},
+			Endpoint:       server.URL + "/v3/",
+		}
+		c := &Clients{services: &serviceClients{identity: identity}}
+
+		got, err := c.ListRoles(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Items) != 1 || got.Items[0].ImpliesRoles {
+			t.Fatalf("roles after inference denial = %+v", got.Items)
+		}
+	})
+}
+
 // A deployment may override Keystone's default self-read policy. Even then,
 // retain the partial identity embedded in the token rather than showing no user.
 func TestUserListFallsBackToTokenWhenSelfReadIsDenied(t *testing.T) {

@@ -41,6 +41,49 @@ func TestMainListScrollMarkers(t *testing.T) {
 	}
 }
 
+// Refresh keeps the selected object at the same visual row instead of rebuilding
+// from top=0 and merely making a far-down cursor visible at the bottom edge.
+func TestMainListRefreshPreservesSelectedRowOffset(t *testing.T) {
+	fb := &fakeBackend{cap: switchCapability{CanSwitch: true}}
+	for i := 0; i < 30; i++ {
+		fb.users = append(fb.users, osclient.User{
+			ID: fmt.Sprintf("u-%02d", i), Name: fmt.Sprintf("user%02d", i),
+			DomainID: "default", DomainName: "Default", Enabled: true,
+		})
+	}
+	m := New(fb, Config{PrintMode: true, HistoryCap: 50})
+	m.Init()
+	m = upd(t, m, tea.WindowSizeMsg{Width: 90, Height: 14})
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	m = updExec(t, m, press("A"))
+	m = updExec(t, m, press("4")) // users table
+
+	for i := 0; i < 35; i++ {
+		m = upd(t, m, press("down"))
+	}
+	for i := 0; i < 5; i++ {
+		m = upd(t, m, press("up"))
+	}
+	if m.top == 0 {
+		t.Fatal("setup: users list did not scroll")
+	}
+	beforeOffset := m.cursor - m.top
+	beforeTop := m.top
+	beforeSelection := m.entries[m.cursor].selection()
+
+	m = updExec(t, m, press("r"))
+
+	if !m.entries[m.cursor].selection().equal(beforeSelection) {
+		t.Fatalf("refresh changed selection: got %+v, want %+v", m.entries[m.cursor].selection(), beforeSelection)
+	}
+	if got := m.cursor - m.top; got != beforeOffset {
+		t.Fatalf("selected row offset after refresh = %d, want %d (cursor=%d top=%d)", got, beforeOffset, m.cursor, m.top)
+	}
+	if m.top != beforeTop {
+		t.Fatalf("unchanged list top after refresh = %d, want %d", m.top, beforeTop)
+	}
+}
+
 // An identity overview's group heading stays pinned when its related list is
 // scrolled past that heading, so the visible rows are always labelled.
 func TestIdentityOverviewStickyHeading(t *testing.T) {
@@ -77,6 +120,54 @@ func TestIdentityOverviewStickyHeading(t *testing.T) {
 	}
 	if !strings.Contains(view, "proj12") {
 		t.Fatalf("the selected row should be visible while scrolled:\n%s", view)
+	}
+}
+
+func TestGroupedRefreshPreservesSelectedRowOffsetAfterInsertion(t *testing.T) {
+	fb := &fakeBackend{cap: switchCapability{CanSwitch: true}}
+	for i := 0; i < 15; i++ {
+		fb.projectList = append(fb.projectList, osclient.Project{
+			ID: fmt.Sprintf("p%02d", i), Name: fmt.Sprintf("proj%02d", i),
+			DomainID: "default", DomainName: "Default", Enabled: true,
+		})
+	}
+	m := New(fb, Config{PrintMode: true, HistoryCap: 50})
+	m.Init()
+	m = upd(t, m, tea.WindowSizeMsg{Width: 100, Height: 22})
+	m = upd(t, m, lbsMsg{lbs: mustLBs(t, m)})
+	m = updExec(t, m, press("A"))
+	m = updExec(t, m, press("1"))
+	if idx, ok := m.selectLabel("domain:Default"); ok {
+		m.cursor = idx
+	}
+	m = updExecAll(t, m, press("enter"))
+	for i := 0; i < 12; i++ {
+		m = upd(t, m, press("down"))
+	}
+
+	beforeOffset := m.cursor - m.top
+	beforeSelection := m.entries[m.cursor].selection()
+	m.captureRefreshSelection()
+
+	// Simulate refreshed data inserting an item before the selected object, then
+	// the normal grouped-list reconstruction that resets cursor and top.
+	domainID := m.loc.node.ID
+	content := m.domainContents[domainID]
+	content.projects = append([]osclient.Project{{
+		ID: "p-new", Name: "proj-new", DomainID: domainID, DomainName: "Default", Enabled: true,
+	}}, content.projects...)
+	m.domainContents[domainID] = content
+	m.allEntries = m.domainRelatedEntries(m.loc.node)
+	m.entries = nil
+	m.cursor, m.top = 0, 0
+	m.applyFilters()
+	m.restoreRefreshSelection()
+
+	if !m.entries[m.cursor].selection().equal(beforeSelection) {
+		t.Fatalf("grouped refresh changed selection: got %+v, want %+v", m.entries[m.cursor].selection(), beforeSelection)
+	}
+	if got := m.cursor - m.top; got != beforeOffset {
+		t.Fatalf("grouped refresh row offset = %d, want %d (cursor=%d top=%d)", got, beforeOffset, m.cursor, m.top)
 	}
 }
 

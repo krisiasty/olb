@@ -773,14 +773,22 @@ func roleColumnTitles(showIDs, tokenScoped bool) []string {
 
 func roleRowCells(e entry, showIDs bool) []string {
 	r := e.role
+	name := impliedRoleMarker(r.ImpliesRoles) + lbNameCell(r.Name, r.ID, showIDs)
 	if r.TokenScoped {
-		return []string{lbNameCell(r.Name, r.ID, showIDs), "active token", tokenRoleScope(r)}
+		return []string{name, "active token", tokenRoleScope(r)}
 	}
 	domain := "—" // global role
 	if r.DomainID != "" {
 		domain = lbNameCell(r.DomainName, r.DomainID, showIDs)
 	}
-	return []string{lbNameCell(r.Name, r.ID, showIDs), displayValue(r.Description), domain}
+	return []string{name, displayValue(r.Description), domain}
+}
+
+func impliedRoleMarker(implies bool) string {
+	if implies {
+		return "⧉ "
+	}
+	return "  "
 }
 
 func tokenRoleScope(r osclient.Role) string {

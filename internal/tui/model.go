@@ -28,7 +28,8 @@ const (
 	overlaySort     // o sort-column picker (top-level lists)
 	overlaySwitcher // space area/view switcher
 	overlayTelemetry
-	overlayToken // * current-token / whoami
+	overlayToken    // * current-token / whoami
+	overlayRoleTree // t fully expanded role-inference tree
 )
 
 // location is what the main pane currently shows: the LB list, or a node whose
@@ -152,6 +153,14 @@ type Model struct {
 	roleRelationsLoaded  map[string]bool
 	roleRelationsLoading map[string]bool
 	roleRelationsErr     map[string]string
+	// roleInferences is the complete directed graph used by the transitive role
+	// tree overlay. It is fetched once per authentication scope.
+	roleInferences           map[string][]osclient.Role
+	roleInferencesLoaded     bool
+	roleInferencesLoading    bool
+	roleInferencesGeneration uint64
+	roleTreeRoot             osclient.Role
+	roleTreeErr              string
 	// Role assignments seen from the owning side load lazily when a user, group,
 	// project, or domain is opened — the mirror of the role→assignments view. One
 	// generic cache keyed by (owner kind, owner ID) since the four are identical
@@ -318,6 +327,7 @@ type Model struct {
 	refreshSelection         entrySelection
 	refreshSelectionOK       bool
 	refreshCursor            int
+	refreshRowOffset         int // selected row's offset from the viewport top
 	refreshAutomatic         bool
 
 	project           osclient.ProjectInfo
@@ -366,76 +376,78 @@ func New(backend Backend, cfg Config) Model {
 		project = osclient.ProjectInfo{ID: scope.ID, Name: scope.Name, DomainID: scope.DomainID}
 	}
 	m := Model{
-		backend:                backend,
-		keys:                   defaultKeys(),
-		st:                     st,
-		cfg:                    cfg,
-		spinner:                sp,
-		coeSpinner:             coeSpinner,
-		statsSpinner:           statsSpinner,
-		filter:                 fi,
-		search:                 se,
-		vp:                     viewport.New(0, 0),
-		cache:                  cache.New(cfg.CacheSize, cfg.CacheTTL),
-		project:                project,
-		multiProjectScope:      scope.Kind != "" && scope.Kind != osclient.ScopeProject,
-		scope:                  scope,
-		lbStats:                map[string]map[string]any{},
-		lbStatsChanges:         map[string]map[string]statChange{},
-		lbStatsSampledAt:       map[string]time.Time{},
-		lbDetailLoading:        map[string]bool{},
-		lbStatsLoading:         map[string]bool{},
-		lbDetailErr:            map[string]string{},
-		lbStatsErr:             map[string]string{},
-		lbRelatedErr:           map[string]string{},
-		lbFreshness:            map[string]overviewFreshness{},
-		lbFIPLoading:           map[string]bool{},
-		lbFIPLoaded:            map[string]bool{},
-		lbAmphoraLoading:       map[string]bool{},
-		lbAmphoraLoaded:        map[string]bool{},
-		lbListenersLoading:     map[string]bool{},
-		lbListenersLoaded:      map[string]bool{},
-		lbPoolsLoading:         map[string]bool{},
-		lbPoolsLoaded:          map[string]bool{},
-		coeClusterDetails:      map[string]coeDetailState{},
-		groupMembers:           map[string][]osclient.User{},
-		groupMembersLoaded:     map[string]bool{},
-		groupMembersLoading:    map[string]bool{},
-		groupMembersErr:        map[string]string{},
-		userGroups:             map[string][]osclient.Group{},
-		userGroupsLoaded:       map[string]bool{},
-		userGroupsLoading:      map[string]bool{},
-		userGroupsErr:          map[string]string{},
-		userProjects:           map[string][]osclient.Project{},
-		knownUsers:             map[string]osclient.User{},
-		knownGroups:            map[string]osclient.Group{},
-		knownProjects:          map[string]osclient.Project{},
-		knownDomains:           map[string]osclient.Domain{},
-		knownRoles:             map[string]osclient.Role{},
-		knownServices:          map[string]osclient.Service{},
-		knownRegions:           map[string]osclient.Region{},
-		knownDomainFull:        map[string]bool{},
-		knownProjectFull:       map[string]bool{},
-		domainContents:         map[string]domainContent{},
-		domainContentsLoaded:   map[string]bool{},
-		domainContentsLoading:  map[string]bool{},
-		domainContentsErr:      map[string]string{},
-		roleRelations:          map[string]roleRelations{},
-		roleRelationsLoaded:    map[string]bool{},
-		roleRelationsLoading:   map[string]bool{},
-		roleRelationsErr:       map[string]string{},
-		assignments:            map[assignmentKey][]osclient.RoleAssignment{},
-		assignmentsLoaded:      map[assignmentKey]bool{},
-		assignmentsLoading:     map[assignmentKey]bool{},
-		assignmentsErr:         map[assignmentKey]string{},
-		autoRefreshEnabled:     true,
-		autoIntervalIndex:      defaultAutoRefreshIntervalIndex,
-		autoGeneration:         1,
-		autoStatsLoading:       map[string]bool{},
-		telemetryAutoEnabled:   true,
-		telemetryIntervalIndex: defaultAutoRefreshIntervalIndex,
-		telemetryGeneration:    1,
-		clock:                  time.Now,
+		backend:                  backend,
+		keys:                     defaultKeys(),
+		st:                       st,
+		cfg:                      cfg,
+		spinner:                  sp,
+		coeSpinner:               coeSpinner,
+		statsSpinner:             statsSpinner,
+		filter:                   fi,
+		search:                   se,
+		vp:                       viewport.New(0, 0),
+		cache:                    cache.New(cfg.CacheSize, cfg.CacheTTL),
+		project:                  project,
+		multiProjectScope:        scope.Kind != "" && scope.Kind != osclient.ScopeProject,
+		scope:                    scope,
+		lbStats:                  map[string]map[string]any{},
+		lbStatsChanges:           map[string]map[string]statChange{},
+		lbStatsSampledAt:         map[string]time.Time{},
+		lbDetailLoading:          map[string]bool{},
+		lbStatsLoading:           map[string]bool{},
+		lbDetailErr:              map[string]string{},
+		lbStatsErr:               map[string]string{},
+		lbRelatedErr:             map[string]string{},
+		lbFreshness:              map[string]overviewFreshness{},
+		lbFIPLoading:             map[string]bool{},
+		lbFIPLoaded:              map[string]bool{},
+		lbAmphoraLoading:         map[string]bool{},
+		lbAmphoraLoaded:          map[string]bool{},
+		lbListenersLoading:       map[string]bool{},
+		lbListenersLoaded:        map[string]bool{},
+		lbPoolsLoading:           map[string]bool{},
+		lbPoolsLoaded:            map[string]bool{},
+		coeClusterDetails:        map[string]coeDetailState{},
+		groupMembers:             map[string][]osclient.User{},
+		groupMembersLoaded:       map[string]bool{},
+		groupMembersLoading:      map[string]bool{},
+		groupMembersErr:          map[string]string{},
+		userGroups:               map[string][]osclient.Group{},
+		userGroupsLoaded:         map[string]bool{},
+		userGroupsLoading:        map[string]bool{},
+		userGroupsErr:            map[string]string{},
+		userProjects:             map[string][]osclient.Project{},
+		knownUsers:               map[string]osclient.User{},
+		knownGroups:              map[string]osclient.Group{},
+		knownProjects:            map[string]osclient.Project{},
+		knownDomains:             map[string]osclient.Domain{},
+		knownRoles:               map[string]osclient.Role{},
+		knownServices:            map[string]osclient.Service{},
+		knownRegions:             map[string]osclient.Region{},
+		knownDomainFull:          map[string]bool{},
+		knownProjectFull:         map[string]bool{},
+		domainContents:           map[string]domainContent{},
+		domainContentsLoaded:     map[string]bool{},
+		domainContentsLoading:    map[string]bool{},
+		domainContentsErr:        map[string]string{},
+		roleRelations:            map[string]roleRelations{},
+		roleRelationsLoaded:      map[string]bool{},
+		roleRelationsLoading:     map[string]bool{},
+		roleRelationsErr:         map[string]string{},
+		roleInferences:           map[string][]osclient.Role{},
+		roleInferencesGeneration: 1,
+		assignments:              map[assignmentKey][]osclient.RoleAssignment{},
+		assignmentsLoaded:        map[assignmentKey]bool{},
+		assignmentsLoading:       map[assignmentKey]bool{},
+		assignmentsErr:           map[assignmentKey]string{},
+		autoRefreshEnabled:       true,
+		autoIntervalIndex:        defaultAutoRefreshIntervalIndex,
+		autoGeneration:           1,
+		autoStatsLoading:         map[string]bool{},
+		telemetryAutoEnabled:     true,
+		telemetryIntervalIndex:   defaultAutoRefreshIntervalIndex,
+		telemetryGeneration:      1,
+		clock:                    time.Now,
 	}
 	m.resetWorkspaces()
 	m.home = true // land on the overview until the operator enters an area

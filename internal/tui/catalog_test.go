@@ -119,7 +119,7 @@ func TestCurrentTokenOverlay(t *testing.T) {
 	}
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	for _, want := range []string{
-		"Current token",
+		"CURRENT TOKEN",
 		"User      admin  (domain: Default)",
 		"Scope     project: alpha  (domain: Default)",
 		"admin, member",

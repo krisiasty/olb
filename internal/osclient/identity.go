@@ -610,15 +610,16 @@ func (c *Clients) ListGroupsInDomain(ctx context.Context, domainID string) ([]Gr
 // Role is a Keystone role summary for the identity area's roles list view. A
 // role is global unless DomainID is set (a domain-scoped role).
 type Role struct {
-	ID          string
-	Name        string
-	Description string
-	DomainID    string
-	DomainName  string // resolved from the shared domain-name map (best effort)
-	TokenScoped bool   // true when sourced from the active token, not the role catalog
-	ScopeType   string
-	ScopeName   string
-	ScopeID     string
+	ID           string
+	Name         string
+	Description  string
+	DomainID     string
+	DomainName   string // resolved from the shared domain-name map (best effort)
+	ImpliesRoles bool   // true when a role-inference rule names this as the prior role
+	TokenScoped  bool   // true when sourced from the active token, not the role catalog
+	ScopeType    string
+	ScopeName    string
+	ScopeID      string
 }
 
 // ListRoles lists Keystone roles visible to the active credential, resolving the
@@ -674,6 +675,13 @@ func (c *Clients) ListRoles(ctx context.Context) (IdentityList[Role], error) {
 			ID: r.ID, Name: r.Name, Description: r.Description,
 			DomainID: r.DomainID, DomainName: domNames[r.DomainID],
 		})
+	}
+	if len(out) > 0 {
+		if implications, err := listRoleImplications(ctx, client); err == nil {
+			for i := range out {
+				out[i].ImpliesRoles = len(implications[out[i].ID]) > 0
+			}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return IdentityList[Role]{Items: out}, nil
@@ -845,6 +853,17 @@ func (c *Clients) listAssignments(ctx context.Context, opts roles.ListAssignment
 // ListImpliedRoles returns the roles a given role implies, from the cloud's role
 // inference rules. A 403 degrades to ErrAdminRequired.
 func (c *Clients) ListImpliedRoles(ctx context.Context, roleID string) ([]Role, error) {
+	implications, err := c.ListRoleInferences(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return implications[roleID], nil
+}
+
+// ListRoleInferences returns the complete role-inference graph, keyed by prior
+// role ID. Fetching the graph once lets callers render transitive inheritance
+// without repeating the same collection request for every node.
+func (c *Clients) ListRoleInferences(ctx context.Context) (map[string][]Role, error) {
 	c.mu.Lock()
 	sc := c.activeServices
 	if sc == nil {
@@ -853,27 +872,38 @@ func (c *Clients) ListImpliedRoles(ctx context.Context, roleID string) ([]Role, 
 	client := sc.identity
 	c.mu.Unlock()
 
-	res := roles.ListRoleInferenceRules(ctx, client)
-	if res.Err != nil {
-		if gophercloud.ResponseCodeIs(res.Err, 403) {
+	implications, err := listRoleImplications(ctx, client)
+	if err != nil {
+		if gophercloud.ResponseCodeIs(err, 403) {
 			return nil, ErrAdminRequired
 		}
+		return nil, err
+	}
+	return implications, nil
+}
+
+func listRoleImplications(ctx context.Context, client *gophercloud.ServiceClient) (map[string][]Role, error) {
+	res := roles.ListRoleInferenceRules(ctx, client)
+	if res.Err != nil {
 		return nil, res.Err
 	}
 	list, err := res.Extract()
 	if err != nil {
 		return nil, err
 	}
-	var out []Role
+	out := make(map[string][]Role, len(list.RoleInferenceRuleList))
 	for _, rule := range list.RoleInferenceRuleList {
-		if rule.PriorRole.ID != roleID {
-			continue
-		}
 		for _, ir := range rule.ImpliedRoles {
-			out = append(out, Role{ID: ir.ID, Name: ir.Name, Description: ir.Description})
+			out[rule.PriorRole.ID] = append(out[rule.PriorRole.ID], Role{
+				ID: ir.ID, Name: ir.Name, Description: ir.Description,
+			})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	for priorRoleID := range out {
+		implied := out[priorRoleID]
+		sort.Slice(implied, func(i, j int) bool { return implied[i].Name < implied[j].Name })
+		out[priorRoleID] = implied
+	}
 	return out, nil
 }
 

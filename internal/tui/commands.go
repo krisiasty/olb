@@ -57,6 +57,18 @@ type detailMsg struct {
 	err       error
 }
 
+// listInspectMsg carries a direct detail fetch for a highlighted top-level row.
+// It is separate from detailMsg because the inspected node is not attached to
+// the current navigation tree and must not mutate it.
+type listInspectMsg struct {
+	node      *model.Node
+	raw       any
+	intent    detailIntent
+	workspace listKind
+	selection entrySelection
+	err       error
+}
+
 type refResolveMsg struct {
 	sourceID  string // node whose unresolved edge we followed
 	lbID      string
@@ -676,6 +688,19 @@ func (m Model) treeCmd(lbID string, forID model.Identity, background, useListHin
 
 func (m Model) fetchDetailCmd(n *model.Node, intent detailIntent) tea.Cmd {
 	return m.detailCmd(n, intent, false)
+}
+
+func (m Model) inspectListEntryCmd(n *model.Node, intent detailIntent, selection entrySelection) tea.Cmd {
+	b := m.backend
+	workspace := m.activeWorkspace
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		res, err := b.FetchDetail(ctx, n)
+		return listInspectMsg{
+			node: n, raw: res.Raw, intent: intent, workspace: workspace, selection: selection, err: err,
+		}
+	}
 }
 
 func (m Model) refreshDetailCmd(n *model.Node) tea.Cmd {

@@ -59,6 +59,25 @@ func TestTopLevelViewsSwitchByNumberKey(t *testing.T) {
 	}
 }
 
+func TestLoadBalancerCanBeInspectedFromTopLevelList(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("y"))
+
+	if m.overlay != overlayRaw || m.rawFormat != "yaml" {
+		t.Fatalf("y on a load-balancer row should fetch and open raw YAML: overlay=%v format=%q", m.overlay, m.rawFormat)
+	}
+	if !m.loc.isTopLevelList() || m.loc.listKind() != kindLB {
+		t.Fatalf("raw inspection should not navigate away from the load-balancer list: loc=%+v", m.loc)
+	}
+	if !strings.Contains(m.rawTitle, "lb:lb1") ||
+		!strings.Contains(m.rawContent, "id: lb-1") {
+		t.Fatalf("load-balancer YAML should use the highlighted detail object:\ntitle=%q\n%s", m.rawTitle, m.rawContent)
+	}
+	if strings.Contains(m.View(), "open a load balancer to inspect it") {
+		t.Fatalf("top-level raw inspection should not show the old navigation requirement:\n%s", m.View())
+	}
+}
+
 func TestVIPTablePlacesFloatingIPAfterAddress(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("2"))

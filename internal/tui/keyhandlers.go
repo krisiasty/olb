@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -516,9 +517,12 @@ func (m *Model) followUnresolved(e entry) tea.Cmd {
 // --- inspect & copy -------------------------------------------------------
 
 func (m *Model) inspect(intent detailIntent) tea.Cmd {
+	if m.loc.isTopLevelList() {
+		return m.inspectSelectedListEntry(intent)
+	}
 	node := m.loc.node
 	if node == nil {
-		return m.setFlash("open a load balancer to inspect it", false)
+		return m.setFlash("select an object to inspect", false)
 	}
 	if node.DetailLoaded {
 		return m.openInspect(node, intent)
@@ -530,17 +534,101 @@ func (m *Model) inspect(intent detailIntent) tea.Cmd {
 	return m.fetchDetailCmd(node, intent)
 }
 
+func (m *Model) inspectSelectedListEntry(intent detailIntent) tea.Cmd {
+	if m.cursor < 0 || m.cursor >= len(m.entries) || !m.entries[m.cursor].selectable() {
+		return m.setFlash("select an object to inspect", false)
+	}
+	selected := m.entries[m.cursor]
+	node := m.topLevelInspectNode(selected)
+	if node == nil {
+		return m.setFlash("the selected object cannot be inspected", false)
+	}
+	if node.DetailLoaded {
+		return m.openInspect(node, intent)
+	}
+	m.loading, m.loadingWhat = true, "detail"
+	return m.inspectListEntryCmd(node, intent, selected.selection())
+}
+
+// topLevelInspectNode projects a table row into the same node representation
+// used by its detail view. Octavia summaries remain unloaded so y/j fetch the
+// full show response; identity, catalog, compute, and amphora rows already carry
+// all raw data available to their detail views.
+func (m Model) topLevelInspectNode(e entry) *model.Node {
+	switch e.kind {
+	case entLB:
+		n := model.NewNode(model.TypeLoadBalancer, e.lb.ID, e.lb.Name)
+		n.OwningLBID = e.lb.ID
+		return n
+	case entVIP:
+		id := e.vip.nodeID
+		if id == "" {
+			id = e.vip.portID
+		}
+		if id == "" {
+			id = e.vip.address
+		}
+		n := model.NewNode(model.TypeVIP, id, e.vip.address)
+		n.OwningLBID = e.vip.lbID
+		n.SetAttr("address", e.vip.address)
+		n.SetAttr("floating_ip", e.vip.floatingIP)
+		n.SetAttr("port_id", e.vip.portID)
+		n.SetAttr("subnet_id", e.vip.subnetID)
+		n.SetAttr("network_id", e.vip.networkID)
+		n.Raw = map[string]any{
+			"address": e.vip.address, "floating_ip": e.vip.floatingIP,
+			"port_id": e.vip.portID, "subnet_id": e.vip.subnetID, "network_id": e.vip.networkID,
+		}
+		return n
+	case entListener:
+		n := model.NewNode(model.TypeListener, e.listener.ID, e.listener.Name)
+		n.OwningLBID = e.listener.LBID
+		return n
+	case entPool:
+		n := model.NewNode(model.TypePool, e.pool.ID, e.pool.Name)
+		n.OwningLBID = e.pool.LBID
+		return n
+	case entAmphora:
+		return e.node
+	case entUser:
+		return userToNode(e.user)
+	case entDomain:
+		return domainToNode(e.domain)
+	case entUserGroup:
+		return groupToNode(e.group)
+	case entProject:
+		return projectToNode(e.project)
+	case entRole:
+		return roleToNode(e.role)
+	case entService:
+		return serviceToNode(e.service)
+	case entEndpoint:
+		return endpointToNode(e.endpoint)
+	case entRegion:
+		return regionToNode(e.region)
+	case entInstance:
+		return m.instanceNode(e.instance.ID)
+	default:
+		return nil
+	}
+}
+
 // openInspect opens the raw YAML/JSON overlay for an already-loaded node.
 func (m *Model) openInspect(node *model.Node, intent detailIntent) tea.Cmd {
 	switch intent {
 	case intentYAML:
 		m.rawContent, m.rawFormat = marshalRaw(node.Raw, "yaml"), "yaml"
 		m.overlay = overlayRaw
-		m.setupRawViewport()
 	case intentJSON:
 		m.rawContent, m.rawFormat = marshalRaw(node.Raw, "json"), "json"
 		m.overlay = overlayRaw
-		m.setupRawViewport()
+	}
+	if m.overlay == overlayRaw {
+		if m.loc.node == nil {
+			m.setupRawViewportTitle("raw " + strings.ToUpper(m.rawFormat) + " — " + node.Label())
+		} else {
+			m.setupRawViewport()
+		}
 	}
 	return nil
 }

@@ -127,6 +127,30 @@ func TestRoleTreeKeyIsInactiveInInstanceDetail(t *testing.T) {
 	}
 }
 
+func TestInstanceCanBeInspectedFromTopLevelList(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m = updExec(t, m, press("C"))
+
+	m = upd(t, m, press("y"))
+	if m.overlay != overlayRaw || m.rawFormat != "yaml" {
+		t.Fatalf("y on an instance row should open raw YAML: overlay=%v format=%q", m.overlay, m.rawFormat)
+	}
+	if !m.loc.isTopLevelList() || m.loc.listKind() != kindInstance {
+		t.Fatalf("raw inspection should not navigate away from the instances list: loc=%+v", m.loc)
+	}
+	if !strings.Contains(m.rawTitle, "instance:api-1") ||
+		!strings.Contains(m.rawContent, "instance_name: instance-0000012a") {
+		t.Fatalf("instance YAML should use the highlighted detail object:\ntitle=%q\n%s", m.rawTitle, m.rawContent)
+	}
+
+	m = upd(t, m, press("esc"))
+	m = upd(t, m, press("j"))
+	if m.overlay != overlayRaw || m.rawFormat != "json" ||
+		!strings.Contains(m.rawContent, `"instance_name": "instance-0000012a"`) {
+		t.Fatalf("j on an instance row should open raw JSON:\n%s", m.rawContent)
+	}
+}
+
 func TestInstanceListRBACDenialStaysInViewWithFriendlyMessage(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m.backend.(*fakeBackend).instancesErr = osclient.ErrAdminRequired

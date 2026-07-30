@@ -106,6 +106,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onTree(msg)
 	case detailMsg:
 		return m.onDetail(msg)
+	case listInspectMsg:
+		return m.onListInspect(msg)
 	case statsMsg:
 		return m.onStats(msg)
 	case listenerStatsMsg:
@@ -922,6 +924,24 @@ func (m Model) onDetail(msg detailMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.openInspect(node, msg.intent)
+}
+
+func (m Model) onListInspect(msg listInspectMsg) (tea.Model, tea.Cmd) {
+	if msg.workspace != m.activeWorkspace || !m.loc.isTopLevelList() ||
+		m.cursor < 0 || m.cursor >= len(m.entries) ||
+		!m.entries[m.cursor].selection().equal(msg.selection) {
+		return m, nil
+	}
+	m.loading = false
+	if msg.err != nil {
+		return m, m.setFlash("load detail: "+msg.err.Error(), true)
+	}
+	if msg.node == nil {
+		return m, nil
+	}
+	msg.node.Raw = msg.raw
+	msg.node.DetailLoaded = true
+	return m, m.openInspect(msg.node, msg.intent)
 }
 
 func (m *Model) applyDetailResult(msg detailMsg) *model.Node {

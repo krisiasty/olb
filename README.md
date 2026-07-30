@@ -3,8 +3,9 @@
 **OLB — Browse your OpenStack cloud live.**
 
 `olb` is an interactive terminal UI for exploring live OpenStack resources and
-the relationships between them. Its compute area lists Nova instances, while
-its load-balancer area supports OpenStack
+the relationships between them. Its compute area lists Nova instances and
+hypervisors, including Placement-managed GPU and accelerator inventory, while its
+load-balancer area supports OpenStack
 **Octavia** load balancers (both the **Amphora** and **OVN** provider drivers).
 It fetches a load balancer's structure in a single `status show` call, then lets
 you drill down containment edges and jump along reference edges — including the
@@ -165,9 +166,10 @@ returning its active view to the root.
 | Inspect | `y` / `j` | Raw API object as YAML / JSON |
 | | `i` / `n` | Copy id / name |
 | | `c` | Copy the displayed raw object (inside the YAML/JSON view) |
+| Compute details | `f` | CPU feature list (hypervisors only) |
 | Search | `/` | Filter the current list when it contains selectable objects |
 | | `s` | Cycle all/error/degraded when the current objects expose status |
-| | `o` | Sort a top-level list by a name/id/IP column, ascending (esc cancels, enter selects) |
+| | `o` | Sort a top-level list by a name/id/IP column, ascending (lists start by name; esc cancels, enter selects) |
 | Roles | `t` | Fully expanded implied-role inheritance tree |
 | Global | `Tab` `r` `a` `#` `?` `q` | Scope · refresh · auto-refresh · telemetry · help · quit |
 | Stats views | `+`/`-` | Adjust the load-balancer/listener statistics refresh interval |
@@ -187,8 +189,14 @@ time.
 Views are grouped into **areas**. The load-balancer area (`L`) holds the load
 balancer, VIP, listener, pool, and amphora views; the identity & access area
 (`A`) holds the Keystone identity views (users, domains, groups, a browsable
-projects list, roles); the compute area (`C`) starts with a Nova instances list;
-and the service catalog area (`S`) holds the services, endpoints, and regions.
+projects list, roles); the compute area (`C`) holds Nova instance and
+admin-oriented hypervisor inventories, with a lazy Placement lookup exposing managed
+devices and their instance allocations as related `ACCELERATORS`. Hypervisor details
+link to their resident `INSTANCES`, while instance details link back to their
+`HYPERVISOR` and allocated accelerators. The service catalog area (`S`) holds
+the services, endpoints, and regions. If Nova policy does not authorize
+hypervisor listing for the current token scope, that view stays active and
+explains the restriction without exposing the raw API error.
 That projects view is for exploring/inspecting projects
 and is distinct from the global authentication-scope selector (`Tab`), which
 re-authenticates the service clients. Uppercase accelerators jump straight to an area, `Space` opens a searchable

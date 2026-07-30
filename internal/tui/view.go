@@ -52,6 +52,8 @@ func (m Model) View() string {
 		return m.tokenView()
 	case overlayRoleTree:
 		return m.roleTreeView()
+	case overlayHypervisorFeatures:
+		return m.hypervisorFeaturesView()
 	}
 	if m.home {
 		return m.homeView()
@@ -255,6 +257,10 @@ func (m Model) visibleRows() int {
 		_, h = m.identityOverviewParts(h, m.regionOverviewSummary)
 	} else if m.isInstanceOverview() {
 		_, h = m.identityOverviewParts(h, m.instanceOverviewSummary)
+	} else if m.isHypervisorOverview() {
+		_, h = m.identityOverviewParts(h, m.hypervisorOverviewSummary)
+	} else if m.isAcceleratorOverview() {
+		_, h = m.identityOverviewParts(h, m.acceleratorOverviewSummary)
 	}
 	if m.loc.isTopLevelList() && len(m.entries) > 0 {
 		h -= 2 // blank scope separator + column-header row
@@ -318,6 +324,12 @@ func (m Model) bodyLines() []string {
 	if m.isInstanceOverview() {
 		return m.instanceOverviewLines(h)
 	}
+	if m.isHypervisorOverview() {
+		return m.hypervisorOverviewLines(h)
+	}
+	if m.isAcceleratorOverview() {
+		return m.acceleratorOverviewLines(h)
+	}
 	if len(m.entries) == 0 {
 		msg := "— empty —"
 		switch {
@@ -335,6 +347,8 @@ func (m Model) bodyLines() []string {
 			msg = m.domainsErr
 		case m.loc.listKind() == kindInstance && m.instancesErr != "":
 			msg = m.instancesErr
+		case m.loc.listKind() == kindHypervisor && m.hypervisorsErr != "":
+			msg = m.hypervisorsErr
 		case m.loc.listKind() == kindGroup && m.groupsErr != "":
 			msg = m.groupsErr
 		case m.loc.listKind() == kindProject && m.projectListErr != "":
@@ -359,7 +373,7 @@ func (m Model) bodyLines() []string {
 	if m.loc.isTopLevelList() {
 		// A blank line separates the scope line from the column headers, matching
 		// the load-balancer overview's spacing above.
-		return append([]string{""}, m.lbTableLines(h-1)...)
+		return append([]string{""}, m.topLevelTableLines(h-1)...)
 	}
 	return m.resourceLines(h, "— empty —")
 }
@@ -425,7 +439,8 @@ func (m Model) stickyHeadingsActive(h int) bool {
 
 func (m Model) isIdentityOverview() bool {
 	return m.isUserOverview() || m.isDomainOverview() || m.isGroupOverview() || m.isProjectOverview() || m.isRoleOverview() ||
-		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview()
+		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview() ||
+		m.isInstanceOverview() || m.isHypervisorOverview() || m.isAcceleratorOverview()
 }
 
 // stickyGroupHeading renders the heading of the group containing the row at
@@ -499,7 +514,8 @@ func (m Model) isOverview() bool {
 	return m.isLBOverview() || m.isVIPOverview() || m.isListenerOverview() || m.isPoolOverview() || m.isMemberOverview() || m.isAmphoraOverview() ||
 		m.isHealthMonitorOverview() || m.isCOEClusterOverview() || m.isKubernetesServiceOverview() ||
 		m.isUserOverview() || m.isDomainOverview() || m.isGroupOverview() || m.isProjectOverview() || m.isRoleOverview() ||
-		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview() || m.isInstanceOverview()
+		m.isServiceOverview() || m.isEndpointOverview() || m.isRegionOverview() ||
+		m.isInstanceOverview() || m.isHypervisorOverview() || m.isAcceleratorOverview()
 }
 
 func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
@@ -519,6 +535,21 @@ func (m Model) vipOverviewParts(h int) (summary []string, relatedHeight int) {
 	return summary, relatedHeight
 }
 
+// relatedObjectsPanelTitle renders the shared related-list section heading used
+// by every detail surface. Counts reflect the active filter, and issue totals
+// use the same styling as load-balancer related objects.
+func (m Model) relatedObjectsPanelTitle() string {
+	visibleCount := selectableEntryCount(m.entries)
+	allCount := selectableEntryCount(m.allEntries)
+	title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
+	if visibleCount != allCount {
+		title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
+	}
+	rendered := m.st.panelTitle.Render(title)
+	errors, degraded := relatedIssueCounts(m.entries)
+	return m.clip(m.renderIssueCounts(rendered, errors, degraded))
+}
+
 func (m Model) vipOverviewLines(h int) []string {
 	summary, relatedHeight := m.vipOverviewParts(h)
 	lines := make([]string, 0, h)
@@ -530,15 +561,7 @@ func (m Model) vipOverviewLines(h int) []string {
 		lines = append(lines, "")
 	}
 	if len(lines) < h {
-		visibleCount := selectableEntryCount(m.entries)
-		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
-		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
-		}
-		rendered := m.st.panelTitle.Render(title)
-		errors, degraded := relatedIssueCounts(m.entries)
-		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+		lines = append(lines, m.relatedObjectsPanelTitle())
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
 	for len(lines) < h {
@@ -616,15 +639,7 @@ func (m Model) poolOverviewLines(h int) []string {
 		lines = append(lines, "")
 	}
 	if len(lines) < h {
-		visibleCount := selectableEntryCount(m.entries)
-		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
-		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
-		}
-		rendered := m.st.panelTitle.Render(title)
-		errors, degraded := relatedIssueCounts(m.entries)
-		lines = append(lines, m.clip(m.renderIssueCounts(rendered, errors, degraded)))
+		lines = append(lines, m.relatedObjectsPanelTitle())
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
 	for len(lines) < h {
@@ -1192,18 +1207,10 @@ func (m Model) lbOverviewLines(h int) []string {
 		lines = append(lines, "") // permanent separation before related objects
 	}
 	if len(lines) < h {
-		visibleCount := selectableEntryCount(m.entries)
-		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
-		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
-		}
-		renderedTitle := m.st.panelTitle.Render(title)
-		errorCount, degradedCount := relatedIssueCounts(m.entries)
-		renderedTitle = m.renderIssueCounts(renderedTitle, errorCount, degradedCount)
+		renderedTitle := m.relatedObjectsPanelTitle()
 		lbID := m.loc.node.ID
-		title = m.overviewPanelTitleRendered(renderedTitle, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
-		lines = append(lines, m.clip(title))
+		renderedTitle = m.overviewPanelTitleRendered(renderedTitle, false, m.lbRelatedErr[lbID], m.updatedAt(lbID, sectionRelated), m.lbRelatedErr[lbID] != "")
+		lines = append(lines, m.clip(renderedTitle))
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, "— no related objects —")...)
 	for len(lines) < h {
@@ -1262,15 +1269,7 @@ func (m Model) listenerOverviewLines(h int) []string {
 		lines = append(lines, "")
 	}
 	if len(lines) < h {
-		visibleCount := selectableEntryCount(m.entries)
-		allCount := selectableEntryCount(m.allEntries)
-		title := fmt.Sprintf("RELATED OBJECTS %d", visibleCount)
-		if visibleCount != allCount {
-			title = fmt.Sprintf("RELATED OBJECTS %d/%d", visibleCount, allCount)
-		}
-		rendered := m.st.panelTitle.Render(title)
-		errors, degraded := relatedIssueCounts(m.entries)
-		rendered = m.renderIssueCounts(rendered, errors, degraded)
+		rendered := m.relatedObjectsPanelTitle()
 		id := m.loc.node.ID
 		rendered = m.overviewPanelTitleRendered(rendered, false, m.lbRelatedErr[id], m.updatedAt(id, sectionRelated), m.lbRelatedErr[id] != "")
 		lines = append(lines, m.clip(rendered))
@@ -1767,16 +1766,16 @@ func lbNameCell(name, id string, showIDs bool) string {
 // the last, so the row fills the width and the selection bar spans it).
 const tableColumnGap = 2
 
-// lbTableLines renders the active top-level list as a fixed-width table: a header
-// row plus the scrolled window of rows, the selected row highlighted and the
-// status columns colored. It returns exactly h lines.
+// topLevelTableLines renders every area's top-level list as a fixed-width table:
+// a header row plus the scrolled window of rows, the selected row highlighted
+// and the status columns colored. It returns exactly h lines.
 //
 // Column widths are computed here rather than delegated to lip gloss's table,
 // whose auto-sizer enforces no per-column minimum and starves narrow columns
 // (protocol, port) to a single character whenever another column (a long name or
 // a UUID) is wide. layoutColumnWidths keeps every column readable and always
 // sums to the terminal width so the highlight bar is flush.
-func (m Model) lbTableLines(h int) []string {
+func (m Model) topLevelTableLines(h int) []string {
 	titles := m.columnTitles()
 	statusCols := m.statusColumnSet(len(titles))
 
@@ -1872,12 +1871,17 @@ func (m Model) styleRoleImplicationMarker(e entry, row string, base lipgloss.Sty
 	return markerStyle.Render(marker) + base.Render(strings.TrimPrefix(row, marker))
 }
 
-// layoutColumnWidths sizes columns to their natural content width, then expands
-// the shortest columns (or shrinks the widest, never below a readable minimum) so
-// the row exactly fills total. gap is the inter-column spacing counted for every
-// column.
+// layoutColumnWidths sizes columns to their natural content width, then
+// distributes surplus terminal width in proportion to those natural widths.
+// Every column participates, but content-heavy columns receive more room than
+// compact state/type/count columns. When space is tight, the widest columns
+// shrink first and retain a readable minimum. gap is the inter-column spacing
+// counted for every column.
 func layoutColumnWidths(titles []string, rows [][]string, total, gap int) []int {
 	n := len(titles)
+	if n == 0 {
+		return nil
+	}
 	widths := make([]int, n)
 	for j, title := range titles {
 		widths[j] = runeLen(title)
@@ -1887,6 +1891,11 @@ func layoutColumnWidths(titles []string, rows [][]string, total, gap int) []int 
 			if w := runeLen(cells[j]); w > widths[j] {
 				widths[j] = w
 			}
+		}
+	}
+	for j := range widths {
+		if widths[j] < 1 {
+			widths[j] = 1
 		}
 	}
 
@@ -1900,15 +1909,31 @@ func layoutColumnWidths(titles []string, rows [][]string, total, gap int) []int 
 	}
 
 	const minWidth = 4 // never starve a column below this while others can give
-	for sum < budget { // expand the shortest column, evening the row out
-		mi := 0
-		for j := 1; j < n; j++ {
-			if widths[j] < widths[mi] {
-				mi = j
-			}
+	if sum < budget {
+		extra := budget - sum
+		naturalTotal := sum
+		remainders := make([]int, n)
+		allocated := 0
+		for j, natural := range widths {
+			numerator := extra * natural
+			add := numerator / naturalTotal
+			widths[j] += add
+			allocated += add
+			remainders[j] = numerator % naturalTotal
 		}
-		widths[mi]++
-		sum++
+		// Integer division leaves fewer than n cells. Give those cells to the
+		// largest fractional shares, with column order as the stable tie-break.
+		for cells := extra - allocated; cells > 0; cells-- {
+			best := 0
+			for j := 1; j < n; j++ {
+				if remainders[j] > remainders[best] {
+					best = j
+				}
+			}
+			widths[best]++
+			remainders[best] = -1
+		}
+		sum = budget
 	}
 	for sum > budget { // shrink the widest column above the floor
 		mi := -1
@@ -1963,7 +1988,8 @@ func (m Model) renderRow(e entry, sel bool) string {
 		return m.clip(m.renderIssueCounts(heading, e.issueErrors, e.issueDegraded))
 	}
 	if e.kind == entUser || e.kind == entDomain || e.kind == entUserGroup || e.kind == entProject ||
-		e.kind == entRole || e.kind == entAssignment || e.kind == entService || e.kind == entEndpoint || e.kind == entRegion {
+		e.kind == entRole || e.kind == entAssignment || e.kind == entService || e.kind == entEndpoint ||
+		e.kind == entRegion || e.kind == entInstance || e.kind == entHypervisor || e.kind == entAccelerator {
 		return m.renderIdentityRow(e, sel)
 	}
 	eff := e.oper
@@ -2054,14 +2080,18 @@ func (m Model) renderIdentityRow(e entry, sel bool) string {
 		name = identityRowName(e.label)
 	}
 	extra := strings.TrimSpace(e.extra)
+	status := e.oper
+	if status == "" {
+		status = e.prov
+	}
 	if sel {
-		seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, "") + lipgloss.NewStyle().Bold(true).Render(name)
+		seg := m.st.refMarker.Render("▶ ") + m.styledNavigationMarker(e, status) + lipgloss.NewStyle().Bold(true).Render(name)
 		if extra != "" {
 			seg += m.styledIdentityExtra(e, extra)
 		}
 		return navigationStyledChevron(seg, m.width, m.st.refMarker)
 	}
-	seg := "  " + m.styledNavigationMarker(e, "") + name
+	seg := "  " + m.styledNavigationMarker(e, status) + name
 	if extra != "" {
 		seg += m.styledIdentityExtra(e, extra)
 	}
@@ -2310,6 +2340,8 @@ func nodeTypeLabel(t model.NodeType) string {
 		return "Amphora"
 	case model.TypeInstance:
 		return "Instance"
+	case model.TypeHypervisor:
+		return "Hypervisor"
 	case model.TypeCOECluster:
 		return "COE cluster"
 	case model.TypeKubeService:
@@ -2429,6 +2461,9 @@ func (m Model) hintLine() string {
 	}
 	if m.canOpenRoleTree() {
 		parts = append(parts, "t inheritance tree")
+	}
+	if m.isHypervisorOverview() {
+		parts = append(parts, "f CPU features")
 	}
 	if hasFilterableEntries(m.allEntries) {
 		parts = append(parts, "/ filter")
@@ -3279,7 +3314,7 @@ Areas & views (drill into an item to open its detail)
   1-9              switch view within the active area
   catalog area:        1 regions · 2 services · 3 endpoints
   identity area:       1 domains · 2 projects · 3 groups · 4 users · 5 roles
-  compute area:        1 instances
+  compute area:        1 instances · 2 hypervisors
   load-balancer area:  1 load balancers · 2 virtual IPs · 3 listeners ·
                        4 pools · 5 amphorae (admin only)
 
@@ -3290,6 +3325,7 @@ Inspect
   n                copy object name to clipboard
   c                copy the displayed raw object (inside the YAML/JSON view)
   t                full inheritance tree (roles marked ⧉)
+  f                CPU feature list (hypervisor details only)
 
 {{list_controls}}Global
   tab              authentication scope switcher
@@ -3368,9 +3404,9 @@ type statusLegendEntry struct {
 }
 
 var statusLegendEntries = [...]statusLegendEntry{
-	{status: "ONLINE", description: "healthy / ready", values: "ONLINE · ACTIVE · ENABLED · ALLOCATED · READY"},
+	{status: "ONLINE", description: "healthy / ready", values: "ONLINE · ACTIVE · ENABLED · ALLOCATED · READY · UP"},
 	{status: "DEGRADED", description: "degraded / changing", values: "DEGRADED · DRAINING · BOOTING · PENDING_*"},
-	{status: "ERROR", description: "error", values: "ERROR · FAILOVER_STOPPED"},
+	{status: "ERROR", description: "error", values: "ERROR · FAILOVER_STOPPED · DOWN"},
 	{status: "OFFLINE", description: "inactive / unmonitored", values: "OFFLINE · NO_MONITOR · DISABLED · DELETED"},
 	{status: "", description: "no health status", values: "VIP / not applicable"},
 }

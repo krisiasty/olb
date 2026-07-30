@@ -109,11 +109,11 @@ func assignmentScopeColor(targetType string) (lipgloss.Color, bool) {
 // for the list's provisioning column.
 func statusColor(status string) lipgloss.Color {
 	switch status {
-	case "ONLINE", "ACTIVE", "ENABLED", "ALLOCATED", "READY", "HEALTHY":
+	case "ONLINE", "ACTIVE", "ENABLED", "ALLOCATED", "READY", "HEALTHY", "UP":
 		return lipgloss.Color("42") // green
 	case "DEGRADED", "DRAINING", "BOOTING":
 		return lipgloss.Color("214") // amber
-	case "ERROR", "FAILOVER_STOPPED":
+	case "ERROR", "FAILOVER_STOPPED", "DOWN":
 		return lipgloss.Color("196") // red
 	case "PENDING_CREATE", "PENDING_UPDATE", "PENDING_DELETE":
 		return lipgloss.Color("214")

@@ -36,6 +36,7 @@ type keyMap struct {
 	ShowIDs  key.Binding // d
 	Sort     key.Binding // o
 	RoleTree key.Binding // t (roles with implied roles)
+	Features key.Binding // f (hypervisor details only)
 
 	Scope        key.Binding // tab: authentication scope selector
 	Refresh      key.Binding // r
@@ -83,6 +84,7 @@ func defaultKeys() keyMap {
 		ShowIDs:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "names/ids")),
 		Sort:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "sort")),
 		RoleTree: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "inheritance tree")),
+		Features: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "CPU features")),
 
 		Scope:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "scope")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),

@@ -35,7 +35,13 @@ func newWorkspaceState(kind listKind, historyCap int) workspaceState {
 	root := kind.identity()
 	hist.root = root
 	hist.navigate(histEntry{id: root})
-	return workspaceState{hist: hist, loc: location{id: root}}
+	return workspaceState{
+		hist: hist,
+		loc:  location{id: root},
+		// Every list opens in ascending human-readable name order. The sort
+		// picker still offers natural API order as an explicit choice.
+		sortKey: defaultNameSortKey(kind),
+	}
 }
 
 // resetWorkspaces initializes every scope-dependent navigation stack at

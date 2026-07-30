@@ -200,6 +200,19 @@ type instancesMsg struct {
 	err       error
 }
 
+type hypervisorsMsg struct {
+	hypervisors []osclient.Hypervisor
+	refresh     bool
+	err         error
+}
+
+type acceleratorsMsg struct {
+	hypervisorID string
+	accelerators []osclient.Accelerator
+	scope        osclient.ScopeInfo
+	err          error
+}
+
 type domainContentsMsg struct {
 	domainID string
 	projects []osclient.Project
@@ -344,6 +357,27 @@ func (m Model) loadInstancesCmd(refresh bool) tea.Cmd {
 		defer cancel()
 		instances, err := b.ListInstances(ctx)
 		return instancesMsg{instances: instances, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadHypervisorsCmd(refresh bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		hypervisors, err := b.ListHypervisors(ctx)
+		return hypervisorsMsg{hypervisors: hypervisors, refresh: refresh, err: err}
+	}
+}
+
+func (m Model) loadHypervisorAcceleratorsCmd(hypervisorID string) tea.Cmd {
+	b := m.backend
+	scope := m.scope
+	return func() tea.Msg {
+		ctx, cancel := ctxTimeout()
+		defer cancel()
+		accelerators, err := b.ListHypervisorAccelerators(ctx, hypervisorID)
+		return acceleratorsMsg{hypervisorID: hypervisorID, accelerators: accelerators, scope: scope, err: err}
 	}
 }
 

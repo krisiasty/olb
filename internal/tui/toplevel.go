@@ -28,6 +28,7 @@ const (
 	kindEndpoint
 	kindRegion
 	kindInstance
+	kindHypervisor
 )
 
 // listIdentity is the synthetic history identity for a top-level list kind.
@@ -59,6 +60,8 @@ func (k listKind) identity() model.Identity {
 		return model.RegionListIdentity
 	case kindInstance:
 		return model.InstanceListIdentity
+	case kindHypervisor:
+		return model.HypervisorListIdentity
 	default:
 		return model.LBListIdentity
 	}
@@ -93,6 +96,8 @@ func (k listKind) rootLabel() string {
 		return "regions"
 	case kindInstance:
 		return "instances"
+	case kindHypervisor:
+		return "hypervisors"
 	default:
 		return "load balancers"
 	}
@@ -128,6 +133,8 @@ func listKindOf(id model.Identity) listKind {
 		return kindRegion
 	case model.TypeInstance:
 		return kindInstance
+	case model.TypeHypervisor:
+		return kindHypervisor
 	default:
 		return kindLB
 	}
@@ -300,6 +307,25 @@ func instanceEntries(rows []osclient.Instance) []entry {
 	return es
 }
 
+func hypervisorEntries(rows []osclient.Hypervisor) []entry {
+	es := make([]entry, 0, len(rows))
+	for _, hypervisor := range rows {
+		oper := strings.ToUpper(hypervisor.State)
+		if oper == "DOWN" {
+			oper = "ERROR"
+		}
+		es = append(es, entry{
+			kind: entHypervisor, hypervisor: hypervisor,
+			label: "hypervisor:" + hypervisorLabel(hypervisor),
+			oper:  oper, prov: strings.ToUpper(hypervisor.Status),
+			extra: strings.Join([]string{
+				hypervisor.Type, hypervisor.HostIP, hypervisor.ServiceHost,
+			}, " "),
+		})
+	}
+	return es
+}
+
 // --- table columns & cells ------------------------------------------------
 
 // columnTitles returns the table headers for the active top-level list. The d
@@ -352,6 +378,12 @@ func (m Model) columnTitles() []string {
 			cols = append(cols, project)
 		}
 		return append(cols, flavor, "ADDRESSES", "CREATED")
+	case kindHypervisor:
+		obj := "HOSTNAME"
+		if m.showIDs {
+			obj = "HYPERVISOR ID"
+		}
+		return []string{obj, "STATE", "STATUS", "TYPE", "VCPUS", "MEMORY", "DISK", "VMS", "HOST IP"}
 	default:
 		return m.lbColumnTitles()
 	}
@@ -410,6 +442,16 @@ func (m Model) rowCells(e entry) []string {
 			cells = append(cells, lbNameCell(instance.ProjectName, instance.ProjectID, m.showIDs))
 		}
 		return append(cells, flavor, displayValue(strings.Join(instance.Addresses, ", ")), formatTableTime(instance.Created))
+	case entHypervisor:
+		hypervisor := e.hypervisor
+		return []string{
+			lbNameCell(hypervisor.Hostname, hypervisor.ID, m.showIDs),
+			strings.ToUpper(hypervisor.State), strings.ToUpper(hypervisor.Status),
+			displayValue(hypervisor.Type), countPair(hypervisor.VCPUsUsed, hypervisor.VCPUs),
+			memoryPair(hypervisor.MemoryMBUsed, hypervisor.MemoryMB),
+			diskPair(hypervisor.LocalGBUsed, hypervisor.LocalGB),
+			fmt.Sprintf("%d", hypervisor.RunningVMs), displayValue(hypervisor.HostIP),
+		}
 	default:
 		return m.lbRowCells(e)
 	}
@@ -439,6 +481,8 @@ func (m Model) statusColumnSet(ncols int) map[int]bool {
 		return map[int]bool{2: true} // STATUS
 	case kindInstance:
 		return map[int]bool{1: true} // STATUS
+	case kindHypervisor:
+		return map[int]bool{1: true, 2: true} // STATE, STATUS
 	default:
 		return map[int]bool{ncols - 1: true, ncols - 2: true}
 	}

@@ -144,6 +144,11 @@ func (m Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openRoleTree()
+	case key.Matches(msg, m.keys.Features):
+		if !m.isHypervisorOverview() {
+			return m, nil
+		}
+		return m.openHypervisorFeatures()
 
 	case key.Matches(msg, m.keys.Scope):
 		return m.openScope()
@@ -367,6 +372,25 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 		m.captureRefreshSelection()
 		return m, m.loadInstancesCmd(true)
 	}
+	if m.isHypervisorOverview() && m.loc.node != nil {
+		if automatic {
+			return m, nil
+		}
+		hypervisorID := m.loc.node.ID
+		delete(m.accelerators, hypervisorID)
+		delete(m.acceleratorsErr, hypervisorID)
+		m.acceleratorsLoaded[hypervisorID] = false
+		m.acceleratorsLoading[hypervisorID] = true
+		m.hist.pruneDead()
+		m.refreshing = true
+		m.refreshAutomatic = false
+		m.loading, m.loadingWhat = true, "refreshing…"
+		m.captureRefreshSelection()
+		return m, tea.Batch(
+			m.loadHypervisorsCmd(true),
+			m.loadHypervisorAcceleratorsCmd(hypervisorID),
+		)
+	}
 	m.hist.pruneDead()
 	m.refreshing = true
 	m.refreshAutomatic = automatic
@@ -406,6 +430,8 @@ func (m Model) beginRefresh(automatic bool) (Model, tea.Cmd) {
 			return m, m.loadRegionsCmd(true)
 		case kindInstance:
 			return m, m.loadInstancesCmd(true)
+		case kindHypervisor:
+			return m, m.loadHypervisorsCmd(true)
 		default:
 			return m, m.loadLBsCmd()
 		}
@@ -608,6 +634,8 @@ func (m Model) topLevelInspectNode(e entry) *model.Node {
 		return regionToNode(e.region)
 	case entInstance:
 		return m.instanceNode(e.instance.ID)
+	case entHypervisor:
+		return m.hypervisorNode(e.hypervisor.ID)
 	default:
 		return nil
 	}
@@ -638,6 +666,9 @@ func (m Model) currentIDName() (id, name string) {
 		if m.loc.node.Type == model.TypeCOECluster && m.loc.node.Attrs["uuid"] != "" {
 			return m.loc.node.Attrs["uuid"], m.loc.node.Name
 		}
+		if m.loc.node.Type == model.TypeAccelerator && m.loc.node.Attrs["provider_id"] != "" {
+			return m.loc.node.Attrs["provider_id"], m.loc.node.Name
+		}
 		return m.loc.node.ID, m.loc.node.Name
 	}
 	if m.loc.isTopLevelList() && m.cursor >= 0 && m.cursor < len(m.entries) {
@@ -652,6 +683,10 @@ func (m Model) currentIDName() (id, name string) {
 			return e.vip.portID, e.vip.address
 		case entAmphora:
 			return e.node.ID, ""
+		case entInstance:
+			return e.instance.ID, e.instance.Name
+		case entHypervisor:
+			return e.hypervisor.ID, e.hypervisor.Hostname
 		}
 	}
 	return "", ""
@@ -743,6 +778,8 @@ func (m Model) onOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onTelemetryKey(msg)
 	case overlayRoleTree:
 		return m.onRoleTreeKey(msg)
+	case overlayHypervisorFeatures:
+		return m.onHypervisorFeaturesKey(msg)
 
 	case overlayToken:
 		switch {

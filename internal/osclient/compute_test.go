@@ -47,6 +47,8 @@ func TestListInstancesFollowsAuthenticationScope(t *testing.T) {
 						"private":[{"addr":"10.0.0.12","version":4}]
 					},
 					"OS-EXT-AZ:availability_zone":"nova",
+					"OS-EXT-SRV-ATTR:host":"compute-service-01",
+					"OS-EXT-SRV-ATTR:hypervisor_hostname":"compute-01",
 					"OS-EXT-SRV-ATTR:instance_name":"instance-0000012a",
 					"created":"2026-07-30T08:15:00Z",
 					"updated":"2026-07-30T08:20:00Z"
@@ -78,6 +80,9 @@ func TestListInstancesFollowsAuthenticationScope(t *testing.T) {
 			}
 			if instance.InstanceName != "instance-0000012a" {
 				t.Fatalf("libvirt instance name = %q", instance.InstanceName)
+			}
+			if instance.Host != "compute-service-01" || instance.HypervisorHostname != "compute-01" {
+				t.Fatalf("instance placement hosts = %q / %q", instance.Host, instance.HypervisorHostname)
 			}
 			if instance.PrimaryAddress != "10.0.0.12" || len(instance.Addresses) != 2 ||
 				instance.Addresses[0] != "private=10.0.0.12" || instance.Addresses[1] != "public=203.0.113.10" {

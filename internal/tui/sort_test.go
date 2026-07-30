@@ -15,28 +15,21 @@ func firstLabels(m Model) []string {
 	return out
 }
 
-func TestSortOverlaySortsByNameAscending(t *testing.T) {
+func TestListsStartSortedByNameAscending(t *testing.T) {
 	m := lbListModel(t, true) // rows arrive as web-prod, db-lb (API order)
-	if got := firstLabels(m); got[0] != "lb:web-prod" {
-		t.Fatalf("expected default (API) order first, got %v", got)
+	if m.sortKey != "name" {
+		t.Fatalf("initial sortKey = %q, want name", m.sortKey)
+	}
+	if got := firstLabels(m); got[0] != "lb:db-lb" || got[1] != "lb:web-prod" {
+		t.Fatalf("expected ascending-by-name order [db-lb, web-prod], got %v", got)
 	}
 
 	m = upd(t, m, press("o"))
 	if m.overlay != overlaySort {
 		t.Fatalf("pressing o should open the sort overlay, got overlay %d", m.overlay)
 	}
-	// index 0 is "default order"; one Down highlights "Name".
-	m = upd(t, m, press("down"))
-	m = upd(t, m, press("enter"))
-
-	if m.overlay != overlayNone {
-		t.Fatalf("enter should close the sort overlay")
-	}
-	if m.sortKey != "name" {
-		t.Fatalf("sortKey = %q, want name", m.sortKey)
-	}
-	if got := firstLabels(m); got[0] != "lb:db-lb" || got[1] != "lb:web-prod" {
-		t.Fatalf("expected ascending-by-name order [db-lb, web-prod], got %v", got)
+	if m.sortCursor != 1 {
+		t.Fatalf("sort overlay should pre-select Name, cursor=%d", m.sortCursor)
 	}
 }
 
@@ -46,8 +39,8 @@ func TestCatalogListsAreSortable(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("S"))
 	m = updExec(t, m, press("2")) // services (arrive in Type order: compute, identity, image)
-	if got := firstLabels(m); got[0] != "service:compute" {
-		t.Fatalf("services should start in default (type) order; got %v", got)
+	if got := firstLabels(m); got[0] != "service:image" {
+		t.Fatalf("services should start in name order; got %v", got)
 	}
 	// o opens the picker rather than flashing "not sortable".
 	m = upd(t, m, press("o"))
@@ -55,13 +48,6 @@ func TestCatalogListsAreSortable(t *testing.T) {
 		t.Fatalf("o on the services list should open the sort overlay; overlay=%d", m.overlay)
 	}
 	m = upd(t, m, press("esc"))
-	// Sort by Name: nova/keystone/glance → ascending glance(image), keystone(identity), nova(compute).
-	m.sortKey = "name"
-	m.applyFilters()
-	if got := firstLabels(m); got[0] != "service:image" {
-		t.Fatalf("sorting services by name should put glance (image) first; got %v", got)
-	}
-
 	m = updExec(t, m, press("3")) // endpoints
 	if len(m.sortColumns()) == 0 {
 		t.Fatal("endpoints list should be sortable")
@@ -90,7 +76,7 @@ func TestSortOverlayEscCancels(t *testing.T) {
 	if m.overlay != overlayNone {
 		t.Fatalf("esc should close the sort overlay")
 	}
-	if m.sortKey != "" {
+	if m.sortKey != "name" {
 		t.Fatalf("esc must not change the sort; sortKey = %q", m.sortKey)
 	}
 	if got := firstLabels(m); got[0] != before[0] || got[1] != before[1] {
@@ -101,15 +87,12 @@ func TestSortOverlayEscCancels(t *testing.T) {
 func TestSortDefaultOrderEntryClearsSort(t *testing.T) {
 	m := lbListModel(t, true)
 
-	// Sort by name first.
-	m = upd(t, m, press("o"))
-	m = upd(t, m, press("down"))
-	m = upd(t, m, press("enter"))
+	// Lists start sorted by name.
 	if got := firstLabels(m); got[0] != "lb:db-lb" {
 		t.Fatalf("precondition: expected name sort, got %v", got)
 	}
 
-	// Reopening pre-selects the active column ("Name"); Up returns to "default order".
+	// Reopening pre-selects "Name"; Up returns to "default order".
 	m = upd(t, m, press("o"))
 	if m.sortCursor != 1 {
 		t.Fatalf("reopening should pre-select the active column (index 1), got %d", m.sortCursor)
@@ -122,6 +105,24 @@ func TestSortDefaultOrderEntryClearsSort(t *testing.T) {
 	}
 	if got := firstLabels(m); got[0] != "lb:web-prod" || got[1] != "lb:db-lb" {
 		t.Fatalf("default order should restore API order [web-prod, db-lb], got %v", got)
+	}
+}
+
+func TestRelatedObjectGroupsSortByNameAscending(t *testing.T) {
+	entries := []entry{
+		{kind: entProject, project: osclient.Project{ID: "project-z", Name: "Zulu"}, label: "project:Zulu"},
+		{kind: entProject, project: osclient.Project{ID: "project-a", Name: "alpha"}, label: "project:alpha"},
+		{kind: entUser, user: osclient.User{ID: "user-z", Name: "Zulu"}, label: "user:Zulu"},
+		{kind: entUser, user: osclient.User{ID: "user-a", Name: "alpha"}, label: "user:alpha"},
+	}
+	got := withExpectedGroupHeadings(entries, []relatedSection{
+		{key: "projects", title: "PROJECTS"},
+		{key: "users", title: "USERS"},
+	})
+	labels := firstLabels(Model{entries: got})
+	want := []string{"PROJECTS 2", "project:alpha", "project:Zulu", "USERS 2", "user:alpha", "user:Zulu"}
+	if strings.Join(labels, ",") != strings.Join(want, ",") {
+		t.Fatalf("related object order = %v, want %v", labels, want)
 	}
 }
 

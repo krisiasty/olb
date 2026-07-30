@@ -70,15 +70,19 @@ type fakeBackend struct {
 	impliedRoles       map[string][]osclient.Role
 	roleRelErr         error // when set, role assignment/implied lookups return it
 	// Service catalog fixtures; nil slices fall back to built-in defaults.
-	services     []osclient.Service
-	servicesErr  error
-	endpoints    []osclient.Endpoint
-	endpointsErr error
-	regions      []osclient.Region
-	regionsErr   error
-	instances    []osclient.Instance
-	instancesErr error
-	token        *osclient.TokenInfo // when set, overrides the default whoami
+	services       []osclient.Service
+	servicesErr    error
+	endpoints      []osclient.Endpoint
+	endpointsErr   error
+	regions        []osclient.Region
+	regionsErr     error
+	instances      []osclient.Instance
+	instancesErr   error
+	hypervisors    []osclient.Hypervisor
+	hypervisorsErr error
+	accelerators   map[string][]osclient.Accelerator
+	acceleratorErr error
+	token          *osclient.TokenInfo // when set, overrides the default whoami
 	// Owner-side role assignments (the mirror of roleAssignments): keyed by the
 	// user/group/project/domain ID. Nil maps fall back to built-in defaults.
 	userAssignments    map[string][]osclient.RoleAssignment
@@ -682,11 +686,42 @@ func (f *fakeBackend) ListInstances(context.Context) ([]osclient.Instance, error
 			ImageID: "image-1", ImageName: "Ubuntu 24.04",
 			Addresses: []string{"private=10.0.0.12"}, PrimaryAddress: "10.0.0.12",
 			AvailabilityZone: "nova", KeyName: "operator",
+			Host: "compute-01", HypervisorHostname: "compute-01",
 			InstanceName: "instance-0000012a",
 			Created:      time.Date(2026, 7, 30, 8, 15, 0, 0, time.UTC),
 			Updated:      time.Date(2026, 7, 30, 8, 20, 0, 0, time.UTC),
 		},
 	}, nil
+}
+
+func (f *fakeBackend) ListHypervisors(context.Context) ([]osclient.Hypervisor, error) {
+	if f.hypervisorsErr != nil {
+		return nil, f.hypervisorsErr
+	}
+	if f.hypervisors != nil {
+		return f.hypervisors, nil
+	}
+	return []osclient.Hypervisor{
+		{
+			ID: "hypervisor-1", Hostname: "compute-01", Type: "QEMU", Version: 8002000,
+			State: "up", Status: "enabled", HostIP: "192.0.2.21",
+			ServiceHost: "compute-01", ServiceID: "service-1",
+			CurrentWorkload: 2, RunningVMs: 12,
+			VCPUs: 64, VCPUsUsed: 28,
+			MemoryMB: 262144, MemoryMBUsed: 98304,
+			LocalGB: 1800, LocalGBUsed: 740, DiskAvailableLeast: 920,
+			CPUVendor: "Intel", CPUModel: "Skylake-Server", CPUArch: "x86_64",
+			CPUFeatures: []string{"vmx", "aes"},
+			CPUCells:    2, CPUSockets: 2, CPUCores: 16, CPUThreads: 2,
+		},
+	}, nil
+}
+
+func (f *fakeBackend) ListHypervisorAccelerators(_ context.Context, hypervisorID string) ([]osclient.Accelerator, error) {
+	if f.acceleratorErr != nil {
+		return nil, f.acceleratorErr
+	}
+	return f.accelerators[hypervisorID], nil
 }
 
 func (f *fakeBackend) CurrentToken() osclient.TokenInfo {

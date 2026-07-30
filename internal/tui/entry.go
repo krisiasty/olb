@@ -14,26 +14,28 @@ import (
 type entryKind int
 
 const (
-	entLB         entryKind = iota // a load balancer in the top-level list
-	entVIP                         // a VIP in the top-level VIPs list
-	entListener                    // a listener in the top-level listeners list
-	entPool                        // a pool in the top-level pools list
-	entAmphora                     // an amphora in the top-level amphorae list
-	entUser                        // a Keystone user in the top-level users list
-	entDomain                      // a Keystone domain in the top-level domains list
-	entUserGroup                   // a Keystone group in the top-level groups list
-	entProject                     // a Keystone project in the top-level projects list
-	entRole                        // a Keystone role in the top-level roles list
-	entService                     // a Keystone catalog service
-	entEndpoint                    // a Keystone catalog endpoint
-	entRegion                      // a Keystone catalog region
-	entInstance                    // a Nova server in the top-level instances list
-	entAssignment                  // a role assignment (actor holds a role on a target)
-	entChild                       // a containment child of the current node
-	entRelated                     // a directly related object rendered as a normal link
-	entRef                         // an outgoing reference edge ("→")
-	entBackRef                     // an incoming back-reference ("←")
-	entGroup                       // a non-selectable related-object group heading
+	entLB          entryKind = iota // a load balancer in the top-level list
+	entVIP                          // a VIP in the top-level VIPs list
+	entListener                     // a listener in the top-level listeners list
+	entPool                         // a pool in the top-level pools list
+	entAmphora                      // an amphora in the top-level amphorae list
+	entUser                         // a Keystone user in the top-level users list
+	entDomain                       // a Keystone domain in the top-level domains list
+	entUserGroup                    // a Keystone group in the top-level groups list
+	entProject                      // a Keystone project in the top-level projects list
+	entRole                         // a Keystone role in the top-level roles list
+	entService                      // a Keystone catalog service
+	entEndpoint                     // a Keystone catalog endpoint
+	entRegion                       // a Keystone catalog region
+	entInstance                     // a Nova server in the top-level instances list
+	entHypervisor                   // a Nova compute host in the hypervisors list
+	entAccelerator                  // a Placement-managed PCI resource below a hypervisor
+	entAssignment                   // a role assignment (actor holds a role on a target)
+	entChild                        // a containment child of the current node
+	entRelated                      // a directly related object rendered as a normal link
+	entRef                          // an outgoing reference edge ("→")
+	entBackRef                      // an incoming back-reference ("←")
+	entGroup                        // a non-selectable related-object group heading
 )
 
 // entry is one visible row. Selectable rows follow their containment child or
@@ -54,6 +56,8 @@ type entry struct {
 	endpoint        osclient.Endpoint       // set for entEndpoint
 	region          osclient.Region         // set for entRegion
 	instance        osclient.Instance       // set for entInstance
+	hypervisor      osclient.Hypervisor     // set for entHypervisor
+	accelerator     osclient.Accelerator    // set for entAccelerator
 	assignment      osclient.RoleAssignment // set for entAssignment
 	assignmentPivot assignmentPivot         // set for entAssignment: which side it is viewed from
 	lbName          string                  // owning load balancer name for resource rows
@@ -176,6 +180,20 @@ func (e entry) identity() (id model.Identity, viaRef bool, unresolved bool) {
 			name = shortID(e.instance.ID)
 		}
 		return model.Identity{Type: model.TypeInstance, ID: e.instance.ID, Label: "instance:" + name}, false, false
+	case entHypervisor:
+		return model.Identity{
+			Type: model.TypeHypervisor, ID: e.hypervisor.ID,
+			Label: "hypervisor:" + hypervisorLabel(e.hypervisor),
+		}, false, false
+	case entAccelerator:
+		name := e.accelerator.DisplayName
+		if name == "" {
+			name = e.accelerator.ResourceClass
+		}
+		return model.Identity{
+			Type: model.TypeAccelerator, ID: acceleratorIdentityID(e.accelerator),
+			Label: "accelerator:" + name,
+		}, false, false
 	case entAssignment:
 		a := e.assignment
 		if e.assignmentPivot == pivotActor {
@@ -399,6 +417,7 @@ func withRelatedGroupHeadings(entries []entry) []entry {
 			}
 			end++
 		}
+		sortRelatedEntriesByName(entries[start:end])
 		errors, degraded := relatedIssueCounts(entries[start:end])
 		out = append(out, entry{
 			kind: entGroup, label: fmt.Sprintf("%s %d", title, end-start),
@@ -431,6 +450,7 @@ func withExpectedGroupHeadings(entries []entry, sections []relatedSection) []ent
 	out := make([]entry, 0, len(entries)+len(sections))
 	for _, sec := range sections {
 		group := byKey[sec.key]
+		sortRelatedEntriesByName(group)
 		errors, degraded := relatedIssueCounts(group)
 		out = append(out, entry{
 			kind: entGroup, label: fmt.Sprintf("%s %d", sec.title, len(group)),
@@ -439,6 +459,84 @@ func withExpectedGroupHeadings(entries []entry, sections []relatedSection) []ent
 		out = append(out, group...)
 	}
 	return out
+}
+
+// sortRelatedEntriesByName orders objects alphabetically inside one related
+// section. Section order is owned by the detail view and is deliberately not
+// affected. A load balancer's primary VIP remains pinned before additional
+// VIPs, then each class is ordered by name.
+func sortRelatedEntriesByName(entries []entry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		leftPrimary, leftVIP := relatedVIPPrimary(entries[i])
+		rightPrimary, rightVIP := relatedVIPPrimary(entries[j])
+		if leftVIP && rightVIP && leftPrimary != rightPrimary {
+			return leftPrimary
+		}
+		leftName, rightName := relatedEntryName(entries[i]), relatedEntryName(entries[j])
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		leftID, _, _ := entries[i].identity()
+		rightID, _, _ := entries[j].identity()
+		return strings.ToLower(leftID.ID) < strings.ToLower(rightID.ID)
+	})
+}
+
+func relatedVIPPrimary(e entry) (primary, isVIP bool) {
+	if e.node == nil || e.node.Type != model.TypeVIP {
+		return false, false
+	}
+	return e.node.Attrs["vip_kind"] != "additional", true
+}
+
+func relatedEntryName(e entry) string {
+	var value string
+	switch e.kind {
+	case entLB:
+		value = e.lb.Name
+	case entListener:
+		value = e.listener.Name
+	case entPool:
+		value = e.pool.Name
+	case entUser:
+		value = e.user.Name
+	case entDomain:
+		value = e.domain.Name
+	case entUserGroup:
+		value = e.group.Name
+	case entProject:
+		value = e.project.Name
+	case entRole:
+		value = e.role.Name
+	case entService:
+		value = e.service.Name
+		if value == "" {
+			value = e.service.Type
+		}
+	case entEndpoint:
+		value = endpointLabelName(e.endpoint)
+	case entRegion:
+		value = e.region.ID
+	case entInstance:
+		value = e.instance.Name
+	case entHypervisor:
+		value = e.hypervisor.Hostname
+	case entAccelerator:
+		value = e.accelerator.DisplayName
+		if value == "" {
+			value = e.accelerator.ResourceClass
+		}
+	case entAssignment:
+		value = e.label
+	default:
+		if e.node != nil {
+			value = e.node.Name
+		}
+	}
+	if strings.TrimSpace(value) == "" {
+		value = e.label
+	}
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func relatedObjectGroup(e entry) (key, title string) {
@@ -459,8 +557,14 @@ func relatedObjectGroup(e entry) (key, title string) {
 		return "endpoints", "ENDPOINTS"
 	case entRegion:
 		return "regions", "REGIONS"
+	case entInstance:
+		return "instances", "INSTANCES"
+	case entHypervisor:
+		return "hypervisors", "HYPERVISORS"
 	case entAssignment:
 		return "assignments", "ASSIGNMENTS"
+	case entAccelerator:
+		return "accelerators", "ACCELERATORS"
 	}
 	switch e.kind {
 	case entRelated:

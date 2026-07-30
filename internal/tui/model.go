@@ -28,8 +28,9 @@ const (
 	overlaySort     // o sort-column picker (top-level lists)
 	overlaySwitcher // space area/view switcher
 	overlayTelemetry
-	overlayToken    // * current-token / whoami
-	overlayRoleTree // t fully expanded role-inference tree
+	overlayToken              // * current-token / whoami
+	overlayRoleTree           // t fully expanded role-inference tree
+	overlayHypervisorFeatures // f CPU feature list from hypervisor details
 )
 
 // location is what the main pane currently shows: the LB list, or a node whose
@@ -148,9 +149,21 @@ type Model struct {
 	regionsLoaded    bool
 	regionsErr       string
 	// Compute area.
-	instances       []osclient.Instance
-	instancesLoaded bool
-	instancesErr    string
+	instances          []osclient.Instance
+	instancesLoaded    bool
+	instancesLoading   bool
+	instancesErr       string
+	hypervisors        []osclient.Hypervisor
+	hypervisorsLoaded  bool
+	hypervisorsLoading bool
+	hypervisorsErr     string
+	// Accelerator inventory is loaded only when a hypervisor detail is opened.
+	// Placement requires per-provider requests, so keeping this out of the
+	// top-level hypervisor refresh prevents an N×M request fan-out.
+	accelerators        map[string][]osclient.Accelerator
+	acceleratorsLoaded  map[string]bool
+	acceleratorsLoading map[string]bool
+	acceleratorsErr     map[string]string
 	// Role relations (implied roles + assignments) load lazily when a role is
 	// opened, keyed by role ID.
 	roleRelations        map[string]roleRelations
@@ -179,16 +192,18 @@ type Model struct {
 	// knownDomainFull / knownProjectFull mark an object whose full attributes are
 	// known (from a list) versus a bare reference (only ID + resolved name, e.g. a
 	// project reached only through a role assignment).
-	knownUsers       map[string]osclient.User
-	knownGroups      map[string]osclient.Group
-	knownProjects    map[string]osclient.Project
-	knownDomains     map[string]osclient.Domain
-	knownRoles       map[string]osclient.Role
-	knownServices    map[string]osclient.Service
-	knownRegions     map[string]osclient.Region
-	knownInstances   map[string]osclient.Instance
-	knownDomainFull  map[string]bool
-	knownProjectFull map[string]bool
+	knownUsers        map[string]osclient.User
+	knownGroups       map[string]osclient.Group
+	knownProjects     map[string]osclient.Project
+	knownDomains      map[string]osclient.Domain
+	knownRoles        map[string]osclient.Role
+	knownServices     map[string]osclient.Service
+	knownRegions      map[string]osclient.Region
+	knownInstances    map[string]osclient.Instance
+	knownHypervisors  map[string]osclient.Hypervisor
+	knownAccelerators map[string]osclient.Accelerator
+	knownDomainFull   map[string]bool
+	knownProjectFull  map[string]bool
 	// domainContents holds a domain's related projects, groups, and users, loaded
 	// lazily when the domain is opened, keyed by domain ID.
 	domainContents        map[string]domainContent
@@ -221,8 +236,9 @@ type Model struct {
 	filtering bool // substring filter input focused
 	status    statusFilter
 
-	// sortKey is the active top-level-list sort column (per workspace); "" means
-	// the natural API order. Only top-level lists are sortable.
+	// sortKey is the active top-level-list sort column (per workspace); new
+	// workspaces start with their human-readable name key, while "" means the
+	// natural API order selected explicitly from the sort picker.
 	sortKey string
 
 	// Overlay state.
@@ -430,6 +446,12 @@ func New(backend Backend, cfg Config) Model {
 		knownServices:            map[string]osclient.Service{},
 		knownRegions:             map[string]osclient.Region{},
 		knownInstances:           map[string]osclient.Instance{},
+		knownHypervisors:         map[string]osclient.Hypervisor{},
+		knownAccelerators:        map[string]osclient.Accelerator{},
+		accelerators:             map[string][]osclient.Accelerator{},
+		acceleratorsLoaded:       map[string]bool{},
+		acceleratorsLoading:      map[string]bool{},
+		acceleratorsErr:          map[string]string{},
 		knownDomainFull:          map[string]bool{},
 		knownProjectFull:         map[string]bool{},
 		domainContents:           map[string]domainContent{},

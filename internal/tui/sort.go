@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// sortColumn is one selectable sort key for a top-level list. Per the design,
-// only name, id, and IP-address columns are offered. An empty key is the
-// leading "default order" entry (natural API order); its value func is nil. ip
+// sortColumn is one selectable sort key for a top-level list. An empty key is
+// the leading "default order" entry (natural API order); its value func is nil.
+// New workspaces select defaultNameSortKey instead, so lists initially appear
+// in human-readable name order while API order remains an explicit option. ip
 // selects numeric IP-aware ordering instead of a lexical string compare.
 type sortColumn struct {
 	key   string
@@ -177,8 +178,37 @@ func (m Model) sortColumns() []sortColumn {
 			sortColumn{key: "address", label: "Address", ip: true, value: func(e entry) string { return e.instance.PrimaryAddress }},
 			sortColumn{key: "created", label: "Created", value: func(e entry) string { return e.instance.Created.Format(time.RFC3339Nano) }},
 		)
+	case kindHypervisor:
+		return []sortColumn{
+			def,
+			{key: "hostname", label: "Hostname", value: func(e entry) string { return e.hypervisor.Hostname }},
+			{key: "id", label: "Hypervisor ID", value: func(e entry) string { return e.hypervisor.ID }},
+			{key: "state", label: "State", value: func(e entry) string { return e.hypervisor.State }},
+			{key: "status", label: "Status", value: func(e entry) string { return e.hypervisor.Status }},
+			{key: "type", label: "Type", value: func(e entry) string { return e.hypervisor.Type }},
+			{key: "host_ip", label: "Host IP", ip: true, value: func(e entry) string { return e.hypervisor.HostIP }},
+		}
 	}
 	return nil
+}
+
+// defaultNameSortKey returns the human-readable identity column selected when
+// a list workspace is first created. A few OpenStack resources do not have a
+// name; those use the closest equivalent visible identity (service, region ID,
+// load balancer name, or hostname).
+func defaultNameSortKey(kind listKind) string {
+	switch kind {
+	case kindVIP, kindAmphora:
+		return "lb"
+	case kindEndpoint:
+		return "service"
+	case kindRegion:
+		return "id"
+	case kindHypervisor:
+		return "hostname"
+	default:
+		return "name"
+	}
 }
 
 // enabledSortValue maps the boolean enabled flag to a stable sort key. Ascending

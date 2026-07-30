@@ -160,11 +160,16 @@ func (m Model) roleTreeModalBox() string {
 // clear. Width includes the longest visible tree line, title, or footer, capped
 // so the rounded frame always fits.
 func (m Model) roleTreeModalSize(content string) (width, viewportHeight int) {
-	title := "ROLE INHERITANCE"
-	footer := "↑/↓/PgUp/PgDn scroll · esc/t/q close"
+	return m.scrollModalSize("ROLE INHERITANCE", "↑/↓/PgUp/PgDn scroll · esc/t/q close", content)
+}
+
+// scrollModalSize is the shared geometry for framed, viewport-backed popups.
+// It keeps the area switcher as their minimum-width baseline and caps long
+// content at roughly three quarters of the terminal height.
+func (m Model) scrollModalSize(title, footer, content string) (width, viewportHeight int) {
 	// Reserve enough room for the complete footer and the widest possible scroll
 	// marker. The area switcher baseline then keeps all special-purpose popups
-	// visually consistent even when a particular role tree is narrow.
+	// visually consistent even when a popup's content is narrow.
 	footerWithMarker := lipgloss.Width(footer) + 1 + lipgloss.Width("100% ▼ more")
 	width = max(lipgloss.Width(title), footerWithMarker, m.areaSwitcherBaselineWidth())
 	contentLines := strings.Split(content, "\n")

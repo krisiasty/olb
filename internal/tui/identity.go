@@ -303,6 +303,27 @@ func (m Model) expectedRelatedSections() []relatedSection {
 			secs = append(secs, relatedSection{"services", "SERVICES"}, relatedSection{"endpoints", "ENDPOINTS"})
 		}
 		return secs
+	case m.isInstanceOverview():
+		if !m.hypervisorsLoaded {
+			return nil
+		}
+		secs := []relatedSection{{"hypervisors", "HYPERVISOR"}}
+		if hypervisor, ok := m.instanceHypervisorByID(n.ID); ok && m.acceleratorsLoaded[hypervisor.ID] {
+			secs = append(secs, relatedSection{"accelerators", "ACCELERATORS"})
+		}
+		return secs
+	case m.isHypervisorOverview():
+		var secs []relatedSection
+		if m.instancesLoaded {
+			secs = append(secs, relatedSection{"instances", "INSTANCES"})
+		}
+		if m.acceleratorsLoaded[n.ID] {
+			secs = append(secs, relatedSection{"accelerators", "ACCELERATORS"})
+		}
+		if len(secs) == 0 {
+			return nil
+		}
+		return secs
 	}
 	return nil
 }
@@ -535,7 +556,7 @@ func (m Model) isGroupOverview() bool {
 // related list keeps at least a few rows. summary renders the detail panel to a
 // budget of lines.
 func (m Model) identityOverviewParts(h int, summary func(budget int) []string) (sum []string, relatedHeight int) {
-	const fixedChrome = 2 // top gap + gap before the related list (headings live in the rows)
+	const fixedChrome = 3 // top gap + related gap + RELATED OBJECTS heading
 	if h <= fixedChrome {
 		return nil, 0
 	}
@@ -564,8 +585,9 @@ func (m Model) identityOverviewParts(h int, summary func(budget int) []string) (
 }
 
 // identityOverviewLines renders an identity detail (summary) above a scrollable
-// related-object list. The related rows carry their own group headings (DOMAIN,
-// GROUPS, MEMBERS, PROJECTS, USERS) inserted by withRelatedGroupHeadings.
+// related-object list. The section title matches load-balancer details; rows
+// beneath it carry their own group headings (DOMAIN, GROUPS, MEMBERS, PROJECTS,
+// USERS, ACCELERATORS, …) inserted by withRelatedGroupHeadings.
 func (m Model) identityOverviewLines(h int, summary func(int) []string, emptyMsg string) []string {
 	sum, relatedHeight := m.identityOverviewParts(h, summary)
 	lines := make([]string, 0, h)
@@ -573,6 +595,9 @@ func (m Model) identityOverviewLines(h int, summary func(int) []string, emptyMsg
 	lines = append(lines, sum...)
 	if len(lines) < h {
 		lines = append(lines, "")
+	}
+	if len(lines) < h {
+		lines = append(lines, m.relatedObjectsPanelTitle())
 	}
 	lines = append(lines, m.resourceLines(relatedHeight, emptyMsg)...)
 	for len(lines) < h {

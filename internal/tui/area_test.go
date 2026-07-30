@@ -105,6 +105,10 @@ func TestAreaSwitcherFilterAndJump(t *testing.T) {
 func TestAreaSwitcherGroupsByArea(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press(" "))
+	// Give the grouped selector enough vertical room to verify every heading.
+	// At the default test height it correctly scrolls to keep the current
+	// load-balancer row visible.
+	m.height = 45
 	view := ansiRE.ReplaceAllString(m.View(), "")
 	box := ansiRE.ReplaceAllString(m.switcherModalBox(), "")
 	if !strings.Contains(box, "SWITCH AREA / VIEW") || !strings.Contains(box, "╭") || !strings.Contains(box, "╯") {
@@ -122,12 +126,12 @@ func TestAreaSwitcherGroupsByArea(t *testing.T) {
 	if !strings.Contains(view, "SERVICE CATALOG 3") {
 		t.Fatalf("switcher should show the catalog area heading with its view count:\n%s", view)
 	}
-	if !strings.Contains(view, "COMPUTE 1") {
+	if !strings.Contains(view, "COMPUTE 2") {
 		t.Fatalf("switcher should show the compute area heading with its view count:\n%s", view)
 	}
 	// Headers are not selectable: the cursor space is the view rows only.
-	if got := len(m.filteredSwitcherRows()); got != 14 {
-		t.Fatalf("switcher selectable rows = %d, want 14 views across four areas", got)
+	if got := len(m.filteredSwitcherRows()); got != 15 {
+		t.Fatalf("switcher selectable rows = %d, want 15 views across four areas", got)
 	}
 }
 

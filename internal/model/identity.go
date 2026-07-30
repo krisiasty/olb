@@ -54,18 +54,19 @@ func (i Identity) IsTopLevelList() bool {
 // it round-trips through navigation history like the LB list, which is the zero
 // identity below.
 var (
-	LBListIdentity       = Identity{}
-	VIPListIdentity      = Identity{Type: TypeVIP}
-	ListenerListIdentity = Identity{Type: TypeListener}
-	PoolListIdentity     = Identity{Type: TypePool}
-	AmphoraListIdentity  = Identity{Type: TypeAmphora}
-	UserListIdentity     = Identity{Type: TypeUser}
-	DomainListIdentity   = Identity{Type: TypeDomain}
-	GroupListIdentity    = Identity{Type: TypeGroup}
-	ProjectListIdentity  = Identity{Type: TypeProject}
-	RoleListIdentity     = Identity{Type: TypeRole}
-	ServiceListIdentity  = Identity{Type: TypeService}
-	EndpointListIdentity = Identity{Type: TypeEndpoint}
-	RegionListIdentity   = Identity{Type: TypeRegion}
-	InstanceListIdentity = Identity{Type: TypeInstance}
+	LBListIdentity         = Identity{}
+	VIPListIdentity        = Identity{Type: TypeVIP}
+	ListenerListIdentity   = Identity{Type: TypeListener}
+	PoolListIdentity       = Identity{Type: TypePool}
+	AmphoraListIdentity    = Identity{Type: TypeAmphora}
+	UserListIdentity       = Identity{Type: TypeUser}
+	DomainListIdentity     = Identity{Type: TypeDomain}
+	GroupListIdentity      = Identity{Type: TypeGroup}
+	ProjectListIdentity    = Identity{Type: TypeProject}
+	RoleListIdentity       = Identity{Type: TypeRole}
+	ServiceListIdentity    = Identity{Type: TypeService}
+	EndpointListIdentity   = Identity{Type: TypeEndpoint}
+	RegionListIdentity     = Identity{Type: TypeRegion}
+	InstanceListIdentity   = Identity{Type: TypeInstance}
+	HypervisorListIdentity = Identity{Type: TypeHypervisor}
 )

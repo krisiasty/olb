@@ -263,6 +263,78 @@ func TestLayoutColumnWidthsKeepsNarrowColumnsReadable(t *testing.T) {
 	}
 }
 
+func TestLayoutColumnWidthsDistributesWideTableSpaceProportionally(t *testing.T) {
+	titles := []string{"HOSTNAME", "STATE", "STATUS", "TYPE", "VCPUS", "MEMORY", "DISK", "VMS", "HOST IP"}
+	rows := [][]string{
+		{
+			"pl1-prd-sfl-ost-com-n002", "UP", "ENABLED", "QEMU", "261/384",
+			"812 GiB/1.48 TiB", "4.48 TiB/689 TiB", "65", "100.104.48.6",
+		},
+	}
+	widths := layoutColumnWidths(titles, rows, 200, tableColumnGap)
+	natural := []int{
+		len("pl1-prd-sfl-ost-com-n002"), len("STATE"), len("ENABLED"),
+		len("QEMU"), len("261/384"), len("812 GiB/1.48 TiB"),
+		len("4.48 TiB/689 TiB"), len("VMS"), len("100.104.48.6"),
+	}
+
+	// A wide terminal expands every column rather than leaving unused trailing
+	// fill, but long-value columns receive a larger share than compact fields.
+	for column := range widths {
+		if widths[column] <= natural[column] {
+			t.Errorf("column %d did not participate in surplus distribution: %v", column, widths)
+		}
+	}
+	if diskExtra, stateExtra := widths[6]-natural[6], widths[1]-natural[1]; diskExtra <= stateExtra {
+		t.Errorf("disk surplus %d should exceed state surplus %d: %v", diskExtra, stateExtra, widths)
+	}
+	if memoryExtra, typeExtra := widths[5]-natural[5], widths[3]-natural[3]; memoryExtra <= typeExtra {
+		t.Errorf("memory surplus %d should exceed type surplus %d: %v", memoryExtra, typeExtra, widths)
+	}
+	if hostnameExtra, vmExtra := widths[0]-natural[0], widths[7]-natural[7]; hostnameExtra <= vmExtra {
+		t.Errorf("hostname surplus %d should exceed VM surplus %d: %v", hostnameExtra, vmExtra, widths)
+	}
+
+	sum := 0
+	for _, width := range widths {
+		sum += width
+	}
+	if got := sum + tableColumnGap*len(widths); got != 200 {
+		t.Fatalf("wide row fills %d columns, want 200", got)
+	}
+}
+
+func TestEveryRegisteredListUsesSharedProportionalLayout(t *testing.T) {
+	m := start(t, switchCapability{CanSwitch: true})
+	m.width = 240
+	m.top, m.cursor = 0, 0
+
+	for _, kind := range allViews() {
+		t.Run(kind.rootLabel(), func(t *testing.T) {
+			m.loc = location{id: kind.identity()}
+			m.entries = []entry{{}}
+			titles := m.columnTitles()
+			rows := [][]string{m.rowCells(m.entries[0])}
+			widths := layoutColumnWidths(titles, rows, m.width, tableColumnGap)
+
+			for column, title := range titles {
+				if widths[column] <= runeLen(title) {
+					t.Errorf("%s column %q did not participate in wide-terminal distribution: %v", kind.rootLabel(), title, widths)
+				}
+			}
+
+			lines := m.topLevelTableLines(2)
+			if len(lines) != 2 {
+				t.Fatalf("%s rendered %d table lines, want 2", kind.rootLabel(), len(lines))
+			}
+			header := ansiRE.ReplaceAllString(lines[0], "")
+			if got := runeLen(header); got != m.width {
+				t.Errorf("%s header width = %d, want %d", kind.rootLabel(), got, m.width)
+			}
+		})
+	}
+}
+
 func TestResourceNavigationRows(t *testing.T) {
 	m := start(t, switchCapability{CanSwitch: true})
 	m = updExec(t, m, press("enter")) // open first load balancer

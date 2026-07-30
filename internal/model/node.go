@@ -25,6 +25,8 @@ const (
 	TypeL7Rule        NodeType = "l7rule"
 	TypeAmphora       NodeType = "amphora"
 	TypeInstance      NodeType = "instance" // Nova server backing a member
+	TypeHypervisor    NodeType = "hypervisor"
+	TypeAccelerator   NodeType = "accelerator" // Placement-managed PCI resource
 	TypeCOECluster    NodeType = "coecluster"
 	TypeKubeService   NodeType = "kubernetesservice"
 	TypeUser          NodeType = "user"     // Keystone user (identity area)

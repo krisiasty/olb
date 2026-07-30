@@ -136,6 +136,7 @@ type serviceClients struct {
 	identity   *gophercloud.ServiceClient // Keystone v3 (required)
 	network    *gophercloud.ServiceClient // Neutron (optional; floating IPs)
 	compute    *gophercloud.ServiceClient // Nova (optional; member instances)
+	placement  *gophercloud.ServiceClient // Placement (optional; accelerator inventory)
 	keyManager *gophercloud.ServiceClient // Barbican (optional; TLS certificates)
 	container  *gophercloud.ServiceClient // Magnum (optional; Kubernetes relations)
 	scope      ScopeInfo
@@ -287,6 +288,7 @@ func buildServiceClients(ctx context.Context, ao gophercloud.AuthOptions, endpoi
 	// related objects gracefully rather than being fatal.
 	sc.network, _ = openstack.NewNetworkV2(provider, endpoint)
 	sc.compute, _ = openstack.NewComputeV2(provider, endpoint)
+	sc.placement, _ = openstack.NewPlacementV1(provider, endpoint)
 	sc.keyManager, _ = openstack.NewKeyManagerV1(provider, endpoint)
 	sc.container, _ = openstack.NewContainerInfraV1(provider, endpoint)
 

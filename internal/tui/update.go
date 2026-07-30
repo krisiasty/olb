@@ -29,6 +29,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildTelemetryContent(false)
 		} else if m.overlay == overlayRoleTree {
 			m.setupRoleTreeViewport(false)
+		} else if m.overlay == overlayHypervisorFeatures {
+			m.setupHypervisorFeaturesViewport(false)
 		}
 		m.ensureVisible()
 		return m, nil
@@ -100,6 +102,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onRegions(msg)
 	case instancesMsg:
 		return m.onInstances(msg)
+	case hypervisorsMsg:
+		return m.onHypervisors(msg)
+	case acceleratorsMsg:
+		return m.onAccelerators(msg)
 	case domainContentsMsg:
 		return m.onDomainContents(msg)
 	case treeMsg:
@@ -574,6 +580,7 @@ func (m Model) onRegions(msg regionsMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onInstances(msg instancesMsg) (tea.Model, tea.Cmd) {
+	m.instancesLoading = false
 	if !msg.refresh {
 		m.loading = false
 	}
@@ -601,12 +608,102 @@ func (m Model) onInstances(msg instancesMsg) (tea.Model, tea.Cmd) {
 		m.restoreRefreshSelection()
 	case msg.refresh && m.isInstanceOverview():
 		id := m.loc.id
-		m.setStandalone(id, m.instanceNode(id.ID), nil, nil)
+		n := m.instanceNode(id.ID)
+		m.setStandalone(id, n, m.instanceRelatedEntries(n), nil)
+	case m.isHypervisorOverview():
+		m.allEntries = m.hypervisorRelatedEntries(m.loc.node)
+		m.applyFilters()
 	}
 	if msg.refresh {
 		return m, m.finishRefresh("")
 	}
 	return m, nil
+}
+
+func (m Model) onHypervisors(msg hypervisorsMsg) (tea.Model, tea.Cmd) {
+	m.hypervisorsLoading = false
+	if !msg.refresh {
+		m.loading = false
+	}
+	m.hypervisorsLoaded = true
+	m.hypervisorsErr = ""
+	if msg.err != nil {
+		if errors.Is(msg.err, osclient.ErrAdminRequired) {
+			m.hypervisors = nil
+			m.hypervisorsErr = "Nova does not authorize hypervisor listing for this token scope"
+		} else if errors.Is(msg.err, osclient.ErrUnavailable) {
+			m.hypervisors = nil
+			m.hypervisorsErr = "compute service is unavailable in this cloud or scope"
+		} else if msg.refresh {
+			return m, m.finishRefresh("refresh hypervisors: " + msg.err.Error())
+		} else {
+			return m, m.setFlash("list hypervisors: "+msg.err.Error(), true)
+		}
+	} else {
+		m.hypervisors = msg.hypervisors
+		m.rememberHypervisors(msg.hypervisors)
+	}
+	var load tea.Cmd
+	switch {
+	case m.loc.isTopLevelList() && m.loc.listKind() == kindHypervisor:
+		m.setTopLevelEntries()
+		m.restoreRefreshSelection()
+	case msg.refresh && m.isHypervisorOverview():
+		id := m.loc.id
+		n := m.hypervisorNode(id.ID)
+		m.setStandalone(id, n, m.hypervisorRelatedEntries(n), nil)
+	case m.isInstanceOverview():
+		n := m.loc.node
+		m.allEntries = m.instanceRelatedEntries(n)
+		m.applyFilters()
+		if hypervisor, ok := m.instanceHypervisorByID(n.ID); ok {
+			load = m.ensureHypervisorAcceleratorsCmd(hypervisor.ID)
+		}
+	}
+	if msg.refresh {
+		return m, m.finishRefresh("")
+	}
+	return m, load
+}
+
+func (m Model) onAccelerators(msg acceleratorsMsg) (tea.Model, tea.Cmd) {
+	if !msg.scope.Equal(m.scope) {
+		return m, nil
+	}
+	m.acceleratorsLoading[msg.hypervisorID] = false
+	m.acceleratorsLoaded[msg.hypervisorID] = true
+	delete(m.acceleratorsErr, msg.hypervisorID)
+	if msg.err != nil {
+		delete(m.accelerators, msg.hypervisorID)
+		switch {
+		case errors.Is(msg.err, osclient.ErrAdminRequired):
+			m.acceleratorsErr[msg.hypervisorID] = "Placement does not authorize PCI inventory for this token scope"
+		case errors.Is(msg.err, osclient.ErrUnavailable):
+			m.acceleratorsErr[msg.hypervisorID] = "Placement service is unavailable in this cloud or scope"
+		default:
+			m.acceleratorsErr[msg.hypervisorID] = "obtaining accelerator inventory: " + msg.err.Error()
+		}
+		m.rebuildAcceleratorRelatedEntries(msg.hypervisorID)
+		return m, nil
+	}
+	m.accelerators[msg.hypervisorID] = msg.accelerators
+	m.rememberAccelerators(msg.accelerators)
+	m.rebuildAcceleratorRelatedEntries(msg.hypervisorID)
+	return m, nil
+}
+
+func (m *Model) rebuildAcceleratorRelatedEntries(hypervisorID string) {
+	switch {
+	case m.isHypervisorOverview() && m.loc.node != nil && m.loc.node.ID == hypervisorID:
+		m.allEntries = m.hypervisorRelatedEntries(m.loc.node)
+		m.applyFilters()
+	case m.isInstanceOverview() && m.loc.node != nil:
+		hypervisor, ok := m.instanceHypervisorByID(m.loc.node.ID)
+		if ok && hypervisor.ID == hypervisorID {
+			m.allEntries = m.instanceRelatedEntries(m.loc.node)
+			m.applyFilters()
+		}
+	}
 }
 
 // onEndpoints stores the shared endpoints list, which both drives the top-level
@@ -2445,7 +2542,12 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.services, m.servicesLoaded, m.servicesErr = nil, false, ""
 	m.endpoints, m.endpointsLoaded, m.endpointsLoading, m.endpointsErr = nil, false, false, ""
 	m.regions, m.regionsLoaded, m.regionsErr = nil, false, ""
-	m.instances, m.instancesLoaded, m.instancesErr = nil, false, ""
+	m.instances, m.instancesLoaded, m.instancesLoading, m.instancesErr = nil, false, false, ""
+	m.hypervisors, m.hypervisorsLoaded, m.hypervisorsLoading, m.hypervisorsErr = nil, false, false, ""
+	m.accelerators = map[string][]osclient.Accelerator{}
+	m.acceleratorsLoaded = map[string]bool{}
+	m.acceleratorsLoading = map[string]bool{}
+	m.acceleratorsErr = map[string]string{}
 	m.roleRelations = map[string]roleRelations{}
 	m.roleRelationsLoaded = map[string]bool{}
 	m.roleRelationsLoading = map[string]bool{}
@@ -2459,6 +2561,8 @@ func (m Model) onSwitched(msg switchedMsg) (tea.Model, tea.Cmd) {
 	m.knownServices = map[string]osclient.Service{}
 	m.knownRegions = map[string]osclient.Region{}
 	m.knownInstances = map[string]osclient.Instance{}
+	m.knownHypervisors = map[string]osclient.Hypervisor{}
+	m.knownAccelerators = map[string]osclient.Accelerator{}
 	m.knownUsers = map[string]osclient.User{}
 	m.knownGroups = map[string]osclient.Group{}
 	m.knownProjects = map[string]osclient.Project{}
@@ -2669,6 +2773,59 @@ func (m *Model) showRegion(id model.Identity) tea.Cmd {
 	return m.setStandalone(id, n, m.regionRelatedEntries(n), load)
 }
 
+func (m *Model) ensureInstancesCmd() tea.Cmd {
+	if m.instancesLoaded || m.instancesLoading {
+		return nil
+	}
+	m.instancesLoading = true
+	return m.loadInstancesCmd(false)
+}
+
+func (m *Model) ensureHypervisorsCmd() tea.Cmd {
+	if m.hypervisorsLoaded || m.hypervisorsLoading {
+		return nil
+	}
+	m.hypervisorsLoading = true
+	return m.loadHypervisorsCmd(false)
+}
+
+func (m *Model) ensureHypervisorAcceleratorsCmd(hypervisorID string) tea.Cmd {
+	if hypervisorID == "" || m.acceleratorsLoaded[hypervisorID] || m.acceleratorsLoading[hypervisorID] {
+		return nil
+	}
+	m.acceleratorsLoading[hypervisorID] = true
+	return m.loadHypervisorAcceleratorsCmd(hypervisorID)
+}
+
+// showInstance resolves its Nova hypervisor lazily, then the hypervisor load
+// chains into Placement inventory so only accelerators allocated to this
+// instance appear as related objects.
+func (m *Model) showInstance(id model.Identity) tea.Cmd {
+	n := m.instanceNode(id.ID)
+	var cmds []tea.Cmd
+	if n != nil {
+		cmds = append(cmds, m.ensureHypervisorsCmd())
+		if hypervisor, ok := m.instanceHypervisorByID(id.ID); ok {
+			cmds = append(cmds, m.ensureHypervisorAcceleratorsCmd(hypervisor.ID))
+		}
+	}
+	return m.setStandalone(id, n, m.instanceRelatedEntries(n), tea.Batch(cmds...))
+}
+
+// showHypervisor renders Nova's host details immediately and starts the more
+// expensive Placement provider-tree lookup only on first entry. The shared
+// instance list is also loaded once so resident servers can be related back to
+// the host without issuing one Nova request per hypervisor.
+func (m *Model) showHypervisor(id model.Identity) tea.Cmd {
+	n := m.hypervisorNode(id.ID)
+	var cmds []tea.Cmd
+	if n != nil {
+		cmds = append(cmds, m.ensureInstancesCmd())
+		cmds = append(cmds, m.ensureHypervisorAcceleratorsCmd(id.ID))
+	}
+	return m.setStandalone(id, n, m.hypervisorRelatedEntries(n), tea.Batch(cmds...))
+}
+
 func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 	if id.IsTopLevelList() {
 		return m.showTopLevelList(id)
@@ -2686,7 +2843,13 @@ func (m *Model) showIdentity(id model.Identity) tea.Cmd {
 		return m.showRegion(id)
 	}
 	if id.Type == model.TypeInstance && id.OwningLBID == "" {
-		n := m.instanceNode(id.ID)
+		return m.showInstance(id)
+	}
+	if id.Type == model.TypeHypervisor {
+		return m.showHypervisor(id)
+	}
+	if id.Type == model.TypeAccelerator {
+		n := m.acceleratorNode(id.ID)
 		return m.setStandalone(id, n, nil, nil)
 	}
 	if id.Type == model.TypeDomain {
@@ -2911,9 +3074,19 @@ func (m *Model) showTopLevelList(id model.Identity) tea.Cmd {
 			m.setTopLevelEntries()
 			return nil
 		}
+		m.instancesLoading = true
 		m.loading, m.loadingWhat = true, "instances"
 		m.showLoadingList()
 		return m.loadInstancesCmd(false)
+	case kindHypervisor:
+		if m.hypervisorsLoaded {
+			m.setTopLevelEntries()
+			return nil
+		}
+		m.hypervisorsLoading = true
+		m.loading, m.loadingWhat = true, "hypervisors"
+		m.showLoadingList()
+		return m.loadHypervisorsCmd(false)
 	}
 	return nil
 }
@@ -2957,6 +3130,8 @@ func (m *Model) setTopLevelEntries() {
 		m.allEntries = regionEntries(m.regions)
 	case kindInstance:
 		m.allEntries = instanceEntries(m.instances)
+	case kindHypervisor:
+		m.allEntries = hypervisorEntries(m.hypervisors)
 	default:
 		m.allEntries = lbEntries(m.lbs, m.multiProjectScope)
 	}

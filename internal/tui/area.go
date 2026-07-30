@@ -32,7 +32,7 @@ type areaDesc struct {
 var areas = []areaDesc{
 	{kind: areaCatalog, key: 'S', label: "service catalog", views: []listKind{kindRegion, kindService, kindEndpoint}},
 	{kind: areaIdentity, key: 'A', label: "identity & access", views: []listKind{kindDomain, kindProject, kindGroup, kindUser, kindRole}},
-	{kind: areaCompute, key: 'C', label: "compute", views: []listKind{kindInstance}},
+	{kind: areaCompute, key: 'C', label: "compute", views: []listKind{kindInstance, kindHypervisor}},
 	{kind: areaLB, key: 'L', label: "load balancers", views: []listKind{kindLB, kindVIP, kindListener, kindPool, kindAmphora}},
 }
 

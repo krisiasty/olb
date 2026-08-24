@@ -8,9 +8,9 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/gophercloud/gophercloud/v2 v2.13.0
+	github.com/gophercloud/gophercloud/v2 v2.14.0
 	github.com/gophercloud/utils/v2 v2.0.0-20260626221802-4ae35253ac13
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.55.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -33,5 +33,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
